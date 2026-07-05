@@ -1,0 +1,15 @@
+{
+  "name": "routes-to-glory",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --filter @empire/api dev",
+    "dev:web": "pnpm --filter @empire/web dev",
+    "dev:all": "pnpm -r --parallel dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "db:migrate": "pnpm --filter @empire/api db:migrate"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

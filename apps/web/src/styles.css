@@ -1,0 +1,143 @@
+:root {
+  color-scheme: dark;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100dvh;
+}
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  max-width: 480px;
+  margin: 0 auto;
+}
+
+header {
+  padding: 1rem 1rem 0.5rem;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.35rem;
+}
+
+.subtitle {
+  margin: 0.25rem 0 0;
+  font-size: 0.85rem;
+  color: #94a3b8;
+}
+
+.map-container {
+  flex: 1;
+  min-height: 0;
+  margin: 0.5rem 0.75rem;
+  border-radius: 12px;
+  border: 1px solid #334155;
+  position: relative;
+}
+
+.map-container .mapboxgl-map {
+  position: absolute;
+  inset: 0;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.map-container .mapboxgl-canvas-container {
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.map-container .mapboxgl-ctrl-bottom-left,
+.map-container .mapboxgl-ctrl-bottom-right {
+  bottom: 10px;
+}
+
+.map-container .mapboxgl-ctrl-bottom-left {
+  left: 10px;
+}
+
+.map-container .mapboxgl-ctrl-bottom-right {
+  right: 10px;
+}
+
+.status {
+  padding: 0 1rem;
+  font-size: 0.9rem;
+  color: #cbd5e1;
+  min-height: 2.5rem;
+}
+
+.actions {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem 1.25rem;
+}
+
+button {
+  flex: 1;
+  min-height: 3rem;
+  border: none;
+  border-radius: 10px;
+  background: #2563eb;
+  color: white;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+button:disabled {
+  opacity: 0.5;
+}
+
+button.danger {
+  background: #dc2626;
+}
+
+.settlement-marker {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #1e293b;
+  border: 3px solid #60a5fa;
+  box-shadow: 0 0 8px rgba(96, 165, 250, 0.6);
+}
+
+.user-marker {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #38bdf8;
+  border: 2px solid white;
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.9);
+}
+
+code {
+  font-size: 0.85em;
+  color: #7dd3fc;
+}
+
+@keyframes shimmer {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 4px gold);
+    transform: scale(1);
+  }
+  50% {
+    filter: drop-shadow(0 0 12px #fef08a);
+    transform: scale(1.2);
+  }
+}
+
+.resource-shimmer {
+  animation: shimmer 1s ease-in-out infinite;
+}

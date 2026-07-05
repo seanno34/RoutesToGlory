@@ -1,0 +1,9 @@
+RewriteEngine On
+RewriteBase /rtg_api/
+
+# Let real files through (if any)
+RewriteCond %{REQUEST_FILENAME} -f
+RewriteRule ^ - [L]
+
+# Everything else → PHP proxy → Node on port 3001
+RewriteRule ^ proxy.php [L]

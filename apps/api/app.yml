@@ -1,0 +1,7 @@
+# SPanel NodeJS Manager — required before first deploy
+# Upload to: /home/ventures/rtg_api/app.yml  (FILE, not a folder)
+
+name: rtg_api
+port: 3001
+script: index.js
+cwd: /home/ventures/rtg_api

@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env
+.env.local
+.pnpm-store/
+package-lock.json
+.runtime-config.json
+*.log
+.DS_Store
