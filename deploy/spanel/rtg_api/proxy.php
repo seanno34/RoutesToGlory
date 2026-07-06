@@ -37,9 +37,13 @@ if (in_array($method, ['POST', 'PUT', 'PATCH', 'DELETE'], true)) {
 
 $body = curl_exec($ch);
 if ($body === false) {
-    http_response_code(502);
+    http_response_code(503);
     header('Content-Type: application/json');
-    echo json_encode(['error' => 'Node API unreachable', 'detail' => curl_error($ch)]);
+    echo json_encode([
+        'error' => 'Node API unreachable on port ' . $port,
+        'detail' => curl_error($ch),
+        'hint' => 'SPanel → NodeJS Manager → rtg_api → Restart, then View Logs',
+    ]);
     exit;
 }
 

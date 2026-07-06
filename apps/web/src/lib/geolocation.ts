@@ -79,7 +79,7 @@ export function startRouteSampler(
   config?: Pick<GameConfig['sampling'], 'pollIntervalMs' | 'minDistanceM'>,
 ): void {
   stopRouteSampler();
-  const pollIntervalMs = options.pollIntervalMs ?? config?.pollIntervalMs ?? 60_000;
+  const pollIntervalMs = options.pollIntervalMs ?? config?.pollIntervalMs ?? 3_000;
   const minDistanceM = options.minDistanceM ?? config?.minDistanceM ?? 100;
 
   void pollOnce(options, minDistanceM);

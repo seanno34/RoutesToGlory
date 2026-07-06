@@ -421,6 +421,9 @@ export const MapResourceNodeSchema = z.object({
   lng: z.number(),
   richness: z.enum(['sparse', 'moderate', 'rich']),
   yieldPerDay: z.number().int().positive(),
+  /** Set when an empire has claimed this node as an extractor mine */
+  ownerEmpireId: z.string().uuid().optional(),
+  routeId: z.string().uuid().optional(),
   /** Sprite id for embedded map icon */
   iconSpriteId: z.string(),
   glowColor: z.string(),

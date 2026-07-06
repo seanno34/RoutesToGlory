@@ -12,7 +12,7 @@ import {
   loadSettlements,
   validateGpsPoint,
 } from '../services/route-session.js';
-import { tilesInRadius } from '@empire/shared';
+import { revealTilesAtPoint } from '../db/exploration-repo.js';
 
 export const sessionRoutes: FastifyPluginAsync = async (app) => {
   app.post('/sessions', async (request, reply) => {
@@ -45,6 +45,8 @@ export const sessionRoutes: FastifyPluginAsync = async (app) => {
        ) VALUES (?, 0, ?, ?, 10, NOW(), 1)`,
       [sessionId, body.lat, body.lng],
     );
+
+    await query(`UPDATE route_sessions SET point_count = 1 WHERE id = ?`, [sessionId]);
 
     return { sessionId, status: 'active' };
   });
@@ -138,17 +140,20 @@ export const sessionRoutes: FastifyPluginAsync = async (app) => {
       [seq, addedDistance, sessionId],
     );
 
-    const tileSize = config.fogOfWar.tileSizeM;
-    const revealRadius = config.fogOfWar.revealRadiusM;
+    const exploration = {
+      newlyRevealedTileIds: [] as string[],
+      newResourceNodeIds: [] as string[],
+    };
+
     for (const point of body.points) {
-      const tiles = tilesInRadius(point.lat, point.lng, revealRadius, tileSize);
-      for (const tileId of tiles) {
-        await query(
-          `INSERT IGNORE INTO explored_tiles (world_id, empire_id, tile_id)
-           VALUES (?, ?, ?)`,
-          [session.world_id, session.empire_id, tileId],
-        );
-      }
+      const reveal = await revealTilesAtPoint(
+        session.world_id,
+        session.empire_id,
+        point.lat,
+        point.lng,
+      );
+      exploration.newlyRevealedTileIds.push(...reveal.newlyRevealedTileIds);
+      exploration.newResourceNodeIds.push(...reveal.newResourceNodeIds);
     }
 
     const recentAccepted = await query<{ lat: number; lng: number; recorded_at: string }>(
@@ -185,10 +190,11 @@ export const sessionRoutes: FastifyPluginAsync = async (app) => {
         connected: true,
         settlement: connected,
         routeId: route.routeId,
+        exploration,
       };
     }
 
-    return { validated, connected: false };
+    return { validated, connected: false, exploration };
   });
 
   app.post('/sessions/:sessionId/end', async (request, reply) => {

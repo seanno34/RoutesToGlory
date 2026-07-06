@@ -2,6 +2,8 @@ import type { GameConfig } from '@empire/shared';
 import { DEFAULT_GAME_CONFIG } from '@empire/shared';
 import { query, newId } from './client.js';
 import { seedWorldSettlements } from './world-seed.js';
+import { seedPlayArea } from './spawn-seed.js';
+import { grantStartingVision } from './exploration-repo.js';
 
 export interface CreateWorldInput {
   name: string;
@@ -18,6 +20,10 @@ export interface WorldBootstrap {
   empireId: string;
   userId: string;
   settlementCount: number;
+  metroEchoSites?: number;
+  localGoodieHuts?: number;
+  localResources?: number;
+  roadPointsSampled?: number;
 }
 
 function slugify(name: string): string {
@@ -86,9 +92,20 @@ export async function createWorldInDb(
     }),
   ]);
 
-  const settlementCount = await seedWorldSettlements(worldId, config);
+  const metroCount = await seedWorldSettlements(worldId, config);
+  const localSeed = await seedPlayArea(worldId, spawnLat, spawnLng, config);
+  await grantStartingVision(worldId, empireId, spawnLat, spawnLng, config);
 
-  return { worldId, slug, empireId, userId, settlementCount };
+  return {
+    worldId,
+    slug,
+    empireId,
+    userId,
+    settlementCount: metroCount + localSeed.goodieHuts,
+    metroEchoSites: metroCount,
+    localGoodieHuts: localSeed.goodieHuts,
+    localResources: localSeed.resources,
+  };
 }
 
 export async function getWorldMap(worldId: string) {

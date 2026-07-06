@@ -103,6 +103,61 @@ button.danger {
   background: #dc2626;
 }
 
+button.secondary {
+  background: #334155;
+  flex: 0.85;
+}
+
+.goodie-hut-marker {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  border-radius: 50%;
+  background: #1e293b;
+  border: 3px solid #fbbf24;
+  box-shadow: 0 0 12px rgba(251, 191, 36, 0.85);
+}
+
+.resource-marker {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  border-radius: 50%;
+  background: #0f172a;
+  border: 2px solid #f97316;
+  box-shadow: 0 0 8px rgba(249, 115, 22, 0.5);
+  padding: 0;
+  cursor: default;
+}
+
+.resource-marker.claimable,
+.goodie-hut-marker.claimable,
+.settlement-marker.claimable {
+  cursor: pointer;
+  box-shadow: 0 0 14px rgba(251, 191, 36, 0.95);
+  animation: pulse-claim 1.2s ease-in-out infinite;
+}
+
+.resource-mine-marker {
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  border-radius: 8px;
+  background: linear-gradient(145deg, #0f172a 0%, #1e293b 100%);
+  border: 2px solid #22d3ee;
+  box-shadow: 0 0 12px rgba(34, 211, 238, 0.65);
+  pointer-events: none;
+}
+
 .settlement-marker {
   width: 14px;
   height: 14px;
@@ -110,6 +165,67 @@ button.danger {
   background: #1e293b;
   border: 3px solid #60a5fa;
   box-shadow: 0 0 8px rgba(96, 165, 250, 0.6);
+  padding: 0;
+  cursor: default;
+}
+
+button.settlement-marker:disabled,
+button.goodie-hut-marker:disabled,
+button.resource-marker:disabled {
+  opacity: 0.85;
+  cursor: default;
+  animation: none;
+}
+
+@keyframes pulse-claim {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.12);
+  }
+}
+
+.claim-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 1rem;
+}
+
+.claim-modal {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  padding: 1.25rem;
+  max-width: 320px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.claim-modal h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.claim-modal-sub {
+  margin: 0 0 0.5rem;
+  color: #94a3b8;
+  font-size: 0.9rem;
+}
+
+button.link {
+  background: transparent;
+  color: #94a3b8;
+  min-height: 2rem;
+  font-size: 0.9rem;
 }
 
 .user-marker {

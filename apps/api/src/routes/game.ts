@@ -35,6 +35,7 @@ import {
   seedSettlementDeposits,
 } from '../services/resources.js';
 import { createWorldInDb, getWorldMap } from '../db/world-repo.js';
+import { getExplorationState } from '../db/exploration-repo.js';
 import { isDatabaseEnabled } from '../db/client.js';
 import { worldStore } from '../services/world-store.js';
 
@@ -381,6 +382,26 @@ export const worldRoutes: FastifyPluginAsync = async (app) => {
     }
 
     return getWorldMap(worldId);
+  });
+
+  app.get('/worlds/:worldId/exploration/:empireId', async (request, reply) => {
+    const { worldId, empireId } = request.params as {
+      worldId: string;
+      empireId: string;
+    };
+
+    if (!isDatabaseEnabled()) {
+      return reply.status(503).send({ error: 'Database required' });
+    }
+
+    const state = await getExplorationState(worldId, empireId);
+
+    return {
+      worldId,
+      empireId,
+      ...state,
+      fogOfWar: configStore.get().fogOfWar,
+    };
   });
 
   app.get('/worlds/:worldId', async (request, reply) => {

@@ -7,7 +7,7 @@ export const DEFAULT_GAME_CONFIG: GameConfig = {
   },
 
   sampling: {
-    pollIntervalMs: 60_000,
+    pollIntervalMs: 3_000,
     minDistanceM: 100,
     maxIntervalS: 180,
     maxAccuracyM: 100,
@@ -38,7 +38,7 @@ export const DEFAULT_GAME_CONFIG: GameConfig = {
 
   routes: {
     buildsInstantly: true,
-    minConnectDistanceM: 500,
+    minConnectDistanceM: 1_000,
     minConnectByTierM: {
       goodie_hut: 500,
       settlement: 1_000,

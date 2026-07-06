@@ -13,8 +13,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
 
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error((err as { error?: string }).error ?? res.statusText);
+    const text = await res.text();
+    let message = res.statusText;
+    try {
+      const err = JSON.parse(text) as { error?: string };
+      if (err.error) message = err.error;
+    } catch {
+      if (res.status === 503) {
+        message =
+          'Game API is offline. In SPanel → NodeJS Manager → rtg_api → Restart, then check View Logs.';
+      }
+    }
+    throw new Error(message || `Request failed (${res.status})`);
   }
 
   return res.json() as Promise<T>;
@@ -37,14 +47,55 @@ export interface Settlement {
   tier: string;
   alignment: string;
   is_goodie_hut: boolean;
+  owner_empire_id?: string | null;
   lat: number;
   lng: number;
   geofence_radius_m: number;
 }
 
+export interface MapResourceNode {
+  id: string;
+  worldId: string;
+  tileId: string;
+  resourceId: string;
+  lat: number;
+  lng: number;
+  richness: string;
+  yieldPerDay: number;
+  ownerEmpireId?: string;
+  routeId?: string;
+  iconSpriteId: string;
+  glowColor: string;
+}
+
+export interface FogOfWarConfig {
+  tileSizeM: number;
+  revealRadiusM: number;
+  startingVisionRadiusM: number;
+  unexploredOpacity: number;
+  exploredOpacity: number;
+  resourceShimmerDurationMs: number;
+}
+
+export interface ExplorationState {
+  worldId: string;
+  empireId: string;
+  exploredTileIds: string[];
+  resourceNodes: MapResourceNode[];
+  fogOfWar: FogOfWarConfig;
+}
+
+export interface ActiveRoute {
+  id: string;
+  path_json: Array<{ lat: number; lng: number }>;
+  from_settlement_id: string;
+  to_settlement_id: string;
+  status: string;
+}
+
 export interface WorldMap {
   settlements: Settlement[];
-  routes: unknown[];
+  routes: ActiveRoute[];
   resources: unknown[];
 }
 
@@ -62,6 +113,9 @@ export const api = {
 
   getWorldMap: (worldId: string) =>
     request<WorldMap>(`/worlds/${worldId}/map`),
+
+  getExploration: (worldId: string, empireId: string) =>
+    request<ExplorationState>(`/worlds/${worldId}/exploration/${empireId}`),
 
   beginSession: (body: {
     worldId: string;
@@ -90,6 +144,10 @@ export const api = {
       connected: boolean;
       settlement?: Settlement;
       routeId?: string;
+      exploration?: {
+        newlyRevealedTileIds: string[];
+        newResourceNodeIds: string[];
+      };
     }>(`/sessions/${sessionId}/points`, {
       method: 'POST',
       body: JSON.stringify({ points }),
@@ -101,5 +159,35 @@ export const api = {
       body: JSON.stringify({}),
     }),
 
-  publicConfig: () => request<Record<string, unknown>>('/config/public'),
+  publicConfig: () =>
+    request<{
+      fogOfWar: FogOfWarConfig;
+      sampling: { pollIntervalMs: number };
+      routes: { minConnectDistanceM: number };
+    }>('/config/public'),
+
+  claimNearRoute: (
+    worldId: string,
+    body: {
+      empireId: string;
+      sessionId?: string;
+      routePath: Array<{ lat: number; lng: number }>;
+      playerLat?: number;
+      playerLng?: number;
+      targetKind: 'settlement' | 'resource';
+      targetId: string;
+      goodieChoice?: 'found_town' | 'claim_reward';
+    },
+  ) =>
+    request<{
+      ok: boolean;
+      message: string;
+      connectorRouteId: string;
+      linkedRouteId?: string;
+      connectorPath: Array<{ lat: number; lng: number }>;
+      reward?: unknown;
+    }>(`/worlds/${worldId}/claim`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
 };

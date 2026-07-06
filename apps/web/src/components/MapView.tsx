@@ -1,7 +1,17 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Map, { Layer, Marker, Source } from 'react-map-gl/mapbox';
 import type { MapRef } from 'react-map-gl/mapbox';
-import type { Settlement } from '../lib/api';
+import { RESOURCE_MAP_ICONS } from '@empire/shared';
+import type { AlienResourceId } from '@empire/shared';
+import type { Settlement, MapResourceNode, FogOfWarConfig } from '../lib/api';
+import {
+  buildFogGeoJson,
+  boundsFromMap,
+  MIN_FOG_ZOOM,
+  type FogFeatureCollection,
+} from '../lib/fog-geojson';
+import { filterByExplored, isPointExplored } from '../lib/exploration-utils';
+import { isNearRoute } from '../lib/route-corridor';
 import 'mapbox-gl/dist/mapbox-gl.css';
 
 const TIER_COLOR: Record<string, string> = {
@@ -12,78 +22,216 @@ const TIER_COLOR: Record<string, string> = {
   super_city: '#f472b6',
 };
 
+const LOCAL_RADIUS_M = 25_000;
+const EMPTY_FOG: FogFeatureCollection = { type: 'FeatureCollection', features: [] };
+
+function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6_371_000;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
 interface MapViewProps {
   token: string;
+  empireId?: string;
   settlements: Settlement[];
+  resourceNodes: MapResourceNode[];
+  exploredTileIds: string[];
+  fogConfig: FogOfWarConfig;
+  isRouting: boolean;
+  canClaim: boolean;
+  claimRadiusM: number;
+  claimPath: Array<{ lat: number; lng: number }>;
+  connectorPaths: Array<Array<{ lat: number; lng: number }>>;
   userLat?: number;
   userLng?: number;
   routePath?: Array<{ lat: number; lng: number }>;
+  shimmerResourceIds?: Set<string>;
+  onTapSettlement: (settlement: Settlement) => void;
+  onTapResource: (resource: MapResourceNode) => void;
 }
 
 export function MapView({
   token,
+  empireId,
   settlements,
+  resourceNodes,
+  exploredTileIds,
+  fogConfig,
+  isRouting,
+  canClaim,
+  claimRadiusM,
+  claimPath,
+  connectorPaths,
   userLat,
   userLng,
   routePath = [],
+  shimmerResourceIds = new Set(),
+  onTapSettlement,
+  onTapResource,
 }: MapViewProps) {
   const mapRef = useRef<MapRef>(null);
+  const focusedRef = useRef(false);
+  const zoomRef = useRef(MIN_FOG_ZOOM);
+  const fogTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const exploredSet = useMemo(() => new Set(exploredTileIds), [exploredTileIds]);
+  const [fogData, setFogData] = useState<FogFeatureCollection>(EMPTY_FOG);
+
+  const focusPoint =
+    userLat !== undefined && userLng !== undefined
+      ? { lat: userLat, lng: userLng }
+      : undefined;
+
+  const visibleSettlements = useMemo(
+    () => filterByExplored(settlements, exploredSet, fogConfig.tileSizeM),
+    [settlements, exploredSet, fogConfig.tileSizeM],
+  );
+
+  const visibleResources = useMemo(() => {
+    const explored = filterByExplored(resourceNodes, exploredSet, fogConfig.tileSizeM);
+    if (!focusPoint) return explored;
+    return explored.filter(
+      (n) =>
+        haversineM(focusPoint.lat, focusPoint.lng, Number(n.lat), Number(n.lng)) <=
+        LOCAL_RADIUS_M,
+    );
+  }, [resourceNodes, focusPoint, exploredSet, fogConfig.tileSizeM]);
+
+  const isClaimable = useCallback(
+    (lat: number, lng: number) => {
+      if (!canClaim || claimPath.length < 1) return false;
+      if (!isPointExplored(lat, lng, exploredSet, fogConfig.tileSizeM)) return false;
+      return isNearRoute(lat, lng, claimPath, claimRadiusM);
+    },
+    [canClaim, claimPath, claimRadiusM, exploredSet, fogConfig.tileSizeM],
+  );
+
+  const refreshFog = useCallback(() => {
+    const map = mapRef.current?.getMap();
+    if (!map || !map.isStyleLoaded() || !focusPoint) {
+      setFogData(EMPTY_FOG);
+      return;
+    }
+
+    zoomRef.current = map.getZoom();
+    if (zoomRef.current < MIN_FOG_ZOOM) {
+      setFogData(EMPTY_FOG);
+      return;
+    }
+
+    const bounds = boundsFromMap(map);
+    setFogData(buildFogGeoJson(exploredSet, bounds, fogConfig.tileSizeM, focusPoint));
+  }, [exploredSet, fogConfig.tileSizeM, focusPoint]);
+
+  const scheduleFogRefresh = useCallback(() => {
+    if (fogTimerRef.current) clearTimeout(fogTimerRef.current);
+    fogTimerRef.current = setTimeout(refreshFog, 150);
+  }, [refreshFog]);
+
+  useEffect(() => {
+    scheduleFogRefresh();
+    return () => {
+      if (fogTimerRef.current) clearTimeout(fogTimerRef.current);
+    };
+  }, [scheduleFogRefresh, exploredTileIds]);
 
   useEffect(() => {
     const map = mapRef.current?.getMap();
-    if (!map || settlements.length === 0) return;
+    if (!map || !focusPoint || focusedRef.current) return;
+    focusedRef.current = true;
+    map.flyTo({
+      center: [focusPoint.lng, focusPoint.lat],
+      zoom: 11,
+      duration: 800,
+    });
+  }, [focusPoint]);
 
-    const lngs = settlements.map((s) => Number(s.lng));
-    const lats = settlements.map((s) => Number(s.lat));
-    const minLng = Math.min(...lngs);
-    const maxLng = Math.max(...lngs);
-    const minLat = Math.min(...lats);
-    const maxLat = Math.max(...lats);
-
-    map.fitBounds(
-      [
-        [minLng, minLat],
-        [maxLng, maxLat],
-      ],
-      { padding: 48, maxZoom: 5, duration: 0 },
-    );
-  }, [settlements]);
-
-  const handleLoad = () => {
+  useEffect(() => {
     const map = mapRef.current?.getMap();
     if (!map) return;
 
-    map.resize();
+    const onMoveEnd = () => scheduleFogRefresh();
+    map.on('moveend', onMoveEnd);
 
     const container = map.getContainer().parentElement;
-    if (!container) return;
+    const ro = container
+      ? new ResizeObserver(() => mapRef.current?.resize())
+      : null;
+    if (container && ro) ro.observe(container);
 
-    const ro = new ResizeObserver(() => mapRef.current?.resize());
-    ro.observe(container);
+    return () => {
+      map.off('moveend', onMoveEnd);
+      ro?.disconnect();
+    };
+  }, [scheduleFogRefresh]);
+
+  const handleLoad = () => {
+    mapRef.current?.getMap()?.resize();
+    scheduleFogRefresh();
   };
 
-  const lineGeoJson = {
-    type: 'Feature' as const,
-    geometry: {
-      type: 'LineString' as const,
-      coordinates: routePath.map((p) => [p.lng, p.lat]),
-    },
-    properties: {},
-  };
+  const lineGeoJson = useMemo(
+    () => ({
+      type: 'Feature' as const,
+      geometry: {
+        type: 'LineString' as const,
+        coordinates: routePath.map((p) => [p.lng, p.lat]),
+      },
+      properties: {},
+    }),
+    [routePath],
+  );
+
+  const connectorGeoJson = useMemo(
+    () => ({
+      type: 'FeatureCollection' as const,
+      features: connectorPaths.map((path, i) => ({
+        type: 'Feature' as const,
+        properties: { id: i },
+        geometry: {
+          type: 'LineString' as const,
+          coordinates: path.map((p) => [p.lng, p.lat]),
+        },
+      })),
+    }),
+    [connectorPaths],
+  );
+
+  const fogOpacity = isRouting
+    ? fogConfig.unexploredOpacity
+    : Math.min(0.98, fogConfig.unexploredOpacity + 0.05);
 
   return (
     <Map
       ref={mapRef}
       mapboxAccessToken={token}
       initialViewState={{
-        longitude: userLng ?? -98.5795,
-        latitude: userLat ?? 39.8283,
-        zoom: userLat && userLng ? 11 : 3.5,
+        longitude: userLng ?? -105.853,
+        latitude: userLat ?? 42.629,
+        zoom: userLat && userLng ? 11 : 4,
       }}
       onLoad={handleLoad}
       style={{ width: '100%', height: '100%' }}
       mapStyle="mapbox://styles/mapbox/dark-v11"
     >
+      {fogData.features.length > 0 && (
+        <Source id="fog" type="geojson" data={fogData}>
+          <Layer
+            id="fog-fill"
+            type="fill"
+            paint={{
+              'fill-color': '#0f172a',
+              'fill-opacity': fogOpacity,
+            }}
+          />
+        </Source>
+      )}
+
       {routePath.length >= 2 && (
         <Source id="route" type="geojson" data={lineGeoJson}>
           <Layer
@@ -98,20 +246,91 @@ export function MapView({
         </Source>
       )}
 
-      {settlements.map((s) => (
-        <Marker
-          key={s.id}
-          longitude={Number(s.lng)}
-          latitude={Number(s.lat)}
-          anchor="center"
-        >
-          <div
-            className="settlement-marker"
-            style={{ borderColor: TIER_COLOR[s.tier] ?? '#fff' }}
-            title={`${s.name} (${s.terrestrial_label})`}
+      {connectorPaths.length > 0 && (
+        <Source id="connectors" type="geojson" data={connectorGeoJson}>
+          <Layer
+            id="connector-line"
+            type="line"
+            paint={{
+              'line-color': '#fbbf24',
+              'line-width': 3,
+              'line-opacity': 0.85,
+              'line-dasharray': [2, 2],
+            }}
           />
-        </Marker>
-      ))}
+        </Source>
+      )}
+
+      {visibleResources.map((node) => {
+        const icon = RESOURCE_MAP_ICONS[node.resourceId as AlienResourceId];
+        const shimmer = shimmerResourceIds.has(node.id);
+        const lat = Number(node.lat);
+        const lng = Number(node.lng);
+        const isMine = Boolean(node.ownerEmpireId);
+        const isOwnedMine = isMine && node.ownerEmpireId === empireId;
+        const claimable = !isMine && isClaimable(lat, lng);
+        return (
+          <Marker key={node.id} longitude={lng} latitude={lat} anchor="center">
+            {isOwnedMine ? (
+              <div
+                className="resource-mine-marker"
+                style={{ borderColor: icon?.glowColor ?? '#22d3ee', boxShadow: `0 0 14px ${icon?.glowColor ?? '#22d3ee'}` }}
+                title={`${icon?.emoji ?? '⛏️'} Extractor — +${node.yieldPerDay}/day ${node.resourceId.replace(/_/g, ' ')}`}
+              >
+                {icon?.emoji ?? '⛏️'}
+              </div>
+            ) : (
+              <button
+                type="button"
+                className={`resource-marker${shimmer ? ' resource-shimmer' : ''}${claimable ? ' claimable' : ''}`}
+                style={{ borderColor: icon?.glowColor ?? '#f97316' }}
+                title={
+                  claimable
+                    ? `Tap to establish ${node.resourceId.replace(/_/g, ' ')} extractor mine`
+                    : `${node.resourceId.replace(/_/g, ' ')} (${node.richness})`
+                }
+                disabled={!claimable}
+                onClick={() => claimable && onTapResource(node)}
+              >
+                {icon?.emoji ?? '💎'}
+              </button>
+            )}
+          </Marker>
+        );
+      })}
+
+      {visibleSettlements.map((s) => {
+        const isGoodie = s.is_goodie_hut || s.tier === 'goodie_hut';
+        const lat = Number(s.lat);
+        const lng = Number(s.lng);
+        const alreadyOwned =
+          Boolean(s.owner_empire_id) && !isGoodie;
+        const claimable = !alreadyOwned && isClaimable(lat, lng);
+        return (
+          <Marker key={s.id} longitude={lng} latitude={lat} anchor="center">
+            {isGoodie ? (
+              <button
+                type="button"
+                className={`goodie-hut-marker${claimable ? ' claimable' : ''}`}
+                title={claimable ? `Tap to claim ${s.name}` : `${s.name} — Goodie Hut`}
+                disabled={!claimable}
+                onClick={() => claimable && onTapSettlement(s)}
+              >
+                🎁
+              </button>
+            ) : (
+              <button
+                type="button"
+                className={`settlement-marker${claimable ? ' claimable' : ''}`}
+                style={{ borderColor: TIER_COLOR[s.tier] ?? '#fff' }}
+                title={claimable ? `Tap to connect ${s.name}` : `${s.name} (${s.terrestrial_label})`}
+                disabled={!claimable}
+                onClick={() => claimable && onTapSettlement(s)}
+              />
+            )}
+          </Marker>
+        );
+      })}
 
       {userLat !== undefined && userLng !== undefined && (
         <Marker longitude={userLng} latitude={userLat} anchor="center">
