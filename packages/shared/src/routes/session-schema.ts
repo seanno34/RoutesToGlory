@@ -30,6 +30,15 @@ export type AppendRoutePoints = z.infer<typeof AppendRoutePointsSchema>;
 export const EndRouteSessionSchema = z.object({
   lat: z.number().min(-90).max(90).optional(),
   lng: z.number().min(-180).max(180).optional(),
+  /** Client-recorded trail — used when server rejected most GPS samples. */
+  path: z
+    .array(
+      z.object({
+        lat: z.number().min(-90).max(90),
+        lng: z.number().min(-180).max(180),
+      }),
+    )
+    .optional(),
 });
 
 export type EndRouteSession = z.infer<typeof EndRouteSessionSchema>;

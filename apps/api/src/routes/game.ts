@@ -34,7 +34,7 @@ import {
   deductCost,
   seedSettlementDeposits,
 } from '../services/resources.js';
-import { createWorldInDb, getWorldMap } from '../db/world-repo.js';
+import { createWorldInDb, getWorldMap, listSavedWorlds, getWorldBootstrapByAccessCode } from '../db/world-repo.js';
 import { getExplorationState } from '../db/exploration-repo.js';
 import { isDatabaseEnabled } from '../db/client.js';
 import { worldStore } from '../services/world-store.js';
@@ -337,6 +337,36 @@ export const godModeRoutes: FastifyPluginAsync = async (app) => {
 };
 
 export const worldRoutes: FastifyPluginAsync = async (app) => {
+  app.get('/worlds/saved', async (_request, reply) => {
+    if (!isDatabaseEnabled()) {
+      return reply.status(503).send({ error: 'Database required' });
+    }
+    const worlds = await listSavedWorlds();
+    return { worlds };
+  });
+
+  app.get('/worlds/by-code/:code', async (request, reply) => {
+    if (!isDatabaseEnabled()) {
+      return reply.status(503).send({ error: 'Database required' });
+    }
+
+    const { code } = request.params as { code: string };
+    const world = await getWorldBootstrapByAccessCode(code);
+    if (!world) {
+      return reply.status(404).send({ error: 'Game not found' });
+    }
+
+    return {
+      id: world.id,
+      slug: world.slug,
+      accessCode: world.accessCode,
+      empireId: world.empireId,
+      userId: world.userId,
+      settlementCount: world.settlementCount,
+      storage: 'mysql',
+    };
+  });
+
   app.post('/worlds', async (request) => {
     const body = (request.body ?? {}) as {
       name?: string;
@@ -358,6 +388,7 @@ export const worldRoutes: FastifyPluginAsync = async (app) => {
       return {
         id: bootstrap.worldId,
         slug: bootstrap.slug,
+        accessCode: bootstrap.accessCode,
         empireId: bootstrap.empireId,
         userId: bootstrap.userId,
         settlementCount: bootstrap.settlementCount,

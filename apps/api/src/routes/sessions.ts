@@ -10,9 +10,10 @@ import {
   completeRouteSession,
   detectGeofenceConnect,
   loadSettlements,
+  saveRouteSessionOnEnd,
   validateGpsPoint,
 } from '../services/route-session.js';
-import { revealTilesAtPoint } from '../db/exploration-repo.js';
+import { revealTilesAlongSegment } from '../db/exploration-repo.js';
 
 export const sessionRoutes: FastifyPluginAsync = async (app) => {
   app.post('/sessions', async (request, reply) => {
@@ -145,16 +146,28 @@ export const sessionRoutes: FastifyPluginAsync = async (app) => {
       newResourceNodeIds: [] as string[],
     };
 
+    let revealAnchor = lastPointResult.rows[0]
+      ? {
+          lat: Number(lastPointResult.rows[0].lat),
+          lng: Number(lastPointResult.rows[0].lng),
+        }
+      : null;
+
     for (const point of body.points) {
-      const reveal = await revealTilesAtPoint(
+      const reveal = await revealTilesAlongSegment(
         session.world_id,
         session.empire_id,
-        point.lat,
-        point.lng,
+        revealAnchor,
+        { lat: point.lat, lng: point.lng },
+        config,
       );
       exploration.newlyRevealedTileIds.push(...reveal.newlyRevealedTileIds);
       exploration.newResourceNodeIds.push(...reveal.newResourceNodeIds);
+      revealAnchor = { lat: point.lat, lng: point.lng };
     }
+
+    exploration.newlyRevealedTileIds = [...new Set(exploration.newlyRevealedTileIds)];
+    exploration.newResourceNodeIds = [...new Set(exploration.newResourceNodeIds)];
 
     const recentAccepted = await query<{ lat: number; lng: number; recorded_at: string }>(
       `SELECT lat, lng, recorded_at
@@ -203,16 +216,11 @@ export const sessionRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const { sessionId } = request.params as { sessionId: string };
-    EndRouteSessionSchema.parse(request.body ?? {});
+    const body = EndRouteSessionSchema.parse(request.body ?? {});
 
-    await query(
-      `UPDATE route_sessions
-       SET status = 'abandoned', end_reason = 'manual', ended_at = NOW()
-       WHERE id = ? AND status = 'active'`,
-      [sessionId],
-    );
+    const result = await saveRouteSessionOnEnd(sessionId, body.path);
 
-    return { ok: true, sessionId, status: 'abandoned' };
+    return { ok: true, sessionId, status: result.saved ? 'completed' : 'abandoned', ...result };
   });
 
   app.get('/sessions/:sessionId', async (request, reply) => {

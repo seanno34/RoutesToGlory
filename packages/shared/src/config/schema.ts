@@ -17,6 +17,22 @@ import {
   BuildComplexityTierSchema,
 } from '../types/enums.js';
 
+/** JSON / JS object keys are strings; explicit 1–5 keys accept both "1" and 1. */
+const ComplexityTierProfileSchema = z.object({
+  label: z.string(),
+  timeMultiplier: z.number().positive(),
+  costMultiplier: z.number().positive(),
+  unlockWorldAgeDays: z.number().int().nonnegative(),
+});
+
+export const ComplexityTierProfilesSchema = z.object({
+  1: ComplexityTierProfileSchema,
+  2: ComplexityTierProfileSchema,
+  3: ComplexityTierProfileSchema,
+  4: ComplexityTierProfileSchema,
+  5: ComplexityTierProfileSchema,
+});
+
 /**
  * All tunable game values live here. Defaults are version-controlled;
  * God mode applies runtime overrides on top via dot-path keys.
@@ -79,15 +95,7 @@ export const GameConfigSchema = z.object({
      * Complexity tier profiles — tier 1 is jumpstart-fast; tier 5 is endgame.
      * unlockWorldAgeDays gates when new modifier tiers become buildable.
      */
-    complexityTierProfiles: z.record(
-      BuildComplexityTierSchema,
-      z.object({
-        label: z.string(),
-        timeMultiplier: z.number().positive(),
-        costMultiplier: z.number().positive(),
-        unlockWorldAgeDays: z.number().int().nonnegative(),
-      }),
-    ),
+    complexityTierProfiles: ComplexityTierProfilesSchema,
     settlementModifierTier1Seconds: z.record(
       SettlementModifierTypeSchema,
       z.number().int().positive(),

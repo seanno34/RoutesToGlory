@@ -9,10 +9,7 @@ import {
   type GameConfig,
 } from '@empire/shared';
 
-const RUNTIME_CONFIG_FILE = path.resolve(
-  process.cwd(),
-  '../../.runtime-config.json',
-);
+const RUNTIME_CONFIG_FILE = path.join(process.cwd(), '.runtime-config.json');
 
 export class ConfigStore {
   private config: GameConfig;
@@ -23,18 +20,31 @@ export class ConfigStore {
   }
 
   async load(): Promise<void> {
+    const defaults = structuredClone(DEFAULT_GAME_CONFIG);
     try {
       const raw = await readFile(RUNTIME_CONFIG_FILE, 'utf8');
       const parsed = JSON.parse(raw) as Record<string, unknown>;
       this.overrides = parsed;
       this.config = GameConfigSchema.parse(
-        deepMerge(
-          structuredClone(DEFAULT_GAME_CONFIG) as Record<string, unknown>,
-          parsed,
-        ),
+        deepMerge(defaults as Record<string, unknown>, parsed),
       );
-    } catch {
-      this.config = GameConfigSchema.parse(structuredClone(DEFAULT_GAME_CONFIG));
+    } catch (err) {
+      try {
+        this.config = GameConfigSchema.parse(defaults);
+      } catch {
+        throw err;
+      }
+      if (
+        err &&
+        typeof err === 'object' &&
+        'code' in err &&
+        err.code !== 'ENOENT'
+      ) {
+        console.warn(
+          '[config-store] Invalid .runtime-config.json; using defaults.',
+          err,
+        );
+      }
     }
   }
 

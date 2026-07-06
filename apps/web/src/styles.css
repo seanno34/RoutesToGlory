@@ -37,6 +37,46 @@ h1 {
   color: #94a3b8;
 }
 
+.game-code {
+  margin: 0.35rem 0 0;
+  font-size: 0.85rem;
+  color: #fbbf24;
+}
+
+.game-code strong {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.06em;
+}
+
+.resume-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0 1rem 1.25rem;
+}
+
+.resume-label {
+  font-size: 0.8rem;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.game-select {
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 10px;
+  border: 1px solid #334155;
+  background: #1e293b;
+  color: #e2e8f0;
+  font-size: 0.95rem;
+}
+
+.game-select:disabled {
+  opacity: 0.55;
+}
+
 .map-container {
   flex: 1;
   min-height: 0;
@@ -80,8 +120,14 @@ h1 {
 
 .actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
-  padding: 0.75rem 1rem 1.25rem;
+  padding: 0.75rem 1rem 0.5rem;
+}
+
+.actions button {
+  flex: 1 1 calc(50% - 0.25rem);
+  min-width: 8rem;
 }
 
 button {

@@ -138,7 +138,7 @@ export function MapView({
     return () => {
       if (fogTimerRef.current) clearTimeout(fogTimerRef.current);
     };
-  }, [scheduleFogRefresh, exploredTileIds]);
+  }, [scheduleFogRefresh, exploredTileIds, userLat, userLng]);
 
   useEffect(() => {
     const map = mapRef.current?.getMap();
@@ -150,6 +150,16 @@ export function MapView({
       duration: 800,
     });
   }, [focusPoint]);
+
+  useEffect(() => {
+    if (!isRouting || userLat === undefined || userLng === undefined) return;
+    const map = mapRef.current?.getMap();
+    if (!map) return;
+    map.easeTo({
+      center: [userLng, userLat],
+      duration: 600,
+    });
+  }, [isRouting, userLat, userLng]);
 
   useEffect(() => {
     const map = mapRef.current?.getMap();
@@ -252,10 +262,9 @@ export function MapView({
             id="connector-line"
             type="line"
             paint={{
-              'line-color': '#fbbf24',
-              'line-width': 3,
-              'line-opacity': 0.85,
-              'line-dasharray': [2, 2],
+              'line-color': '#38bdf8',
+              'line-width': 4,
+              'line-opacity': isRouting ? 0.55 : 0.9,
             }}
           />
         </Source>

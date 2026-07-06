@@ -6,6 +6,7 @@ import { godModeRoutes, worldRoutes } from './routes/game.js';
 import { sessionRoutes } from './routes/sessions.js';
 import { claimRoutes } from './routes/claims.js';
 import { isDatabaseEnabled, runMigrations } from './db/client.js';
+import { ensureAccessCodeSchema } from './db/access-code.js';
 
 const PORT = Number(process.env.PORT ?? 3001);
 
@@ -16,6 +17,7 @@ async function main(): Promise<void> {
     console.log('Database enabled — running migrations…');
     try {
       await runMigrations();
+      await ensureAccessCodeSchema();
       console.log('Migrations complete.');
     } catch (error) {
       console.error(

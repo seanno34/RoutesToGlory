@@ -15,6 +15,11 @@ export interface SamplerOptions {
   minDistanceM?: number;
 }
 
+interface PositionOptions {
+  forceFresh?: boolean;
+  highAccuracy?: boolean;
+}
+
 let watchId: number | null = null;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let lastSample: { lat: number; lng: number } | null = null;
@@ -30,12 +35,23 @@ function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): num
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
-function getCurrentPosition(): Promise<GeolocationPosition> {
+function positionToSample(pos: GeolocationPosition): GpsSample {
+  return {
+    lat: pos.coords.latitude,
+    lng: pos.coords.longitude,
+    accuracyM: pos.coords.accuracy,
+    speedMps: pos.coords.speed ?? undefined,
+    recordedAt: new Date().toISOString(),
+  };
+}
+
+function getCurrentPosition(options: PositionOptions = {}): Promise<GeolocationPosition> {
+  const { forceFresh = false, highAccuracy = false } = options;
   return new Promise((resolve, reject) => {
     navigator.geolocation.getCurrentPosition(resolve, reject, {
-      enableHighAccuracy: false,
-      maximumAge: 30_000,
-      timeout: 10_000,
+      enableHighAccuracy: highAccuracy,
+      maximumAge: forceFresh ? 0 : 2_000,
+      timeout: forceFresh ? 15_000 : 10_000,
     });
   });
 }
@@ -43,32 +59,26 @@ function getCurrentPosition(): Promise<GeolocationPosition> {
 async function pollOnce(
   options: SamplerOptions,
   minDistanceM: number,
+  highAccuracy: boolean,
 ): Promise<void> {
   try {
-    const pos = await getCurrentPosition();
-    const lat = pos.coords.latitude;
-    const lng = pos.coords.longitude;
-    const accuracyM = pos.coords.accuracy;
-    const speedMps = pos.coords.speed ?? undefined;
+    const pos = await getCurrentPosition({ highAccuracy });
+    const sample = positionToSample(pos);
+    const { lat, lng, speedMps } = sample;
 
     if (lastSample) {
       const dist = haversineM(lastSample.lat, lastSample.lng, lat, lng);
-      if (dist < minDistanceM && (speedMps ?? 0) < 0.5) {
+      const moving = (speedMps ?? 0) >= 0.5;
+      if (!moving && dist < minDistanceM) {
         return;
       }
-      if (dist < 30 && (speedMps ?? 0) < 0.5) {
+      if (!moving && dist < 15) {
         return;
       }
     }
 
     lastSample = { lat, lng };
-    options.onSample({
-      lat,
-      lng,
-      accuracyM,
-      speedMps,
-      recordedAt: new Date().toISOString(),
-    });
+    options.onSample(sample);
   } catch {
     options.onError?.('Unable to read GPS location');
   }
@@ -80,11 +90,11 @@ export function startRouteSampler(
 ): void {
   stopRouteSampler();
   const pollIntervalMs = options.pollIntervalMs ?? config?.pollIntervalMs ?? 3_000;
-  const minDistanceM = options.minDistanceM ?? config?.minDistanceM ?? 100;
+  const minDistanceM = options.minDistanceM ?? config?.minDistanceM ?? 15;
 
-  void pollOnce(options, minDistanceM);
+  void pollOnce(options, minDistanceM, true);
   pollTimer = setInterval(() => {
-    void pollOnce(options, minDistanceM);
+    void pollOnce(options, minDistanceM, true);
   }, pollIntervalMs);
 }
 
@@ -100,12 +110,14 @@ export function stopRouteSampler(): void {
   lastSample = null;
 }
 
+/** Force a fresh GPS fix (bypasses browser position cache). */
+export async function forceRefreshPosition(): Promise<GpsSample> {
+  const pos = await getCurrentPosition({ forceFresh: true, highAccuracy: true });
+  const sample = positionToSample(pos);
+  lastSample = { lat: sample.lat, lng: sample.lng };
+  return sample;
+}
+
 export function requestInitialPosition(): Promise<GpsSample> {
-  return getCurrentPosition().then((pos) => ({
-    lat: pos.coords.latitude,
-    lng: pos.coords.longitude,
-    accuracyM: pos.coords.accuracy,
-    speedMps: pos.coords.speed ?? undefined,
-    recordedAt: new Date().toISOString(),
-  }));
+  return getCurrentPosition({ highAccuracy: true }).then(positionToSample);
 }

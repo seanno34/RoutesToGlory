@@ -123,6 +123,70 @@ export async function revealTilesAtPoint(
   return { newlyRevealedTileIds, newResourceNodeIds };
 }
 
+function samplePointsAlongSegment(
+  from: { lat: number; lng: number },
+  to: { lat: number; lng: number },
+  stepM: number,
+): Array<{ lat: number; lng: number }> {
+  const latM = 111_320;
+  const avgLat = (from.lat + to.lat) / 2;
+  const lngM = 111_320 * Math.cos((avgLat * Math.PI) / 180);
+  const dLat = (to.lat - from.lat) * latM;
+  const dLng = (to.lng - from.lng) * lngM;
+  const dist = Math.hypot(dLat, dLng);
+  if (dist < 1) {
+    return [to];
+  }
+
+  const steps = Math.max(1, Math.ceil(dist / stepM));
+  const points: Array<{ lat: number; lng: number }> = [];
+  for (let i = 0; i <= steps; i += 1) {
+    const t = i / steps;
+    points.push({
+      lat: from.lat + (to.lat - from.lat) * t,
+      lng: from.lng + (to.lng - from.lng) * t,
+    });
+  }
+  return points;
+}
+
+/** Reveal fog along the driven segment, not just at the endpoint. */
+export async function revealTilesAlongSegment(
+  worldId: string,
+  empireId: string,
+  from: { lat: number; lng: number } | null,
+  to: { lat: number; lng: number },
+  config: GameConfig = configStore.get(),
+): Promise<{ newlyRevealedTileIds: string[]; newResourceNodeIds: string[] }> {
+  const stepM = Math.max(
+    config.fogOfWar.revealRadiusM,
+    Math.floor(config.fogOfWar.tileSizeM / 2),
+  );
+  const samples = from
+    ? samplePointsAlongSegment(from, to, stepM)
+    : [{ lat: to.lat, lng: to.lng }];
+
+  const allNewTiles: string[] = [];
+  const allNewResources: string[] = [];
+
+  for (const sample of samples) {
+    const result = await revealTilesAtPoint(
+      worldId,
+      empireId,
+      sample.lat,
+      sample.lng,
+      config,
+    );
+    allNewTiles.push(...result.newlyRevealedTileIds);
+    allNewResources.push(...result.newResourceNodeIds);
+  }
+
+  return {
+    newlyRevealedTileIds: [...new Set(allNewTiles)],
+    newResourceNodeIds: [...new Set(allNewResources)],
+  };
+}
+
 async function insertRandomResourceNode(
   worldId: string,
   tileId: string,

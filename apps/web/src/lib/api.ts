@@ -33,10 +33,23 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export interface BootstrapWorld {
   id: string;
   slug: string;
+  accessCode?: string;
   empireId: string;
   userId: string;
   settlementCount: number;
   storage: string;
+}
+
+export interface SavedWorldSummary {
+  accessCode: string;
+  id: string;
+  slug: string;
+  name: string;
+  empireId: string;
+  userId: string;
+  playerName: string;
+  settlementCount: number;
+  createdAt: string;
 }
 
 export interface Settlement {
@@ -100,6 +113,12 @@ export interface WorldMap {
 }
 
 export const api = {
+  listSavedWorlds: () =>
+    request<{ worlds: SavedWorldSummary[] }>('/worlds/saved'),
+
+  getWorldByCode: (code: string) =>
+    request<BootstrapWorld>(`/worlds/by-code/${encodeURIComponent(code.trim().toUpperCase())}`),
+
   createWorld: (body?: {
     name?: string;
     playerName?: string;
@@ -153,11 +172,17 @@ export const api = {
       body: JSON.stringify({ points }),
     }),
 
-  endSession: (sessionId: string) =>
-    request<{ ok: boolean }>(`/sessions/${sessionId}/end`, {
-      method: 'POST',
-      body: JSON.stringify({}),
-    }),
+  endSession: (
+    sessionId: string,
+    path?: Array<{ lat: number; lng: number }>,
+  ) =>
+    request<{ ok: boolean; saved: boolean; routeId?: string; reason?: string }>(
+      `/sessions/${sessionId}/end`,
+      {
+        method: 'POST',
+        body: JSON.stringify(path && path.length >= 2 ? { path } : {}),
+      },
+    ),
 
   publicConfig: () =>
     request<{

@@ -57,7 +57,6 @@ async function createConnectorRoute(
   fromSettlementId: string,
   toSettlementId: string,
   path: PathPoint[],
-  sessionId?: string,
 ): Promise<string> {
   let distanceM = 0;
   for (let i = 1; i < path.length; i += 1) {
@@ -79,7 +78,8 @@ async function createConnectorRoute(
       routeId,
       worldId,
       empireId,
-      sessionId ?? null,
+      // Connector routes are instant paths, not GPS-recorded sessions (session_id is 1:1).
+      null,
       fromSettlementId,
       toSettlementId,
       JSON.stringify(path),
@@ -269,7 +269,6 @@ async function claimSettlement(
     fromSite.id,
     site.id,
     connectorPath,
-    input.sessionId,
   );
 
   let linkedRouteId: string | undefined;
@@ -291,7 +290,6 @@ async function claimSettlement(
           { lat: Number(nearest.lat), lng: Number(nearest.lng) },
           { lat, lng },
         ],
-        input.sessionId,
       );
       message += ` Trade route linked to ${nearest.name}.`;
     }
@@ -377,7 +375,6 @@ async function claimResource(
     fromSite.id,
     extractorId,
     connectorPath,
-    input.sessionId,
   );
 
   await query(

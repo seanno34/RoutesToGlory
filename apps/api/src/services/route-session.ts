@@ -195,6 +195,156 @@ export function detectGeofenceConnect(
   )[0]!;
 }
 
+function nearestSettlementId(
+  settlements: SettlementRow[],
+  lat: number,
+  lng: number,
+): string | null {
+  if (settlements.length === 0) return null;
+
+  return settlements
+    .map((s) => ({
+      id: s.id,
+      dist: haversineM(lat, lng, Number(s.lat), Number(s.lng)),
+    }))
+    .sort((a, b) => a.dist - b.dist)[0]!.id;
+}
+
+/** Persist a manually ended GPS session as a permanent route on the map. */
+export async function saveRouteSessionOnEnd(
+  sessionId: string,
+  clientPath?: Array<{ lat: number; lng: number }>,
+): Promise<{ saved: boolean; routeId?: string; reason?: string }> {
+  const sessionResult = await query<{
+    id: string;
+    world_id: string;
+    empire_id: string;
+    status: string;
+    origin_settlement_id: string | null;
+    target_settlement_id: string | null;
+  }>(`SELECT * FROM route_sessions WHERE id = ?`, [sessionId]);
+
+  const session = sessionResult.rows[0];
+  if (!session || session.status !== 'active') {
+    return { saved: false, reason: 'session_not_active' };
+  }
+
+  const existingRoute = await query<{ id: string }>(
+    `SELECT id FROM routes WHERE session_id = ?`,
+    [sessionId],
+  );
+  if (existingRoute.rows[0]) {
+    await query(
+      `UPDATE route_sessions
+       SET status = 'completed', end_reason = 'manual', ended_at = NOW()
+       WHERE id = ?`,
+      [sessionId],
+    );
+    return { saved: true, routeId: existingRoute.rows[0].id };
+  }
+
+  const pointsResult = await query<{ lat: number; lng: number }>(
+    `SELECT lat, lng FROM route_session_points
+     WHERE session_id = ?
+     ORDER BY seq`,
+    [sessionId],
+  );
+
+  let points = pointsResult.rows.map((p) => ({
+    lat: Number(p.lat),
+    lng: Number(p.lng),
+  }));
+
+  if (points.length < 2 && clientPath && clientPath.length >= 2) {
+    points = clientPath;
+  }
+
+  if (points.length < 2) {
+    await query(
+      `UPDATE route_sessions
+       SET status = 'abandoned', end_reason = 'manual', ended_at = NOW()
+       WHERE id = ?`,
+      [sessionId],
+    );
+    return { saved: false, reason: 'too_few_points' };
+  }
+
+  const settlements = await loadSettlements(session.world_id);
+  const start = points[0]!;
+  const end = points[points.length - 1]!;
+  const fromSettlementId =
+    session.origin_settlement_id ??
+    nearestSettlementId(settlements, Number(start.lat), Number(start.lng));
+  const toSettlementId =
+    session.target_settlement_id ??
+    nearestSettlementId(settlements, Number(end.lat), Number(end.lng)) ??
+    fromSettlementId;
+
+  if (!fromSettlementId || !toSettlementId) {
+    await query(
+      `UPDATE route_sessions
+       SET status = 'abandoned', end_reason = 'manual', ended_at = NOW()
+       WHERE id = ?`,
+      [sessionId],
+    );
+    return { saved: false, reason: 'no_settlement_anchor' };
+  }
+
+  let distanceM = 0;
+  for (let i = 1; i < points.length; i += 1) {
+    distanceM += haversineM(
+      Number(points[i - 1]!.lat),
+      Number(points[i - 1]!.lng),
+      Number(points[i]!.lat),
+      Number(points[i]!.lng),
+    );
+  }
+
+  const routeId = newId();
+  await query(
+    `INSERT INTO routes (
+       id, world_id, empire_id, session_id, from_settlement_id, to_settlement_id,
+       path_json, distance_m, status
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')`,
+    [
+      routeId,
+      session.world_id,
+      session.empire_id,
+      sessionId,
+      fromSettlementId,
+      toSettlementId,
+      JSON.stringify(points),
+      distanceM,
+    ],
+  );
+
+  await query(
+    `UPDATE route_sessions
+     SET status = 'completed', end_reason = 'manual', ended_at = NOW()
+     WHERE id = ?`,
+    [sessionId],
+  );
+
+  await query(
+    `INSERT INTO world_events (id, world_id, type, payload)
+     VALUES (?, ?, 'route_established', ?)`,
+    [
+      newId(),
+      session.world_id,
+      JSON.stringify({
+        routeId,
+        sessionId,
+        empireId: session.empire_id,
+        fromSettlementId,
+        toSettlementId,
+        manualEnd: true,
+      }),
+    ],
+  );
+
+  return { saved: true, routeId };
+}
+
 export async function completeRouteSession(
   sessionId: string,
   toSettlementId: string,

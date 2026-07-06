@@ -5,12 +5,14 @@ import {
   type ExplorationState,
   type FogOfWarConfig,
   type MapResourceNode,
+  type SavedWorldSummary,
   type Settlement,
 } from './lib/api';
 import {
   requestInitialPosition,
   startRouteSampler,
   stopRouteSampler,
+  forceRefreshPosition,
   type GpsSample,
 } from './lib/geolocation';
 import { MapView } from './components/MapView';
@@ -45,6 +47,16 @@ function clearBootstrap(): void {
   localStorage.removeItem(STORAGE_KEY);
 }
 
+function formatSavedGameLabel(world: SavedWorldSummary): string {
+  const date = new Date(world.createdAt).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+  return `${world.accessCode} — ${world.name} (${date})`;
+}
+
 export function App() {
   const mapboxToken = import.meta.env.VITE_MAPBOX_TOKEN ?? '';
   const [bootstrap, setBootstrap] = useState<BootstrapWorld | null>(loadBootstrap);
@@ -66,6 +78,29 @@ export function App() {
   >([]);
   const [claimRadiusM, setClaimRadiusM] = useState(1_000);
   const [pendingGoodie, setPendingGoodie] = useState<Settlement | null>(null);
+  const [savedWorlds, setSavedWorlds] = useState<SavedWorldSummary[]>([]);
+
+  const refreshSavedWorlds = useCallback(async () => {
+    try {
+      const { worlds } = await api.listSavedWorlds();
+      setSavedWorlds(worlds);
+    } catch {
+      /* list is optional when API offline */
+    }
+  }, []);
+
+  const resumeGame = useCallback(async (accessCode: string) => {
+    if (!accessCode) return;
+    setLoading(true);
+    try {
+      const world = await api.getWorldByCode(accessCode);
+      saveBootstrap(world);
+      window.location.reload();
+    } catch (e) {
+      setStatus(e instanceof Error ? e.message : 'Failed to resume game');
+      setLoading(false);
+    }
+  }, []);
 
   const triggerShimmer = useCallback((resourceIds: string[]) => {
     if (resourceIds.length === 0) return;
@@ -118,19 +153,26 @@ export function App() {
       setSettlements(map.settlements);
       const routes = map.routes
         .filter((r) => r.status === 'active')
-        .map((r) => ({
-          ...r,
-          path_json:
+        .map((r) => {
+          const raw =
             typeof r.path_json === 'string'
               ? (JSON.parse(r.path_json) as ActiveRoute['path_json'])
-              : r.path_json,
-        }));
+              : r.path_json;
+          const path_json = Array.isArray(raw)
+            ? raw.map((p) => ({ lat: Number(p.lat), lng: Number(p.lng) }))
+            : [];
+          return { ...r, path_json };
+        });
       setActiveRoutes(routes);
       setConnectorPaths(routes.map((r) => r.path_json).filter((p) => p.length >= 2));
       await loadExploration(worldId, empireId);
     },
     [loadExploration],
   );
+
+  useEffect(() => {
+    void refreshSavedWorlds();
+  }, [refreshSavedWorlds]);
 
   useEffect(() => {
     void api
@@ -183,8 +225,9 @@ export function App() {
     setLoading(true);
     try {
       const world = await createWorldAtGps();
+      await refreshSavedWorlds();
       setStatus(
-        `World ready — ${world.settlementCount} sites (30 metros + local area). Begin a route to explore.`,
+        `World ready — code ${world.accessCode ?? '???'} · ${world.settlementCount} sites. Save the code or pick it from Resume below.`,
       );
     } catch (e) {
       setStatus(e instanceof Error ? e.message : 'Failed to create world');
@@ -207,8 +250,9 @@ export function App() {
       stopRouteSampler();
 
       const world = await createWorldAtGps();
+      await refreshSavedWorlds();
       setStatus(
-        `New test world — ${world.settlementCount} sites, local goodie huts & resources seeded.`,
+        `New test world — code ${world.accessCode ?? '???'} · ${world.settlementCount} sites seeded.`,
       );
     } catch (e) {
       setStatus(e instanceof Error ? e.message : 'Failed to reset world');
@@ -235,57 +279,15 @@ export function App() {
       startRouteSampler(
         {
           pollIntervalMs,
+          minDistanceM: 15,
           onSample: async (sample: GpsSample) => {
-          setUserPos({ lat: sample.lat, lng: sample.lng });
-          setRoutePath((path) => [...path, { lat: sample.lat, lng: sample.lng }]);
-          try {
-            const result = await api.appendPoints(id, [
-              {
-                lat: sample.lat,
-                lng: sample.lng,
-                accuracyM: sample.accuracyM,
-                speedMps: sample.speedMps,
-                recordedAt: sample.recordedAt,
-              },
-            ]);
-
-            if (result.exploration?.newResourceNodeIds.length) {
-              triggerShimmer(result.exploration.newResourceNodeIds);
+            try {
+              await applyGpsSample(sample, id);
+            } catch (err) {
+              setStatus(err instanceof Error ? err.message : 'Failed to sync GPS');
             }
-
-            if (bootstrap.empireId && result.exploration) {
-              const { newlyRevealedTileIds, newResourceNodeIds } = result.exploration;
-              if (newlyRevealedTileIds.length > 0 || newResourceNodeIds.length > 0) {
-                setExploration((prev) => {
-                  if (!prev) return prev;
-                  const explored = new Set(prev.exploredTileIds);
-                  for (const t of newlyRevealedTileIds) explored.add(t);
-                  return {
-                    ...prev,
-                    exploredTileIds: [...explored],
-                  };
-                });
-              }
-              if (newResourceNodeIds.length > 0) {
-                await loadExploration(bootstrap.id, bootstrap.empireId);
-              }
-              if (newlyRevealedTileIds.length > 0) {
-                setStatus(`Revealed ${newlyRevealedTileIds.length} new tiles.`);
-              }
-            }
-
-            if (result.connected && result.settlement) {
-              setStatus(`Connected to ${result.settlement.name}!`);
-              stopRouteSampler();
-              setIsRouting(false);
-              setSessionId(null);
-              await loadMap(bootstrap.id, bootstrap.empireId);
-            }
-          } catch (err) {
-            setStatus(err instanceof Error ? err.message : 'Failed to sync GPS');
-          }
-        },
-        onError: (msg: string) => setStatus(msg),
+          },
+          onError: (msg: string) => setStatus(msg),
         },
       );
     } catch (e) {
@@ -296,13 +298,132 @@ export function App() {
   };
 
   const handleEndRoute = async () => {
+    const endingSessionId = sessionId;
+    const pathSnapshot = [...routePath];
+
     stopRouteSampler();
     setIsRouting(false);
-    if (sessionId) {
-      await api.endSession(sessionId);
-      setSessionId(null);
+
+    if (endingSessionId && bootstrap) {
+      setLoading(true);
+      try {
+        if (userPos) {
+          try {
+            const sample = await forceRefreshPosition();
+            await api.appendPoints(endingSessionId, [
+              {
+                lat: sample.lat,
+                lng: sample.lng,
+                accuracyM: sample.accuracyM,
+                speedMps: sample.speedMps,
+                recordedAt: sample.recordedAt,
+              },
+            ]);
+            pathSnapshot.push({ lat: sample.lat, lng: sample.lng });
+          } catch {
+            /* use path already on screen */
+          }
+        }
+
+        const result = await api.endSession(
+          endingSessionId,
+          pathSnapshot.length >= 2 ? pathSnapshot : undefined,
+        );
+        setSessionId(null);
+        setRoutePath([]);
+
+        if (result.saved) {
+          await loadMap(bootstrap.id, bootstrap.empireId);
+          setStatus('Route saved to your map.');
+        } else {
+          setStatus(
+            result.reason === 'too_few_points'
+              ? 'Route ended — not enough GPS points to save.'
+              : 'Route ended — could not save to map.',
+          );
+        }
+      } catch (e) {
+        setSessionId(null);
+        setRoutePath([]);
+        setStatus(e instanceof Error ? e.message : 'Failed to end route');
+      } finally {
+        setLoading(false);
+      }
+      return;
     }
+
+    setSessionId(null);
+    setRoutePath([]);
     setStatus('Route ended.');
+  };
+
+  const applyGpsSample = useCallback(
+    async (sample: GpsSample, activeSessionId?: string | null) => {
+      if (!bootstrap) return;
+
+      setUserPos({ lat: sample.lat, lng: sample.lng });
+
+      const sid = activeSessionId ?? sessionId;
+      if (!sid) return;
+
+      setRoutePath((path) => [...path, { lat: sample.lat, lng: sample.lng }]);
+
+      const result = await api.appendPoints(sid, [
+        {
+          lat: sample.lat,
+          lng: sample.lng,
+          accuracyM: sample.accuracyM,
+          speedMps: sample.speedMps,
+          recordedAt: sample.recordedAt,
+        },
+      ]);
+
+      if (result.exploration?.newResourceNodeIds.length) {
+        triggerShimmer(result.exploration.newResourceNodeIds);
+      }
+
+      await loadExploration(bootstrap.id, bootstrap.empireId);
+
+      const revealed = result.exploration?.newlyRevealedTileIds.length ?? 0;
+      if (revealed > 0) {
+        setStatus(`Revealed ${revealed} new tiles.`);
+      }
+
+      if (result.connected && result.settlement) {
+        setStatus(`Connected to ${result.settlement.name}!`);
+        stopRouteSampler();
+        setIsRouting(false);
+        setSessionId(null);
+        await loadMap(bootstrap.id, bootstrap.empireId);
+      }
+    },
+    [bootstrap, sessionId, triggerShimmer, loadExploration, loadMap],
+  );
+
+  const handleRefreshLocation = async () => {
+    if (!bootstrap) return;
+    setLoading(true);
+    try {
+      const sample = await forceRefreshPosition();
+      setUserPos({ lat: sample.lat, lng: sample.lng });
+
+      if (isRouting && sessionId) {
+        await applyGpsSample(sample, sessionId);
+        setStatus(
+          `Location updated (${sample.accuracyM.toFixed(0)}m accuracy) — fog synced.`,
+        );
+      } else if (isRouting) {
+        setStatus('Location updated — begin route again to sync exploration.');
+      } else {
+        setStatus(
+          `Location updated (${sample.accuracyM.toFixed(0)}m accuracy). Begin a route to reveal fog while traveling.`,
+        );
+      }
+    } catch (e) {
+      setStatus(e instanceof Error ? e.message : 'Could not refresh GPS');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const claimPath = routePath.length > 0
@@ -351,6 +472,34 @@ export function App() {
     void runClaim('resource', resource.id);
   };
 
+  const activeAccessCode =
+    bootstrap?.accessCode ??
+    savedWorlds.find((w) => w.id === bootstrap?.id)?.accessCode;
+
+  const resumeDropdown = (
+    <label className="resume-field">
+      <span className="resume-label">Resume saved game</span>
+      <select
+        className="game-select"
+        disabled={loading || savedWorlds.length === 0}
+        value=""
+        onChange={(e) => {
+          const code = e.target.value;
+          if (code) void resumeGame(code);
+        }}
+      >
+        <option value="">
+          {savedWorlds.length === 0 ? 'No saved games yet' : 'Choose a game…'}
+        </option>
+        {savedWorlds.map((world) => (
+          <option key={world.id} value={world.accessCode}>
+            {formatSavedGameLabel(world)}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+
   if (!mapboxToken) {
     return (
       <div className="shell">
@@ -371,6 +520,9 @@ export function App() {
       <header>
         <h1>Routes to Glory</h1>
         <p className="subtitle">Survey Worlds · Real routes · Eternal empires</p>
+        {activeAccessCode && (
+          <p className="game-code">Active game: <strong>{activeAccessCode}</strong></p>
+        )}
       </header>
 
       <div className="map-container">
@@ -409,14 +561,24 @@ export function App() {
 
       <div className="actions">
         {!bootstrap && (
-          <button type="button" disabled={loading} onClick={() => void handleNewWorld()}>
-            Start New World
-          </button>
+          <>
+            <button type="button" disabled={loading} onClick={() => void handleNewWorld()}>
+              Start New World
+            </button>
+          </>
         )}
         {bootstrap && !isRouting && (
           <>
             <button type="button" disabled={loading || !userPos} onClick={() => void handleBeginRoute()}>
               Begin Route
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              disabled={loading}
+              onClick={() => void handleRefreshLocation()}
+            >
+              Refresh Location
             </button>
             <button
               type="button"
@@ -429,11 +591,23 @@ export function App() {
           </>
         )}
         {isRouting && (
-          <button type="button" className="danger" onClick={() => void handleEndRoute()}>
-            End Route
-          </button>
+          <>
+            <button
+              type="button"
+              className="secondary"
+              disabled={loading}
+              onClick={() => void handleRefreshLocation()}
+            >
+              Refresh Location
+            </button>
+            <button type="button" className="danger" onClick={() => void handleEndRoute()}>
+              End Route
+            </button>
+          </>
         )}
       </div>
+
+      {!isRouting && resumeDropdown}
     </div>
   );
 }

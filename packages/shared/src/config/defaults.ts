@@ -189,7 +189,7 @@ export const DEFAULT_GAME_CONFIG: GameConfig = {
 
   fogOfWar: {
     tileSizeM: 400,
-    revealRadiusM: 150,
+    revealRadiusM: 250,
     startingVisionRadiusM: 2_000,
     voidglassRevealBonusPer100: 25,
     unexploredOpacity: 0.92,

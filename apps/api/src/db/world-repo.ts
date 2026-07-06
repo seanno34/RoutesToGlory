@@ -4,6 +4,10 @@ import { query, newId } from './client.js';
 import { seedWorldSettlements } from './world-seed.js';
 import { seedPlayArea } from './spawn-seed.js';
 import { grantStartingVision } from './exploration-repo.js';
+import {
+  backfillMissingAccessCodes,
+  generateUniqueAccessCode,
+} from './access-code.js';
 
 export interface CreateWorldInput {
   name: string;
@@ -17,6 +21,7 @@ export interface CreateWorldInput {
 export interface WorldBootstrap {
   worldId: string;
   slug: string;
+  accessCode: string;
   empireId: string;
   userId: string;
   settlementCount: number;
@@ -24,6 +29,18 @@ export interface WorldBootstrap {
   localGoodieHuts?: number;
   localResources?: number;
   roadPointsSampled?: number;
+}
+
+export interface SavedWorldSummary {
+  accessCode: string;
+  id: string;
+  slug: string;
+  name: string;
+  empireId: string;
+  userId: string;
+  playerName: string;
+  settlementCount: number;
+  createdAt: string;
 }
 
 function slugify(name: string): string {
@@ -43,10 +60,18 @@ export async function createWorldInDb(
   const spawnLng = input.spawnLng ?? -104.9903;
 
   const worldId = newId();
+  const accessCode = await generateUniqueAccessCode();
   await query(
-    `INSERT INTO worlds (id, slug, name, difficulty, config)
-     VALUES (?, ?, ?, ?, ?)`,
-    [worldId, slug, input.name, input.difficulty ?? 'normal', JSON.stringify(config)],
+    `INSERT INTO worlds (id, slug, access_code, name, difficulty, config)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [
+      worldId,
+      slug,
+      accessCode,
+      input.name,
+      input.difficulty ?? 'normal',
+      JSON.stringify(config),
+    ],
   );
 
   await query(
@@ -99,12 +124,96 @@ export async function createWorldInDb(
   return {
     worldId,
     slug,
+    accessCode,
     empireId,
     userId,
     settlementCount: metroCount + localSeed.goodieHuts,
     metroEchoSites: metroCount,
     localGoodieHuts: localSeed.goodieHuts,
     localResources: localSeed.resources,
+  };
+}
+
+export async function listSavedWorlds(): Promise<SavedWorldSummary[]> {
+  await backfillMissingAccessCodes();
+
+  const result = await query<{
+    access_code: string;
+    world_id: string;
+    slug: string;
+    name: string;
+    empire_id: string;
+    user_id: string;
+    player_name: string;
+    settlement_count: number;
+    created_at: string;
+  }>(
+    `SELECT w.access_code, w.id AS world_id, w.slug, w.name, w.created_at,
+            e.id AS empire_id, e.user_id, u.display_name AS player_name,
+            (SELECT COUNT(*) FROM settlements s WHERE s.world_id = w.id) AS settlement_count
+     FROM worlds w
+     JOIN empires e ON e.world_id = w.id
+     JOIN users u ON u.id = e.user_id
+     WHERE w.status = 'active'
+     ORDER BY w.created_at DESC`,
+  );
+
+  return result.rows.map((row) => ({
+    accessCode: row.access_code,
+    id: row.world_id,
+    slug: row.slug,
+    name: row.name,
+    empireId: row.empire_id,
+    userId: row.user_id,
+    playerName: row.player_name,
+    settlementCount: Number(row.settlement_count),
+    createdAt: row.created_at,
+  }));
+}
+
+export async function getWorldBootstrapByAccessCode(
+  code: string,
+): Promise<SavedWorldSummary | null> {
+  await backfillMissingAccessCodes();
+
+  const normalized = code.trim().toUpperCase();
+  const result = await query<{
+    access_code: string;
+    world_id: string;
+    slug: string;
+    name: string;
+    empire_id: string;
+    user_id: string;
+    player_name: string;
+    settlement_count: number;
+    created_at: string;
+  }>(
+    `SELECT w.access_code, w.id AS world_id, w.slug, w.name, w.created_at,
+            e.id AS empire_id, e.user_id, u.display_name AS player_name,
+            (SELECT COUNT(*) FROM settlements s WHERE s.world_id = w.id) AS settlement_count
+     FROM worlds w
+     JOIN empires e ON e.world_id = w.id
+     JOIN users u ON u.id = e.user_id
+     WHERE w.access_code = ? AND w.status = 'active'
+     LIMIT 1`,
+    [normalized],
+  );
+
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+
+  return {
+    accessCode: row.access_code,
+    id: row.world_id,
+    slug: row.slug,
+    name: row.name,
+    empireId: row.empire_id,
+    userId: row.user_id,
+    playerName: row.player_name,
+    settlementCount: Number(row.settlement_count),
+    createdAt: row.created_at,
   };
 }
 
