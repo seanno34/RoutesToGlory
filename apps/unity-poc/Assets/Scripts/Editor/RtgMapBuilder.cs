@@ -28,6 +28,7 @@ namespace RoutesToGlory.EditorTools
         private const string TerrainName = "RTG Terrain";
         private const string CameraName = "RTG Fly Camera";
         private const string AlienMaterialPath = "Assets/Materials/RTG_AlienTerrain.mat";
+        private const string AlienSkyboxPath = "Assets/Materials/RTG_AlienSky.mat";
 
         // ------------------------------------------------------------------ //
         // Build everything
@@ -131,15 +132,19 @@ namespace RoutesToGlory.EditorTools
 
         private static void ApplyAtmosphereInternal()
         {
-            // Moody alien haze. Linear fog is predictable at terrain (km) scale.
+            // Alien sky (procedural skybox tinted violet, dark-teal ground).
+            RenderSettings.skybox = GetOrCreateAlienSkybox();
+
+            // Moody alien haze. Linear fog is predictable at terrain (km) scale;
+            // fog color is matched to the sky horizon so they blend.
             RenderSettings.fog = true;
-            RenderSettings.fogColor = new Color(0.30f, 0.16f, 0.40f); // violet haze
+            RenderSettings.fogColor = new Color(0.34f, 0.22f, 0.46f); // violet haze
             RenderSettings.fogMode = FogMode.Linear;
             RenderSettings.fogStartDistance = 1500f;
-            RenderSettings.fogEndDistance = 16000f;
+            RenderSettings.fogEndDistance = 18000f;
 
-            RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Flat;
-            RenderSettings.ambientLight = new Color(0.20f, 0.16f, 0.30f);
+            // Derive ambient light from the alien sky for a cohesive mood.
+            RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Skybox;
 
             Light sun = FindMainDirectionalLight();
             if (sun != null)
@@ -147,10 +152,13 @@ namespace RoutesToGlory.EditorTools
                 // Use plain Color mode so the tint applies directly (not blended
                 // through a Kelvin color-temperature filter).
                 sun.useColorTemperature = false;
-                sun.color = new Color(0.78f, 0.58f, 0.98f); // alien sun tint
+                sun.color = new Color(0.80f, 0.60f, 1.00f); // alien sun tint
                 sun.intensity = 1.15f;
                 sun.transform.rotation = Quaternion.Euler(28f, 150f, 0f);
             }
+
+            // Recompute ambient/reflection probes from the new skybox.
+            DynamicGI.UpdateEnvironment();
         }
 
         private static void SetupFlyCameraInternal(CesiumGeoreference georeference)
@@ -258,6 +266,27 @@ namespace RoutesToGlory.EditorTools
             AssetDatabase.CreateAsset(mat, AlienMaterialPath);
             AssetDatabase.SaveAssets();
             return mat;
+        }
+
+        private static Material GetOrCreateAlienSkybox()
+        {
+            Material sky = AssetDatabase.LoadAssetAtPath<Material>(AlienSkyboxPath);
+            if (sky == null)
+            {
+                if (!AssetDatabase.IsValidFolder("Assets/Materials"))
+                    AssetDatabase.CreateFolder("Assets", "Materials");
+                sky = new Material(Shader.Find("Skybox/Procedural"));
+                AssetDatabase.CreateAsset(sky, AlienSkyboxPath);
+            }
+
+            // Re-apply settings every run so tuning takes effect on rebuild.
+            sky.SetColor("_SkyTint", new Color(0.42f, 0.30f, 0.62f));    // violet sky
+            sky.SetColor("_GroundColor", new Color(0.10f, 0.13f, 0.14f)); // dark teal
+            sky.SetFloat("_AtmosphereThickness", 1.35f);                  // thicker haze
+            sky.SetFloat("_Exposure", 1.1f);
+            sky.SetFloat("_SunSize", 0.045f);
+            AssetDatabase.SaveAssets();
+            return sky;
         }
 
         private static Light FindMainDirectionalLight()
