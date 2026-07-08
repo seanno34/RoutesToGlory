@@ -52,3 +52,8 @@ apps/unity-poc/crashlytics-build.properties
 # Addressables / build reports
 apps/unity-poc/[Aa]ssets/[Ss]treamingAssets/aa.meta
 apps/unity-poc/[Aa]ssets/[Ss]treamingAssets/aa/*
+
+# Cesium ion access tokens are per-developer SECRETS — never commit them.
+# Cesium regenerates these server assets when you connect to ion.
+apps/unity-poc/Assets/CesiumSettings/Resources/CesiumIonServers/*.asset
+apps/unity-poc/Assets/CesiumSettings/Resources/CesiumIonServers/*.asset.meta
