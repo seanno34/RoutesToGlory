@@ -3,6 +3,7 @@ using UnityEngine;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using CesiumForUnity;
+using RoutesToGlory.Game;
 
 namespace RoutesToGlory.EditorTools
 {
@@ -20,7 +21,14 @@ namespace RoutesToGlory.EditorTools
         private const double OriginHeight = 1476.0;        // meters above ellipsoid (~ground)
 
         // Camera starts this many meters above the origin for a nice overview.
-        private const double CameraStartAltitude = 3000.0;
+        private const double CameraStartAltitude = 1200.0;
+
+        // Fixed fly speed (m/s) for the camera. We disable Cesium's dynamic speed
+        // because it measures altitude by raycasting terrain colliders, and we build
+        // the terrain with createPhysicsMeshes = false (no colliders) — so dynamic
+        // speed collapses to 0 and WASD does nothing. A fixed speed + scroll-wheel
+        // adjustment is predictable and needs no colliders.
+        private const float CameraFlySpeed = 300.0f;
 
         // Cesium ion asset IDs
         private const long CesiumWorldTerrainAssetId = 1;
@@ -28,6 +36,7 @@ namespace RoutesToGlory.EditorTools
         private const string GeoreferenceName = "RTG Georeference";
         private const string TerrainName = "RTG Terrain";
         private const string CameraName = "RTG Fly Camera";
+        private const string EchoSitesName = "RTG Echo Sites";
         private const string AlienMaterialPath = "Assets/Materials/RTG_AlienTerrain.mat";
         private const string AlienSkyboxPath = "Assets/Materials/RTG_AlienSky.mat";
 
@@ -159,6 +168,31 @@ namespace RoutesToGlory.EditorTools
             terrain.RecreateTileset();
             MarkDirty(georeference);
             Debug.Log("[RTG] Removed stylized overlay. Run 'Apply Alien Material' to restore the tint.");
+        }
+
+        [MenuItem("Routes to Glory/6. Load Echo Sites (sample)", priority = 27)]
+        public static void LoadEchoSites()
+        {
+            CesiumGeoreference georeference = RequireGeoreference();
+            if (georeference == null) return;
+
+            RtgEchoSiteLoader loader = GetOrCreateEchoSiteLoader(georeference);
+            loader.LoadSampleImmediate();
+            MarkDirty(georeference);
+            Debug.Log(
+                "[RTG] Echo Sites + resource nodes loaded from sample-world-map.json. " +
+                "Fly the camera to see the beacons. Save with Cmd+S. To use live data, set the " +
+                "RTG Echo Sites object's Data Source to LiveApi + fill in the World id.");
+        }
+
+        [MenuItem("Routes to Glory/Clear Echo Sites", priority = 41)]
+        public static void ClearEchoSites()
+        {
+            RtgEchoSiteLoader loader = FindByName<RtgEchoSiteLoader>(EchoSitesName);
+            if (loader == null) { Debug.Log("[RTG] No Echo Sites to clear."); return; }
+            loader.ClearMarkers();
+            MarkDirty(loader.GetComponentInParent<CesiumGeoreference>());
+            Debug.Log("[RTG] Cleared Echo Site markers. Save with Cmd+S.");
         }
 
         [MenuItem("Routes to Glory/Clear Map", priority = 40)]
@@ -320,12 +354,17 @@ namespace RoutesToGlory.EditorTools
 
             if (camGo.GetComponent<CesiumOriginShift>() == null)
                 camGo.AddComponent<CesiumOriginShift>();
-            if (camGo.GetComponent<CesiumCameraController>() == null)
-                camGo.AddComponent<CesiumCameraController>();
+
+            CesiumCameraController controller = camGo.GetComponent<CesiumCameraController>();
+            if (controller == null) controller = camGo.AddComponent<CesiumCameraController>();
+            // See CameraFlySpeed: dynamic speed needs terrain colliders we don't bake.
+            controller.enableDynamicSpeed = false;
+            controller.defaultMaximumSpeed = CameraFlySpeed;
 
             anchor.SetPositionLongitudeLatitudeHeight(
                 OriginLongitude, OriginLatitude, OriginHeight + CameraStartAltitude);
-            camGo.transform.localRotation = Quaternion.Euler(25f, 0f, 0f);
+            // Steeper initial tilt so "W" heads toward the ground, not the horizon.
+            camGo.transform.localRotation = Quaternion.Euler(35f, 0f, 0f);
         }
 
         // ------------------------------------------------------------------ //
@@ -388,6 +427,22 @@ namespace RoutesToGlory.EditorTools
 
             existing.transform.SetParent(georeference.transform, false);
             return existing;
+        }
+
+        private static RtgEchoSiteLoader GetOrCreateEchoSiteLoader(CesiumGeoreference georeference)
+        {
+            Transform existing = georeference.transform.Find(EchoSitesName);
+            GameObject go = existing != null ? existing.gameObject : null;
+            if (go == null)
+            {
+                go = new GameObject(EchoSitesName);
+                Undo.RegisterCreatedObjectUndo(go, "Create RTG Echo Sites");
+                go.transform.SetParent(georeference.transform, false);
+            }
+
+            RtgEchoSiteLoader loader = go.GetComponent<RtgEchoSiteLoader>();
+            if (loader == null) loader = go.AddComponent<RtgEchoSiteLoader>();
+            return loader;
         }
 
         private static Material GetOrCreateAlienMaterial()

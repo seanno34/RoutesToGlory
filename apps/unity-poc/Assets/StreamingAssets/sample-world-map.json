@@ -1,0 +1,119 @@
+{
+  "_comment": "Sample response mirroring GET /api/worlds/:worldId/map (apps/api/src/db/world-repo.ts). Used by RtgEchoSiteLoader in SampleFile mode to preview Echo Site + resource placement around Douglas, WY without a running backend. Replace with live data by switching the loader's Data Source to LiveApi.",
+  "settlements": [
+    {
+      "id": "s-capital",
+      "name": "First Light",
+      "planet_display_name": "First Light",
+      "tier": "city",
+      "alignment": "friendly",
+      "is_goodie_hut": 0,
+      "lat": 42.7597,
+      "lng": -105.3819,
+      "geofence_radius_m": 300
+    },
+    {
+      "id": "s-verdant",
+      "name": "Verdant Echo",
+      "planet_display_name": "Verdant Echo",
+      "tier": "town",
+      "alignment": "neutral",
+      "is_goodie_hut": 0,
+      "lat": 42.7681,
+      "lng": -105.3705,
+      "geofence_radius_m": 250
+    },
+    {
+      "id": "s-ashfall",
+      "name": "Ashfall Reach",
+      "planet_display_name": "Ashfall Reach",
+      "tier": "settlement",
+      "alignment": "neutral",
+      "is_goodie_hut": 0,
+      "lat": 42.7502,
+      "lng": -105.3951,
+      "geofence_radius_m": 250
+    },
+    {
+      "id": "s-hollow",
+      "name": "Hollow Spire",
+      "planet_display_name": "Hollow Spire",
+      "tier": "city",
+      "alignment": "hostile",
+      "is_goodie_hut": 0,
+      "lat": 42.7724,
+      "lng": -105.4009,
+      "geofence_radius_m": 300
+    },
+    {
+      "id": "s-enclave",
+      "name": "Sundered Choir",
+      "planet_display_name": "Sundered Choir",
+      "tier": "town",
+      "alignment": "alien_enclave",
+      "is_goodie_hut": 0,
+      "lat": 42.7455,
+      "lng": -105.3628,
+      "geofence_radius_m": 250
+    },
+    {
+      "id": "s-hut",
+      "name": "Whisper Cache",
+      "planet_display_name": "Whisper Cache",
+      "tier": "goodie_hut",
+      "alignment": "neutral",
+      "is_goodie_hut": 1,
+      "lat": 42.7548,
+      "lng": -105.3742,
+      "geofence_radius_m": 150
+    }
+  ],
+  "routes": [],
+  "resources": [
+    {
+      "id": "r-xenite-1",
+      "tile_id": "t1",
+      "resource_id": "xenite",
+      "richness": "rich",
+      "yield_per_day": 42,
+      "lat": 42.7638,
+      "lng": -105.3762
+    },
+    {
+      "id": "r-solari-1",
+      "tile_id": "t2",
+      "resource_id": "solari_dust",
+      "richness": "moderate",
+      "yield_per_day": 24,
+      "lat": 42.7561,
+      "lng": -105.3883
+    },
+    {
+      "id": "r-lumin-1",
+      "tile_id": "t3",
+      "resource_id": "lumin_spring",
+      "richness": "rich",
+      "yield_per_day": 40,
+      "lat": 42.7702,
+      "lng": -105.3851
+    },
+    {
+      "id": "r-void-1",
+      "tile_id": "t4",
+      "resource_id": "voidglass",
+      "richness": "sparse",
+      "yield_per_day": 12,
+      "lat": 42.7489,
+      "lng": -105.3907
+    },
+    {
+      "id": "r-quant-1",
+      "tile_id": "t5",
+      "resource_id": "quantium_shard",
+      "richness": "moderate",
+      "yield_per_day": 28,
+      "lat": 42.7619,
+      "lng": -105.3681
+    }
+  ]
+}
