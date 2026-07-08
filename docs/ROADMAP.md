@@ -18,6 +18,34 @@ Use this file when starting a **new Cursor agent/thread** so you don’t need to
 
 ---
 
+## Game premise
+
+You are the **captain** of an advanced starship on a one-way mission to a distant alien world. One-way travel technology gets the crew there; there is no quick ride home until you finish the job.
+
+**Mission:** establish a **base camp**, claim **Echo Sites** across the planet, harvest local **alien resources**, and weave a continent-scale **Light Road** network between your sites. A connected Echo Site network generates more resources and energy as it grows — eventually powering a **super generator** strong enough to energize the **Star Gate**, enabling instant travel to and from Earth. **Mission complete** when the Star Gate is built and powered; then the crew moves on to the next target world.
+
+**Threats & allies:** life was detected. Some **friendly alien life** offers help, technology, and resources. A massive **hostile alien presence** (the Obsidian Concord) is bent on eradicating human explorers. The player must expand and connect Echo Sites fast enough to gather materials and energy for the Star Gate without being overrun.
+
+Real-world **GPS movement** drives exploration and **Light Road** construction in fiction; the map is a Survey World overlay on real geography (see locked decisions).
+
+### Fiction ↔ mechanics
+
+| Fiction | In-game (v1+) |
+|---|---|
+| Captain / crew | Player (empire) |
+| Alien planet | **Survey World** (sci-fi layer on real-world map) |
+| Base camp | First **Echo Site** / starting settlement |
+| **Light Roads** | **Routes** — built instantly while the player moves |
+| **Echo Sites** | Settlements seeded from real-world anchors; connect via routes |
+| Alien resources | 10 resource types; fog reveal + stockpiles |
+| Friendly aliens | Goodie hut rewards (gold, tech, units); future allied factions (v2) |
+| Hostile aliens | **Obsidian Concord** — one NPC empire per world |
+| Network yield | More routes + connected Echo Sites → more resources/energy (v1) |
+| Super generator | **v2 parking lot** — capstone network build that powers the Star Gate |
+| **Star Gate** | **v2 parking lot** — build + power = mission win → next world |
+
+---
+
 ## v1 MVP — scope checklist
 
 ### Design & config (done)
@@ -65,6 +93,8 @@ Use this file when starting a **new Cursor agent/thread** so you don’t need to
 - Native iOS/Android apps (PWA first)
 - Multiple NPC factions (one Obsidian Concord per world)
 - Player-founded settlements (fixed + seeded nodes only for v1)
+- Star Gate endgame and mission-complete flow (fiction exists; mechanics v2)
+- Random cinematic Events (video clips + game-state effects — v2)
 
 ---
 
@@ -76,7 +106,9 @@ Use this file when starting a **new Cursor agent/thread** so you don’t need to
 | **v1 public path** | `https://8082ventures.com/rtg` |
 | **Dedicated domain** | `routestoglory.com` — deferred until after v1 |
 | Map alignment | Real-world GPS; sci-fi “Survey World” fiction layer |
-| Routes | Only thing that builds instantly while player moves |
+| Narrative frame | Starship captain; one-way colonization; Star Gate = long-term mission win (v2) |
+| Routes / Light Roads | Only thing that builds instantly while player moves |
+| Echo Sites | Colony nodes; real-world seeded anchors; connect into resource network |
 | Infrastructure | Real-time timers; complexity tiers 1–5 |
 | Goodie hut A | Instant town + population; modifiers queued at 50% time |
 | Goodie hut B | One-time gold, tech, or alien unit (new or upgrade) |
@@ -88,12 +120,49 @@ Use this file when starting a **new Cursor agent/thread** so you don’t need to
 
 ---
 
+## POC → Production strategy
+
+The Unity build is a **throwaway proof of concept**, not the production codebase. Standard game-dev progression: **Prototype (throwaway) → Vertical slice (production-quality core loop) → Production → Live-ops.** We plan to rewrite prototype *code*, but keep the *repo and infrastructure* continuous.
+
+### Locked decisions
+
+| Topic | Decision |
+|---|---|
+| Repo strategy | **Single repo** (`routestoglory` monorepo). No new repo for production. |
+| Prototype location | Unity POC lives under `apps/` (e.g. `apps/unity-poc`); treated as disposable |
+| Production start | New clean Unity project as a **fresh folder in the same repo** (e.g. `apps/game`), reusing backend, `@empire/shared`, tile pipeline, art, CI, and docs |
+| Backend | `@empire/api` + `@empire/shared` are **authoritative and client-agnostic** — carried forward unchanged; never forked or duplicated |
+| Retiring the POC | Archive/delete the POC folder when production starts; git history preserves it |
+
+**Why not a new repo:** the backend is already production-grade and shared, and the tile pipeline, Cesium know-how, shaders, art, CI, and decision docs all carry over. A new repo would fragment git history and force awkward backend duplication for no benefit. A separate repo is only justified if the POC repo gets polluted with large experimental LFS binaries, the tech direction changes fundamentally, or team/ownership boundaries require it.
+
+**What de-risks the transition:** all game rules live server-side and the client is replaceable, so the correctness-critical layer (world state, routes, claims, economy) stays continuous regardless of client rewrites.
+
+### POC exit criteria (go / no-go)
+
+Prototype is "done" when we can make a confident go/no-go decision against:
+
+- [ ] GPS accuracy/stability acceptable on a real mid-range device
+- [ ] Alien-overlay map + shader-based fog + Echo Site claims render correctly and read well
+- [ ] Core loop (real-world movement → Light Road → Echo Site growth) feels good
+- [ ] Performance acceptable on a mid-range phone (FPS, memory, thermal)
+- [ ] Cesium 3D-tile cost tolerable at expected usage
+- [ ] Backend integration proven with **zero server changes**
+
+On **go**: write a short technical design doc capturing prototype learnings (what to keep, what to rebuild), then start `apps/game` on production-quality foundations.
+
+---
+
 ## v2 parking lot
 
 _Ideas only — not designed or scheduled. Add new bullets here; promote to v1 only if scope changes._
 
 ### Gameplay
 
+- **Always-on movement sync** — no Begin/End Route button; any player movement while the app is open translates to in-game movement; routes auto-created when criteria are met (distance, dwell, settlement proximity, etc. — TBD)
+- **Static plot objects** — place mines, extractors, and similar buildings on surrounding city plots to gather resources without moving (complements route-based play)
+- **Super generator** — late-game capstone build; connected Echo Site network must generate enough energy to power the Star Gate
+- **Star Gate** — endgame objective: build, power, mission complete → unlock next Survey World
 - Player-founded trade posts and settlements
 - Live caravan visibility on map during active sessions
 - Season / league worlds with resets
@@ -103,6 +172,23 @@ _Ideas only — not designed or scheduled. Add new bullets here; promote to v1 o
 - Legendary world landmarks with server-wide first-claim history
 - Route tolls and trade agreements between empires
 - Weather / terrain modifiers affecting route yield
+
+### Events
+
+Random **positive or negative** world events that interrupt normal play with a short **video clip** showing what happened and how it affects the player’s empire.
+
+**Presentation:** event triggers → brief cinematic/video → applied game-state change (map + stats reflect outcome).
+
+**Effect categories (TBD per event type):**
+
+| Type | Examples |
+|---|---|
+| **Obstacles** | Block or slow progress — impassable terrain, route delays, construction halts, movement penalties |
+| **Destruction** | Remove or damage existing assets — Light Roads, buildings, extractor sites, stockpiles |
+| **Bonuses** | Extra resources, technology unlocks, temporary buffs, discovery of new resource deposits or types |
+
+- Event pool, frequency, and targeting rules (global vs. local vs. empire-specific) — TBD
+- May overlap with Obsidian Concord PvE raids (one event source among many)
 
 ### Economy & monetization
 
@@ -116,6 +202,7 @@ _Ideas only — not designed or scheduled. Add new bullets here; promote to v1 o
 - Push notifications (build complete, under attack, ally request)
 - Offline GPS point queue with sync (client-side IndexedDB)
 - Mapbox map-matching / road snapping for route validation
+- Event video playback — short clips on trigger; cache for offline/PWA (format, CDN — TBD)
 - Spectator mode / shared world replays
 
 ### Social
@@ -148,3 +235,8 @@ apps/api/src/routes/game.ts              # HTTP routes
 | 2026-07-04 | v1 implementation started: MySQL schema, world seed, route sessions, web PWA |
 | 2026-07-04 | Branding: Routes to Glory; v1 at `8082ventures.com/rtg`; domain deferred |
 | 2026-07-04 | Initial roadmap: v1 checklist, locked decisions, v2 parking lot |
+| 2026-07-06 | v2: always-on movement sync, static plot objects (mines/extractors) |
+| 2026-07-06 | Game premise: captain, Light Roads, Echo Sites, Star Gate win condition |
+| 2026-07-06 | Star Gate + super generator moved to v2 parking lot (out of v1 scope) |
+| 2026-07-06 | v2: Events system — random positive/negative, video clips, obstacles/destruction/bonuses |
+| 2026-07-07 | Added POC → Production strategy: Unity POC is throwaway; keep single repo; production as `apps/game`; backend continuous; go/no-go exit criteria |
