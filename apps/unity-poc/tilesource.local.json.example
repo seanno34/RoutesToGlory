@@ -1,0 +1,5 @@
+{
+  "_comment": "Copy this file to tilesource.local.json (same folder) and fill in your MapTiler Cloud credentials. tilesource.local.json is gitignored so your API key never lands in the repo. Used by Routes to Glory > 5b. Apply Custom (MapTiler) Overlay.",
+  "mapId": "your-maptiler-map-id",
+  "key": "your-maptiler-api-key"
+}

@@ -1,3 +1,4 @@
+using System.IO;
 using UnityEngine;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -35,6 +36,29 @@ namespace RoutesToGlory.EditorTools
         // XYZ (north-origin) providers need {reverseY}.
         private const string PrototypeOverlayUrl =
             "https://basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{reverseY}.png";
+
+        // Custom (MapTiler Cloud) stylized tiles. The map id + API key live in a
+        // gitignored config file (see TileSourceConfigPath) so the key never lands
+        // in the repo or a committed scene. MapTiler raster XYZ is standard
+        // north-origin y, so we use Cesium's {reverseY}.
+        // Format: https://api.maptiler.com/maps/{mapId}/256/{z}/{x}/{y}.png?key=...
+        private const string MapTilerUrlFormat =
+            "https://api.maptiler.com/maps/{0}/256/{{z}}/{{x}}/{{reverseY}}.png?key={1}";
+
+        // Read relative to the Unity project root (…/apps/unity-poc/), NOT Assets/,
+        // so Unity doesn't import it as an asset. Gitignored; see tilesource.local.json.example.
+        private const string TileSourceConfigFileName = "tilesource.local.json";
+
+        // MapTiler custom maps rasterize/overzoom well past the vector source zoom.
+        private const int CustomOverlayMaxLevel = 20;
+
+        /// <summary>Local, gitignored MapTiler credentials (see tilesource.local.json.example).</summary>
+        [System.Serializable]
+        private class TileSourceConfig
+        {
+            public string mapId;
+            public string key;
+        }
 
         // ------------------------------------------------------------------ //
         // Build everything
@@ -105,7 +129,25 @@ namespace RoutesToGlory.EditorTools
                 "Terrain material override cleared so the overlay renders. Save with Cmd+S.");
         }
 
-        [MenuItem("Routes to Glory/Remove Stylized Overlay", priority = 25)]
+        [MenuItem("Routes to Glory/5b. Apply Custom (MapTiler) Overlay", priority = 25)]
+        public static void ApplyCustomOverlay()
+        {
+            CesiumGeoreference georeference = RequireGeoreference();
+            if (georeference == null) return;
+
+            TileSourceConfig config = LoadTileSourceConfig();
+            if (config == null) return; // LoadTileSourceConfig already logged why.
+
+            string url = string.Format(MapTilerUrlFormat, config.mapId, config.key);
+            SetRasterOverlayInternal(georeference, url, CustomOverlayMaxLevel);
+            MarkDirty(georeference);
+            Debug.Log(
+                $"[RTG] Custom MapTiler overlay applied (map '{config.mapId}'). " +
+                "Terrain material override cleared so the overlay renders. Save with Cmd+S. " +
+                "Do NOT commit the scene — it embeds your API key.");
+        }
+
+        [MenuItem("Routes to Glory/Remove Stylized Overlay", priority = 26)]
         public static void RemoveStylizedOverlay()
         {
             CesiumGeoreference georeference = FindByName<CesiumGeoreference>(GeoreferenceName);
@@ -164,11 +206,18 @@ namespace RoutesToGlory.EditorTools
 
         private static void ApplyStylizedOverlayInternal(CesiumGeoreference georeference)
         {
-            Cesium3DTileset terrain = GetOrCreateTerrain(georeference);
+            SetRasterOverlayInternal(georeference, PrototypeOverlayUrl, 18);
+        }
 
-            // The flat alien material overrides Cesium's shader and would hide the
-            // overlay texture, so clear it and let Cesium's default material (which
-            // samples raster overlays) render the stylized tiles.
+        /// <summary>
+        /// Drapes a web-mercator XYZ raster overlay on the terrain. Clears the flat
+        /// alien material (which overrides Cesium's shader and would hide the overlay)
+        /// so Cesium's default material samples and renders the tiles.
+        /// </summary>
+        private static void SetRasterOverlayInternal(
+            CesiumGeoreference georeference, string templateUrl, int maximumLevel)
+        {
+            Cesium3DTileset terrain = GetOrCreateTerrain(georeference);
             terrain.opaqueMaterial = null;
 
             CesiumUrlTemplateRasterOverlay overlay =
@@ -177,10 +226,52 @@ namespace RoutesToGlory.EditorTools
                 overlay = terrain.gameObject.AddComponent<CesiumUrlTemplateRasterOverlay>();
 
             overlay.projection = CesiumUrlTemplateRasterOverlayProjection.WebMercator;
-            overlay.maximumLevel = 18;
-            overlay.templateUrl = PrototypeOverlayUrl;
+            overlay.maximumLevel = maximumLevel;
+            overlay.templateUrl = templateUrl;
 
             terrain.RecreateTileset();
+        }
+
+        /// <summary>
+        /// Loads MapTiler credentials from the gitignored tilesource.local.json at the
+        /// Unity project root. Returns null (and logs a helpful error) if it's missing
+        /// or not filled in, so the API key never has to be hardcoded.
+        /// </summary>
+        private static TileSourceConfig LoadTileSourceConfig()
+        {
+            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+            string path = Path.Combine(projectRoot, TileSourceConfigFileName);
+
+            if (!File.Exists(path))
+            {
+                Debug.LogError(
+                    $"[RTG] Missing {TileSourceConfigFileName} at project root. " +
+                    $"Copy {TileSourceConfigFileName}.example to {TileSourceConfigFileName} " +
+                    "and fill in your MapTiler mapId + key.");
+                return null;
+            }
+
+            TileSourceConfig config;
+            try
+            {
+                config = JsonUtility.FromJson<TileSourceConfig>(File.ReadAllText(path));
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"[RTG] Failed to parse {TileSourceConfigFileName}: {e.Message}");
+                return null;
+            }
+
+            if (config == null || string.IsNullOrWhiteSpace(config.mapId)
+                || string.IsNullOrWhiteSpace(config.key))
+            {
+                Debug.LogError(
+                    $"[RTG] {TileSourceConfigFileName} is missing 'mapId' or 'key'. " +
+                    "Fill both in from your MapTiler Cloud account.");
+                return null;
+            }
+
+            return config;
         }
 
         private static void ApplyAtmosphereInternal()

@@ -57,3 +57,7 @@ apps/unity-poc/[Aa]ssets/[Ss]treamingAssets/aa/*
 # Cesium regenerates these server assets when you connect to ion.
 apps/unity-poc/Assets/CesiumSettings/Resources/CesiumIonServers/*.asset
 apps/unity-poc/Assets/CesiumSettings/Resources/CesiumIonServers/*.asset.meta
+
+# MapTiler credentials (map id + API key) for the custom stylized overlay.
+# Local-only; commit tilesource.local.json.example instead.
+apps/unity-poc/tilesource.local.json
