@@ -30,6 +30,12 @@ namespace RoutesToGlory.EditorTools
         private const string AlienMaterialPath = "Assets/Materials/RTG_AlienTerrain.mat";
         private const string AlienSkyboxPath = "Assets/Materials/RTG_AlienSky.mat";
 
+        // Prototype stylized tiles: CARTO "dark, no labels" — free, keyless, dark
+        // basemap with no text. Cesium's {y} is TMS (south-origin), so standard
+        // XYZ (north-origin) providers need {reverseY}.
+        private const string PrototypeOverlayUrl =
+            "https://basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{reverseY}.png";
+
         // ------------------------------------------------------------------ //
         // Build everything
         // ------------------------------------------------------------------ //
@@ -87,6 +93,32 @@ namespace RoutesToGlory.EditorTools
             Debug.Log("[RTG] Fly camera set up. Enter Play mode to move (WASD + mouse). Save with Cmd+S.");
         }
 
+        [MenuItem("Routes to Glory/5. Apply Stylized Overlay (prototype)", priority = 24)]
+        public static void ApplyStylizedOverlay()
+        {
+            CesiumGeoreference georeference = RequireGeoreference();
+            if (georeference == null) return;
+            ApplyStylizedOverlayInternal(georeference);
+            MarkDirty(georeference);
+            Debug.Log(
+                "[RTG] Stylized raster overlay applied (CARTO dark, no labels). " +
+                "Terrain material override cleared so the overlay renders. Save with Cmd+S.");
+        }
+
+        [MenuItem("Routes to Glory/Remove Stylized Overlay", priority = 25)]
+        public static void RemoveStylizedOverlay()
+        {
+            CesiumGeoreference georeference = FindByName<CesiumGeoreference>(GeoreferenceName);
+            if (georeference == null) { Debug.Log("[RTG] No RTG map found."); return; }
+
+            Cesium3DTileset terrain = GetOrCreateTerrain(georeference);
+            var overlay = terrain.GetComponent<CesiumUrlTemplateRasterOverlay>();
+            if (overlay != null) Undo.DestroyObjectImmediate(overlay);
+            terrain.RecreateTileset();
+            MarkDirty(georeference);
+            Debug.Log("[RTG] Removed stylized overlay. Run 'Apply Alien Material' to restore the tint.");
+        }
+
         [MenuItem("Routes to Glory/Clear Map", priority = 40)]
         public static void ClearMap()
         {
@@ -127,6 +159,27 @@ namespace RoutesToGlory.EditorTools
             Material alien = GetOrCreateAlienMaterial();
             Cesium3DTileset terrain = GetOrCreateTerrain(georeference);
             terrain.opaqueMaterial = alien;
+            terrain.RecreateTileset();
+        }
+
+        private static void ApplyStylizedOverlayInternal(CesiumGeoreference georeference)
+        {
+            Cesium3DTileset terrain = GetOrCreateTerrain(georeference);
+
+            // The flat alien material overrides Cesium's shader and would hide the
+            // overlay texture, so clear it and let Cesium's default material (which
+            // samples raster overlays) render the stylized tiles.
+            terrain.opaqueMaterial = null;
+
+            CesiumUrlTemplateRasterOverlay overlay =
+                terrain.GetComponent<CesiumUrlTemplateRasterOverlay>();
+            if (overlay == null)
+                overlay = terrain.gameObject.AddComponent<CesiumUrlTemplateRasterOverlay>();
+
+            overlay.projection = CesiumUrlTemplateRasterOverlayProjection.WebMercator;
+            overlay.maximumLevel = 18;
+            overlay.templateUrl = PrototypeOverlayUrl;
+
             terrain.RecreateTileset();
         }
 
