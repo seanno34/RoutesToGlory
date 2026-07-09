@@ -60,6 +60,22 @@ namespace RoutesToGlory.Game
         [Tooltip("Meters the player marker's center sits above the ground.")]
         public float markerHeight = 15f;
 
+        [Header("Light Road")]
+        [Tooltip("Draw a glowing Light Road trail behind the player as it moves.")]
+        public bool drawLightRoad = true;
+
+        [Tooltip("Road width in meters.")]
+        public float roadWidth = 8f;
+
+        [Tooltip("Meters above the ground the road ribbon sits.")]
+        public float roadHeightMeters = 3f;
+
+        [Tooltip("Record a road point after the player moves this many meters.")]
+        public float roadPointSpacing = 12f;
+
+        [Tooltip("Light Road color (bright energy ribbon).")]
+        public Color roadColor = new Color(0.45f, 0.95f, 1.00f);
+
         [Header("Camera follow")]
         [Tooltip("If enabled, the camera stays overhead and auto-tracks the player (Google-Maps style). Untick for free-fly.")]
         public bool followWithCamera = true;
@@ -104,6 +120,8 @@ namespace RoutesToGlory.Game
         private Transform _marker;
         private CesiumGlobeAnchor _markerAnchor;
         private Material _markerMaterial;
+        private RtgLightRoad _lightRoad;
+        private bool _roadStarted;
 
         private Camera _camera;
         private CesiumCameraController _cameraController;
@@ -113,6 +131,7 @@ namespace RoutesToGlory.Game
         private void Start()
         {
             EnsureMarker();
+            EnsureLightRoad();
             CacheCamera();
 
             // The tour route depends on the Echo Sites, which may still be loading
@@ -143,6 +162,14 @@ namespace RoutesToGlory.Game
             {
                 _markerAnchor.SetPositionLongitudeLatitudeHeight(
                     lng, lat, groundHeightMeters + markerHeight);
+
+                // First real fix — begin tracing the Light Road (avoids a stray
+                // segment from wherever the marker sat before we had a position).
+                if (_lightRoad != null && !_roadStarted)
+                {
+                    _lightRoad.StartRecording();
+                    _roadStarted = true;
+                }
             }
         }
 
@@ -333,6 +360,31 @@ namespace RoutesToGlory.Game
 
             if (root.transform.Find("Beacon") == null)
                 BuildMarkerVisual(root.transform);
+        }
+
+        // The Light Road is a runtime-only visual, so we only build it in Play mode.
+        // The GameObject is created inactive, configured, then activated so the
+        // RtgLightRoad reads our tuned values in its Awake instead of the defaults.
+        private void EnsureLightRoad()
+        {
+            if (!drawLightRoad || !Application.isPlaying || _marker == null) return;
+            if (_lightRoad != null) return;
+
+            var go = new GameObject("Light Road");
+            go.SetActive(false);
+            go.transform.SetParent(transform, false);
+
+            RtgLightRoad road = go.AddComponent<RtgLightRoad>();
+            road.target = _marker;
+            road.widthMeters = roadWidth;
+            road.pointSpacingMeters = roadPointSpacing;
+            road.roadColor = roadColor;
+            // The marker floats markerHeight above ground; drop the road so it sits
+            // roadHeightMeters above the terrain instead of level with the pin.
+            road.verticalOffset = roadHeightMeters - markerHeight;
+
+            go.SetActive(true);
+            _lightRoad = road;
         }
 
         private void BuildMarkerVisual(Transform root)
