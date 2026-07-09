@@ -1,0 +1,7 @@
+{
+  "_comment": "Copy to rtg-dev-world.json and fill in a world seeded in your local MySQL. Create one with: curl -X POST http://localhost:3001/api/worlds -H 'Content-Type: application/json' -d '{\"name\":\"Douglas Survey\",\"spawnLat\":42.7597,\"spawnLng\":-105.3822}'. Then 'Routes to Glory > 6b. Connect Echo Sites to Live API' reads this file.",
+  "apiBaseUrl": "http://localhost:3001/api",
+  "worldId": "00000000-0000-0000-0000-000000000000",
+  "accessCode": "XXXXXX",
+  "slug": "your-world-slug"
+}

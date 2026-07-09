@@ -55,6 +55,13 @@ namespace RoutesToGlory.Game
 
         private const string MarkerContainerName = "Markers";
 
+        /// <summary>
+        /// The most recently loaded/parsed world map, or null before the first load.
+        /// Exposed so other systems (e.g. the player's "tour nearby sites" route) can
+        /// reuse the same data without re-fetching.
+        /// </summary>
+        public RtgWorldMap LastMap { get; private set; }
+
         // Cache runtime-created emissive materials by color so we don't leak one per marker.
         private readonly Dictionary<Color, Material> _materialCache = new();
 
@@ -125,6 +132,7 @@ namespace RoutesToGlory.Game
         {
             if (map == null) return;
 
+            LastMap = map;
             Transform container = ResetContainer();
             int settlements = 0, resources = 0;
 

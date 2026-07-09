@@ -186,6 +186,42 @@ namespace RoutesToGlory.EditorTools
                 "RTG Echo Sites object's Data Source to LiveApi + fill in the World id.");
         }
 
+        [MenuItem("Routes to Glory/6b. Connect Echo Sites to Live API", priority = 27)]
+        public static void ConnectEchoSitesToLiveApi()
+        {
+            CesiumGeoreference georeference = RequireGeoreference();
+            if (georeference == null) return;
+
+            if (!TryReadDevWorld(out RtgDevWorld dev))
+            {
+                Debug.LogError(
+                    "[RTG] Could not read rtg-dev-world.json at the project root " +
+                    "(apps/unity-poc/rtg-dev-world.json). Copy rtg-dev-world.json.example, " +
+                    "seed a world in local MySQL, and paste its worldId.");
+                return;
+            }
+
+            RtgEchoSiteLoader loader = GetOrCreateEchoSiteLoader(georeference);
+            loader.dataSource = RtgEchoSiteLoader.DataSource.LiveApi;
+            loader.apiBaseUrl = string.IsNullOrWhiteSpace(dev.apiBaseUrl)
+                ? "http://localhost:3001/api"
+                : dev.apiBaseUrl;
+            loader.worldId = dev.worldId;
+            loader.loadOnPlay = true;
+
+            // Clear any sample markers so we don't stack two data sets on top of
+            // each other; the live set spawns fresh when you press Play.
+            loader.ClearMarkers();
+
+            Selection.activeGameObject = loader.gameObject;
+            MarkDirty(georeference);
+            Debug.Log(
+                $"[RTG] Echo Sites bound to LIVE API {loader.apiBaseUrl} (world {dev.worldId}" +
+                (string.IsNullOrEmpty(dev.accessCode) ? "" : $", code {dev.accessCode}") +
+                "). The live fetch runs in Play mode — press Play to spawn beacons from MySQL. " +
+                "Make sure the API is running (pnpm --filter @empire/api dev). Save with Cmd+S.");
+        }
+
         [MenuItem("Routes to Glory/Clear Echo Sites", priority = 41)]
         public static void ClearEchoSites()
         {
@@ -471,6 +507,37 @@ namespace RoutesToGlory.EditorTools
             RtgEchoSiteLoader loader = go.GetComponent<RtgEchoSiteLoader>();
             if (loader == null) loader = go.AddComponent<RtgEchoSiteLoader>();
             return loader;
+        }
+
+        // Local, gitignored pointer to a world seeded in the developer's own MySQL.
+        // Lives at the Unity project root (apps/unity-poc/rtg-dev-world.json), one
+        // level above Assets/.
+        [System.Serializable]
+        private struct RtgDevWorld
+        {
+            public string apiBaseUrl;
+            public string worldId;
+            public string accessCode;
+            public string slug;
+        }
+
+        private static bool TryReadDevWorld(out RtgDevWorld dev)
+        {
+            dev = default;
+            string path = Path.GetFullPath(Path.Combine(Application.dataPath, "..", "rtg-dev-world.json"));
+            if (!File.Exists(path)) return false;
+
+            try
+            {
+                dev = JsonUtility.FromJson<RtgDevWorld>(File.ReadAllText(path));
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"[RTG] Failed to parse rtg-dev-world.json: {e.Message}");
+                return false;
+            }
+
+            return !string.IsNullOrWhiteSpace(dev.worldId);
         }
 
         private static RtgPlayerLocation GetOrCreatePlayer(CesiumGeoreference georeference)

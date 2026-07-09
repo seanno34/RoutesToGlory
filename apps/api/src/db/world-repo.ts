@@ -218,14 +218,14 @@ export async function getWorldBootstrapByAccessCode(
 }
 
 export async function getWorldMap(worldId: string) {
-  const settlements = await query(
+  const settlements = await query<Record<string, unknown>>(
     `SELECT id, slug, name, planet_display_name, terrestrial_label, tier, alignment,
             is_goodie_hut, owner_empire_id, geofence_radius_m, lat, lng
      FROM settlements WHERE world_id = ?`,
     [worldId],
   );
 
-  const routes = await query(
+  const routes = await query<Record<string, unknown>>(
     `SELECT r.id, r.empire_id, r.from_settlement_id, r.to_settlement_id,
             r.distance_m, r.status, r.path_json, e.color AS empire_color
      FROM routes r
@@ -234,13 +234,35 @@ export async function getWorldMap(worldId: string) {
     [worldId],
   );
 
-  const resources = await query(
+  const resources = await query<Record<string, unknown>>(
     `SELECT id, tile_id, resource_id, richness, yield_per_day, lat, lng
      FROM map_resource_nodes WHERE world_id = ?`,
     [worldId],
   );
 
-  return { settlements: settlements.rows, routes: routes.rows, resources: resources.rows };
+  // MySQL returns DECIMAL columns (lat/lng, distance_m) as strings to preserve
+  // precision. Coerce to numbers so the JSON contract is numeric for every
+  // client (Unity's JsonUtility can't parse a string into a double, and the web
+  // map wants numbers too).
+  return {
+    settlements: settlements.rows.map((r) => coerceCoords(r)),
+    routes: routes.rows.map((r) => coerceCoords(r, ['distance_m'])),
+    resources: resources.rows.map((r) => coerceCoords(r)),
+  };
+}
+
+/** Convert lat/lng (+ any extra decimal columns) from DECIMAL strings to numbers. */
+function coerceCoords<T extends Record<string, unknown>>(
+  row: T,
+  extraKeys: string[] = [],
+): T {
+  const out: Record<string, unknown> = { ...row };
+  for (const key of ['lat', 'lng', ...extraKeys]) {
+    if (typeof out[key] === 'string') {
+      out[key] = Number(out[key]);
+    }
+  }
+  return out as T;
 }
 
 export async function getEmpireContext(worldId: string, empireId: string) {

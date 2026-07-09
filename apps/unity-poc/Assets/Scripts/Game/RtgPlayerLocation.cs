@@ -1,3 +1,5 @@
+using System.Collections;
+using System.Collections.Generic;
 using CesiumForUnity;
 using UnityEngine;
 #if ENABLE_INPUT_SYSTEM
@@ -16,14 +18,40 @@ namespace RoutesToGlory.Game
     {
         public enum LocationSource { SimulatedRoute, DeviceGps }
 
+        // FixedLoop = walk the small hand-authored rectangle (or the `route` field).
+        // TourNearbySites = auto-build a loop that threads past every Echo Site /
+        // resource node near the play area so you can sight-see the whole map.
+        public enum RouteMode { FixedLoop, TourNearbySites }
+
         [Header("Source")]
         public LocationSource source = LocationSource.SimulatedRoute;
 
-        [Tooltip("Walking speed for the simulated route (m/s). ~1.4 = real walk; higher is easier to watch.")]
+        [Tooltip("FixedLoop = small rectangle. TourNearbySites = auto loop past every nearby Echo Site + resource node.")]
+        public RouteMode routeMode = RouteMode.TourNearbySites;
+
+        [Tooltip("Walking speed for the fixed loop (m/s). ~1.4 = real walk; higher is easier to watch.")]
         public float simulatedSpeed = 15f;
 
-        [Tooltip("Looping real-world route the simulated GPS walks. Defaults to a loop around Douglas, WY if empty.")]
+        [Tooltip("Travel speed for the 'tour nearby sites' loop (m/s). Higher = quicker sight-seeing across the whole area.")]
+        public float tourSpeed = 90f;
+
+        [Tooltip("Looping real-world route for FixedLoop mode. Defaults to a loop around Douglas, WY if empty.")]
         public RtgWaypoint[] route;
+
+        [Header("Tour nearby sites")]
+        [Tooltip("Only tour sites within this many meters of the tour center (keeps far-off metro Echo Sites out).")]
+        public float tourRadiusMeters = 15000f;
+
+        [Tooltip("Center the tour filters around (defaults to the Douglas, WY origin).")]
+        public double tourCenterLatitude = 42.7597;
+
+        public double tourCenterLongitude = -105.3819;
+
+        [Tooltip("Safety cap on how many stops the tour visits.")]
+        public int maxTourStops = 80;
+
+        [Tooltip("Seconds to wait for Echo Sites to load before falling back to the fixed loop.")]
+        public float tourLoadTimeoutSeconds = 12f;
 
         [Header("Placement")]
         [Tooltip("Approx. ground height (m above ellipsoid) near Douglas, WY.")]
@@ -85,9 +113,20 @@ namespace RoutesToGlory.Game
         private void Start()
         {
             EnsureMarker();
-            _provider = CreateProvider();
-            _provider.Begin();
             CacheCamera();
+
+            // The tour route depends on the Echo Sites, which may still be loading
+            // (async in Play mode for live data), so build it in a coroutine that
+            // waits for them. Everything else starts a provider immediately.
+            if (source == LocationSource.SimulatedRoute && routeMode == RouteMode.TourNearbySites)
+            {
+                StartCoroutine(BeginTourWhenSitesReady());
+            }
+            else
+            {
+                _provider = CreateProvider();
+                _provider.Begin();
+            }
         }
 
         private void OnDisable()
@@ -120,6 +159,16 @@ namespace RoutesToGlory.Game
         public void EditorPlaceAtStart()
         {
             EnsureMarker();
+
+            // Tour mode's full route is built at Play time from the loaded sites, so in
+            // the editor just drop the pin at the tour center for a sensible preview.
+            if (routeMode == RouteMode.TourNearbySites)
+            {
+                _markerAnchor.SetPositionLongitudeLatitudeHeight(
+                    tourCenterLongitude, tourCenterLatitude, groundHeightMeters + markerHeight);
+                return;
+            }
+
             RtgWaypoint[] r = ResolveRoute();
             if (r.Length > 0)
             {
@@ -156,6 +205,106 @@ namespace RoutesToGlory.Game
                 new RtgWaypoint { lat = 42.7590, lng = -105.3800 },
                 new RtgWaypoint { lat = 42.7590, lng = -105.3819 },
             };
+        }
+
+        // ------------------------------------------------------------------ //
+        // Tour of nearby sites
+        // ------------------------------------------------------------------ //
+
+        private IEnumerator BeginTourWhenSitesReady()
+        {
+            RtgEchoSiteLoader loader =
+#if UNITY_2023_1_OR_NEWER
+                Object.FindFirstObjectByType<RtgEchoSiteLoader>();
+#else
+                Object.FindObjectOfType<RtgEchoSiteLoader>();
+#endif
+
+            // Wait for the Echo Sites to finish loading (live data is fetched async).
+            float waited = 0f;
+            while ((loader == null || loader.LastMap == null) && waited < tourLoadTimeoutSeconds)
+            {
+                waited += Time.deltaTime;
+                yield return null;
+            }
+
+            RtgWaypoint[] tour = loader != null && loader.LastMap != null
+                ? BuildTourRoute(loader.LastMap)
+                : null;
+
+            if (tour == null || tour.Length < 2)
+            {
+                Debug.LogWarning(
+                    "[RTG] Tour route unavailable (no nearby sites loaded) — falling back to the fixed loop. " +
+                    "Load Echo Sites first, or widen Tour Radius.");
+                tour = ResolveRoute();
+            }
+            else
+            {
+                Debug.Log($"[RTG] Touring {tour.Length - 1} nearby site(s) around the play area.");
+            }
+
+            _provider = new RtgSimulatedLocationProvider(tour, tourSpeed);
+            _provider.Begin();
+        }
+
+        // Collect every settlement + resource within tourRadius of the center, order
+        // them nearest-neighbour starting from the center for a smooth non-crossing
+        // path, and prepend the center so the loop opens and closes there.
+        private RtgWaypoint[] BuildTourRoute(RtgWorldMap map)
+        {
+            var candidates = new List<RtgWaypoint>();
+
+            void Consider(double lat, double lng)
+            {
+                if (DistanceMeters(tourCenterLatitude, tourCenterLongitude, lat, lng) <= tourRadiusMeters)
+                    candidates.Add(new RtgWaypoint { lat = lat, lng = lng });
+            }
+
+            if (map.settlements != null)
+                foreach (RtgSettlement s in map.settlements) Consider(s.lat, s.lng);
+            if (map.resources != null)
+                foreach (RtgResourceNode r in map.resources) Consider(r.lat, r.lng);
+
+            if (candidates.Count == 0) return null;
+
+            // Nearest-neighbour ordering from the center outward.
+            var ordered = new List<RtgWaypoint>(candidates.Count);
+            double curLat = tourCenterLatitude, curLng = tourCenterLongitude;
+            while (candidates.Count > 0 && ordered.Count < maxTourStops)
+            {
+                int best = 0;
+                double bestDist = double.MaxValue;
+                for (int i = 0; i < candidates.Count; i++)
+                {
+                    double d = DistanceMeters(curLat, curLng, candidates[i].lat, candidates[i].lng);
+                    if (d < bestDist) { bestDist = d; best = i; }
+                }
+                RtgWaypoint next = candidates[best];
+                candidates.RemoveAt(best);
+                ordered.Add(next);
+                curLat = next.lat;
+                curLng = next.lng;
+            }
+
+            // Start (and, via the provider's looping, end) at the tour center.
+            var route = new List<RtgWaypoint>(ordered.Count + 1)
+            {
+                new RtgWaypoint { lat = tourCenterLatitude, lng = tourCenterLongitude },
+            };
+            route.AddRange(ordered);
+            return route.ToArray();
+        }
+
+        private const double MetersPerDegreeLat = 111320.0;
+
+        private static double DistanceMeters(double lat1, double lng1, double lat2, double lng2)
+        {
+            double avgLatRad = (lat1 + lat2) * 0.5 * Mathf.Deg2Rad;
+            double metersPerDegLng = MetersPerDegreeLat * System.Math.Cos(avgLatRad);
+            double dLat = (lat2 - lat1) * MetersPerDegreeLat;
+            double dLng = (lng2 - lng1) * metersPerDegLng;
+            return System.Math.Sqrt(dLat * dLat + dLng * dLng);
         }
 
         // ------------------------------------------------------------------ //
