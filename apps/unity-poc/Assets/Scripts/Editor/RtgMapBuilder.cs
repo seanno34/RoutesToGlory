@@ -37,6 +37,7 @@ namespace RoutesToGlory.EditorTools
         private const string TerrainName = "RTG Terrain";
         private const string CameraName = "RTG Fly Camera";
         private const string EchoSitesName = "RTG Echo Sites";
+        private const string PlayerName = "RTG Player";
         private const string AlienMaterialPath = "Assets/Materials/RTG_AlienTerrain.mat";
         private const string AlienSkyboxPath = "Assets/Materials/RTG_AlienSky.mat";
 
@@ -193,6 +194,33 @@ namespace RoutesToGlory.EditorTools
             loader.ClearMarkers();
             MarkDirty(loader.GetComponentInParent<CesiumGeoreference>());
             Debug.Log("[RTG] Cleared Echo Site markers. Save with Cmd+S.");
+        }
+
+        [MenuItem("Routes to Glory/7. Setup Player (GPS)", priority = 28)]
+        public static void SetupPlayer()
+        {
+            CesiumGeoreference georeference = RequireGeoreference();
+            if (georeference == null) return;
+
+            RtgPlayerLocation player = GetOrCreatePlayer(georeference);
+            player.EditorPlaceAtStart();
+            Selection.activeGameObject = player.gameObject;
+            MarkDirty(georeference);
+            Debug.Log(
+                "[RTG] Player (GPS) set up at the route start. Enter Play mode to watch it " +
+                "walk the simulated route. Switch Source to DeviceGps for real on-device GPS, " +
+                "or tick 'Follow With Camera' to chase it. Save with Cmd+S.");
+        }
+
+        [MenuItem("Routes to Glory/Remove Player", priority = 42)]
+        public static void RemovePlayer()
+        {
+            RtgPlayerLocation player = FindByName<RtgPlayerLocation>(PlayerName);
+            if (player == null) { Debug.Log("[RTG] No player to remove."); return; }
+            CesiumGeoreference georeference = player.GetComponentInParent<CesiumGeoreference>();
+            Undo.DestroyObjectImmediate(player.gameObject);
+            MarkDirty(georeference);
+            Debug.Log("[RTG] Removed player. Save with Cmd+S.");
         }
 
         [MenuItem("Routes to Glory/Clear Map", priority = 40)]
@@ -443,6 +471,22 @@ namespace RoutesToGlory.EditorTools
             RtgEchoSiteLoader loader = go.GetComponent<RtgEchoSiteLoader>();
             if (loader == null) loader = go.AddComponent<RtgEchoSiteLoader>();
             return loader;
+        }
+
+        private static RtgPlayerLocation GetOrCreatePlayer(CesiumGeoreference georeference)
+        {
+            Transform existing = georeference.transform.Find(PlayerName);
+            GameObject go = existing != null ? existing.gameObject : null;
+            if (go == null)
+            {
+                go = new GameObject(PlayerName);
+                Undo.RegisterCreatedObjectUndo(go, "Create RTG Player");
+                go.transform.SetParent(georeference.transform, false);
+            }
+
+            RtgPlayerLocation player = go.GetComponent<RtgPlayerLocation>();
+            if (player == null) player = go.AddComponent<RtgPlayerLocation>();
+            return player;
         }
 
         private static Material GetOrCreateAlienMaterial()
