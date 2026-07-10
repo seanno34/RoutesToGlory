@@ -32,5 +32,7 @@ namespace RoutesToGlory.Game
         }
 
         public string KindApiValue => kind == Kind.Settlement ? "settlement" : "resource";
+
+        public bool IsGoodieHut => kind == Kind.Settlement && subLabel == "goodie_hut";
     }
 }

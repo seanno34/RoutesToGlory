@@ -10,6 +10,9 @@ const ClaimNearRouteSchema = z.object({
   routePath: z.array(z.object({ lat: z.number(), lng: z.number() })).min(1),
   playerLat: z.number().optional(),
   playerLng: z.number().optional(),
+  /** POC scatter pin — corridor check uses these for goodie huts when near the DB site. */
+  approachLat: z.number().optional(),
+  approachLng: z.number().optional(),
   targetKind: z.enum(['settlement', 'resource']),
   targetId: z.string().uuid(),
   goodieChoice: GoodieHutChoiceSchema.optional(),
@@ -31,6 +34,8 @@ export const claimRoutes: FastifyPluginAsync = async (app) => {
       routePath: body.routePath,
       playerLat: body.playerLat,
       playerLng: body.playerLng,
+      approachLat: body.approachLat,
+      approachLng: body.approachLng,
       targetKind: body.targetKind,
       targetId: body.targetId,
       goodieChoice: body.goodieChoice,

@@ -165,9 +165,18 @@ namespace RoutesToGlory.Game
         /// POST /worlds/:worldId/claim. The server anchors the connector there,
         /// not at the player's live GPS position.
         /// </summary>
-        public IEnumerator ClaimNearRoute(RtgMapMarker marker, Action<ClaimResult> done)
+        /// <param name="goodieChoice">found_town or claim_reward when connecting a goodie hut.</param>
+        /// <param name="pathOverride">Route path captured when the goodie modal opened (avoids stale/empty path).</param>
+        public IEnumerator ClaimNearRoute(
+            RtgMapMarker marker,
+            string goodieChoice,
+            Action<ClaimResult> done,
+            List<RtgRouteGeometry.LatLng> pathOverride = null)
         {
-            if (!TryGetRoutePath(out List<RtgRouteGeometry.LatLng> path) || path.Count < 1)
+            List<RtgRouteGeometry.LatLng> path;
+            if (pathOverride != null && pathOverride.Count > 0)
+                path = pathOverride;
+            else if (!TryGetRoutePath(out path) || path.Count < 1)
             {
                 done?.Invoke(ClaimResult.Fail("No active route path."));
                 yield break;
@@ -184,9 +193,15 @@ namespace RoutesToGlory.Game
             }
             sb.Append("],\"targetKind\":\"").Append(marker.KindApiValue).Append("\",");
             sb.Append("\"targetId\":\"").Append(marker.targetId).Append("\"");
-            if (marker.kind == RtgMapMarker.Kind.Settlement && marker.subLabel == "goodie_hut")
-                sb.Append(",\"goodieChoice\":\"found_town\"");
+            if (!string.IsNullOrEmpty(goodieChoice))
+            {
+                sb.Append(",\"goodieChoice\":\"").Append(goodieChoice).Append("\"");
+                sb.Append(",\"approachLat\":").Append(D(marker.lat));
+                sb.Append(",\"approachLng\":").Append(D(marker.lng));
+            }
             sb.Append('}');
+
+            bool reloadMap = !string.IsNullOrEmpty(goodieChoice);
 
             string worldPath = $"/worlds/{worldId}/claim";
             yield return Post(worldPath, sb.ToString(), (code, text, ok) =>
@@ -198,7 +213,7 @@ namespace RoutesToGlory.Game
                         ? resp.message
                         : $"Connected to {marker.displayName}.";
 
-                    ClaimResult result = ClaimResult.Ok(msg);
+                    ClaimResult result = ClaimResult.Ok(msg, reloadMap, marker.targetId);
                     if (resp?.connectorPath != null && resp.connectorPath.Length >= 2)
                     {
                         result.hasConnector = true;
@@ -212,8 +227,9 @@ namespace RoutesToGlory.Game
                 else
                 {
                     string err = TryParseError(text) ?? $"Claim failed ({code})";
+                    Debug.LogWarning($"[RTG] Claim failed ({code}): {text}");
                     if (code == 409)
-                        done?.Invoke(ClaimResult.AlreadyConnected());
+                        done?.Invoke(ClaimResult.AlreadyConnected(marker.targetId));
                     else
                         done?.Invoke(ClaimResult.Fail(err));
                 }
@@ -227,15 +243,17 @@ namespace RoutesToGlory.Game
             public bool alreadyConnected;
             public bool hasConnector;
             public double anchorLat, anchorLng, targetLat, targetLng;
+            public bool reloadMap;
+            public string connectedTargetId;
 
-            public static ClaimResult Ok(string message) =>
-                new ClaimResult { ok = true, message = message };
+            public static ClaimResult Ok(string message, bool reloadMap = false, string connectedTargetId = null) =>
+                new ClaimResult { ok = true, message = message, reloadMap = reloadMap, connectedTargetId = connectedTargetId };
 
             public static ClaimResult Fail(string message) =>
                 new ClaimResult { ok = false, message = message };
 
-            public static ClaimResult AlreadyConnected() =>
-                new ClaimResult { ok = false, alreadyConnected = true };
+            public static ClaimResult AlreadyConnected(string targetId = null) =>
+                new ClaimResult { ok = false, alreadyConnected = true, connectedTargetId = targetId };
         }
 
         private static string TryParseError(string json)

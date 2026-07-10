@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Networking;
 #if ENABLE_INPUT_SYSTEM
@@ -9,9 +10,8 @@ namespace RoutesToGlory.Game
 {
     /// <summary>
     /// Tap a map marker to connect it to the active Light Road when the item is
-    /// within range of the route corridor (not the player's GPS pin). Uses the
-    /// existing POST /api/worlds/:worldId/claim endpoint; the server anchors the
-    /// connector at the nearest point on the submitted route path.
+    /// within range of the route corridor (not the player's GPS pin). Goodie huts
+    /// open a choice modal (found town vs claim reward) before calling the claim API.
     /// </summary>
     public class RtgTapToConnect : MonoBehaviour
     {
@@ -22,8 +22,11 @@ namespace RoutesToGlory.Game
         public float tapSlopPixels = 18f;
 
         private RtgRouteSession _session;
+        private RtgEchoSiteLoader _echoLoader;
         private Camera _camera;
         private Vector2? _pressStart;
+        private RtgMapMarker _pendingGoodie;
+        private List<RtgRouteGeometry.LatLng> _pendingGoodiePath;
         private string _toast;
         private float _toastUntil;
 
@@ -31,8 +34,10 @@ namespace RoutesToGlory.Game
         {
 #if UNITY_2023_1_OR_NEWER
             _session = Object.FindFirstObjectByType<RtgRouteSession>();
+            _echoLoader = Object.FindFirstObjectByType<RtgEchoSiteLoader>();
 #else
             _session = Object.FindObjectOfType<RtgRouteSession>();
+            _echoLoader = Object.FindObjectOfType<RtgEchoSiteLoader>();
 #endif
             _camera = Camera.main;
             StartCoroutine(LoadConnectRadius());
@@ -40,6 +45,8 @@ namespace RoutesToGlory.Game
 
         private void Update()
         {
+            if (_pendingGoodie != null) return;
+
             if (ReadPressDown(out Vector2 down))
                 _pressStart = down;
 
@@ -90,16 +97,64 @@ namespace RoutesToGlory.Game
                 return;
             }
 
-            StartCoroutine(_session.ClaimNearRoute(marker, OnClaimDone));
+            if (marker.IsGoodieHut)
+            {
+                _pendingGoodie = marker;
+                _pendingGoodiePath = new List<RtgRouteGeometry.LatLng>(path);
+                return;
+            }
+
+            StartCoroutine(_session.ClaimNearRoute(marker, null, OnClaimDone));
+        }
+
+        private void SubmitGoodieChoice(string choice)
+        {
+            RtgMapMarker marker = _pendingGoodie;
+            List<RtgRouteGeometry.LatLng> path = _pendingGoodiePath;
+            _pendingGoodie = null;
+            _pendingGoodiePath = null;
+            if (marker == null || _session == null) return;
+            StartCoroutine(_session.ClaimNearRoute(marker, choice, OnClaimDone, path));
         }
 
         private void OnClaimDone(RtgRouteSession.ClaimResult result)
         {
-            if (result.alreadyConnected) return;
+            if (result.alreadyConnected)
+            {
+                RefreshAfterClaim(result.connectedTargetId);
+                return;
+            }
 
             ShowToast(result.message);
 
-            if (result.ok)
+            if (!result.ok) return;
+
+            MarkConnected(result.connectedTargetId);
+            RefreshAfterClaim(result.connectedTargetId);
+        }
+
+        private static void MarkConnected(string targetId)
+        {
+            if (string.IsNullOrEmpty(targetId)) return;
+#if UNITY_2023_1_OR_NEWER
+            foreach (RtgMapMarker marker in Object.FindObjectsByType<RtgMapMarker>(FindObjectsSortMode.None))
+#else
+            foreach (RtgMapMarker marker in Object.FindObjectsOfType<RtgMapMarker>())
+#endif
+            {
+                if (marker != null && marker.targetId == targetId)
+                    marker.SetConnected(true);
+            }
+        }
+
+        private void RefreshAfterClaim(string targetId)
+        {
+            MarkConnected(targetId);
+            if (_session == null) return;
+
+            if (_echoLoader != null)
+                StartCoroutine(_echoLoader.ReloadFromApi());
+            else
                 RefreshPersistedRoutes();
         }
 
@@ -118,6 +173,60 @@ namespace RoutesToGlory.Game
         }
 
         private void OnGUI()
+        {
+            DrawGoodieChoiceModal();
+            DrawToast();
+        }
+
+        private void DrawGoodieChoiceModal()
+        {
+            if (_pendingGoodie == null) return;
+
+            GUI.color = new Color(0f, 0f, 0f, 0.55f);
+            GUI.DrawTexture(new Rect(0f, 0f, Screen.width, Screen.height), Texture2D.whiteTexture);
+            GUI.color = Color.white;
+
+            const float panelW = 380f;
+            const float panelH = 250f;
+            float x = (Screen.width - panelW) * 0.5f;
+            float y = (Screen.height - panelH) * 0.5f;
+            var panel = new Rect(x, y, panelW, panelH);
+
+            var prevBtn = GUI.skin.button.fontSize;
+            var prevLabel = GUI.skin.label.fontSize;
+            var prevBox = GUI.skin.box.fontSize;
+            GUI.skin.button.fontSize = 17;
+            GUI.skin.label.fontSize = 17;
+            GUI.skin.box.fontSize = 17;
+
+            GUI.Box(panel, GUIContent.none);
+
+            GUILayout.BeginArea(new Rect(x + 16f, y + 12f, panelW - 32f, panelH - 24f));
+            GUILayout.Label(_pendingGoodie.displayName);
+            GUILayout.Label("Goodie Hut — choose your reward");
+            GUILayout.Space(10f);
+
+            if (GUILayout.Button("Found Town\nInstant town + population; settlement modifiers queued.", GUILayout.Height(52f)))
+                SubmitGoodieChoice("found_town");
+
+            if (GUILayout.Button("Claim Reward\nOne-time gold, tech, or alien unit.", GUILayout.Height(52f)))
+                SubmitGoodieChoice("claim_reward");
+
+            GUILayout.Space(4f);
+            if (GUILayout.Button("Cancel", GUILayout.Height(34f)))
+            {
+                _pendingGoodie = null;
+                _pendingGoodiePath = null;
+            }
+
+            GUILayout.EndArea();
+
+            GUI.skin.button.fontSize = prevBtn;
+            GUI.skin.label.fontSize = prevLabel;
+            GUI.skin.box.fontSize = prevBox;
+        }
+
+        private void DrawToast()
         {
             if (string.IsNullOrEmpty(_toast) || Time.time > _toastUntil) return;
 

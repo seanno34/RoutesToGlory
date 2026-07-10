@@ -1,4 +1,6 @@
 using System.IO;
+using System.Net.Http;
+using System.Text;
 using UnityEngine;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -247,6 +249,68 @@ namespace RoutesToGlory.EditorTools
                 "[RTG] Player (GPS) set up at the route start. Enter Play mode to watch it " +
                 "walk the simulated route. Switch Source to DeviceGps for real on-device GPS, " +
                 "or tick 'Follow With Camera' to chase it. Save with Cmd+S.");
+        }
+
+        [MenuItem("Routes to Glory/8. Reset Dev World (routes + claims)", priority = 29)]
+        public static void ResetDevWorldProgress()
+        {
+            if (!TryReadDevWorld(out RtgDevWorld dev))
+            {
+                Debug.LogError(
+                    "[RTG] Could not read rtg-dev-world.json. Copy rtg-dev-world.json.example " +
+                    "and fill in worldId / empireId from your seeded local world.");
+                return;
+            }
+
+            if (!EditorUtility.DisplayDialog(
+                    "Reset dev world progress?",
+                    "Clears all routes, route sessions, tap-claims, and resource mines for this " +
+                    "world. Goodie huts are restored to an unclaimed state. This cannot be undone.",
+                    "Reset",
+                    "Cancel"))
+            {
+                return;
+            }
+
+            string apiBase = string.IsNullOrWhiteSpace(dev.apiBaseUrl)
+                ? "http://localhost:3001/api"
+                : dev.apiBaseUrl.TrimEnd('/');
+            string url = $"{apiBase}/worlds/{dev.worldId}/reset-progress";
+            string json = $"{{\"confirm\":true,\"empireId\":\"{dev.empireId}\"}}";
+
+            try
+            {
+                using var client = new HttpClient();
+                using var content = new StringContent(json, Encoding.UTF8, "application/json");
+                HttpResponseMessage response = client.PostAsync(url, content).GetAwaiter().GetResult();
+                string body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+
+                if (response.IsSuccessStatusCode)
+                {
+                    Debug.Log($"[RTG] Dev world reset complete: {body}");
+                    RtgEchoSiteLoader loader = FindByName<RtgEchoSiteLoader>(EchoSitesName);
+                    if (loader != null)
+                    {
+                        loader.ClearMarkers();
+#if UNITY_2023_1_OR_NEWER
+                        RtgPersistedRouteDrawer drawer = Object.FindFirstObjectByType<RtgPersistedRouteDrawer>();
+#else
+                        RtgPersistedRouteDrawer drawer = Object.FindObjectOfType<RtgPersistedRouteDrawer>();
+#endif
+                        drawer?.Clear();
+                    }
+                }
+                else
+                {
+                    Debug.LogError($"[RTG] Dev world reset failed ({(int)response.StatusCode}): {body}");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                Debug.LogError(
+                    $"[RTG] Dev world reset failed: {ex.Message}. " +
+                    "Is the API running (pnpm --filter @empire/api dev)?");
+            }
         }
 
         [MenuItem("Routes to Glory/Remove Player", priority = 42)]

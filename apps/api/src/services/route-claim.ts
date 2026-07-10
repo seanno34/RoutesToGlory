@@ -17,6 +17,8 @@ export interface ClaimNearRouteInput {
   routePath: PathPoint[];
   playerLat?: number;
   playerLng?: number;
+  approachLat?: number;
+  approachLng?: number;
   targetKind: 'settlement' | 'resource';
   targetId: string;
   goodieChoice?: GoodieHutChoice;
@@ -34,6 +36,19 @@ export interface ClaimResult {
 
 function claimRadiusM(config: GameConfig): number {
   return config.routes.minConnectDistanceM ?? 800;
+}
+
+function rewardSummary(reward: unknown): string {
+  if (!reward || typeof reward !== 'object') return '';
+  const r = reward as Record<string, unknown>;
+  if (r.type === 'gold' && typeof r.amount === 'number') return ` +${r.amount} gold`;
+  if (r.type === 'tech' && typeof r.name === 'string') return ` Unlocked ${r.name}.`;
+  if (r.type === 'unit') {
+    const unit = r.unit as { name?: string } | undefined;
+    const label = unit?.name ?? 'alien unit';
+    return r.upgraded ? ` Upgraded to ${label}.` : ` Gained ${label}.`;
+  }
+  return '';
 }
 
 async function isSettlementAlreadyConnected(
@@ -191,10 +206,34 @@ async function claimSettlement(
     throw Object.assign(new Error('Settlement owned by another empire'), { statusCode: 403 });
   }
 
-  const lat = Number(site.lat);
-  const lng = Number(site.lng);
+  let lat = Number(site.lat);
+  let lng = Number(site.lng);
 
-  if (!isWithinRouteCorridor(lat, lng, input.routePath, radiusM)) {
+  // Unity POC pins goodie huts on the tour corridor for testing; validate the
+  // pin against the route, then persist those coords so connectors line up.
+  const APPROACH_MAX_DRIFT_M = 5000;
+  let corridorLat = lat;
+  let corridorLng = lng;
+  const useApproach =
+    site.is_goodie_hut &&
+    input.approachLat != null &&
+    input.approachLng != null;
+
+  if (useApproach) {
+    const drift = haversineM(lat, lng, input.approachLat!, input.approachLng!);
+    if (drift > APPROACH_MAX_DRIFT_M) {
+      throw Object.assign(
+        new Error('Pinned map marker is too far from this goodie hut record'),
+        { statusCode: 400 },
+      );
+    }
+    corridorLat = input.approachLat!;
+    corridorLng = input.approachLng!;
+    lat = corridorLat;
+    lng = corridorLng;
+  }
+
+  if (!isWithinRouteCorridor(corridorLat, corridorLng, input.routePath, radiusM)) {
     throw Object.assign(
       new Error(`Target must be within ${radiusM}m of your active route`),
       { statusCode: 400 },
@@ -238,19 +277,20 @@ async function claimSettlement(
       await query(
         `UPDATE settlements
          SET tier = ?, is_goodie_hut = 0, owner_empire_id = ?,
-             name = ?, planet_display_name = ?
+             name = ?, planet_display_name = ?, lat = ?, lng = ?
          WHERE id = ?`,
-        [tier, input.empireId, newName, newName, site.id],
+        [tier, input.empireId, newName, newName, lat, lng, site.id],
       );
       message = `Founded ${newName} — connector route established.`;
     } else if (resolution.choice === 'claim_reward') {
       reward = resolution.reward;
       await query(
-        `UPDATE settlements SET owner_empire_id = ?, is_goodie_hut = 0, tier = 'settlement'
+        `UPDATE settlements SET owner_empire_id = ?, is_goodie_hut = 0, tier = 'settlement',
+         lat = ?, lng = ?
          WHERE id = ?`,
-        [input.empireId, site.id],
+        [input.empireId, lat, lng, site.id],
       );
-      message = `Claimed reward at ${site.name}.`;
+      message = `Claimed reward at ${site.name}.${rewardSummary(reward)}`;
     }
   } else if (!site.owner_empire_id) {
     await query(`UPDATE settlements SET owner_empire_id = ? WHERE id = ?`, [

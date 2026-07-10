@@ -35,6 +35,7 @@ import {
   seedSettlementDeposits,
 } from '../services/resources.js';
 import { createWorldInDb, getWorldMap, listSavedWorlds, getWorldBootstrapByAccessCode } from '../db/world-repo.js';
+import { resetWorldProgress } from '../db/world-reset.js';
 import { getExplorationState } from '../db/exploration-repo.js';
 import { isDatabaseEnabled } from '../db/client.js';
 import { worldStore } from '../services/world-store.js';
@@ -413,6 +414,24 @@ export const worldRoutes: FastifyPluginAsync = async (app) => {
     }
 
     return getWorldMap(worldId);
+  });
+
+  app.post('/worlds/:worldId/reset-progress', async (request, reply) => {
+    if (!isDatabaseEnabled()) {
+      return reply.status(503).send({ error: 'Database required' });
+    }
+
+    const { worldId } = request.params as { worldId: string };
+    const body = (request.body ?? {}) as { confirm?: boolean; empireId?: string };
+
+    if (!body.confirm) {
+      return reply.status(400).send({
+        error: 'confirmation_required',
+        message: 'Pass { "confirm": true } to reset routes and claims for this world.',
+      });
+    }
+
+    return resetWorldProgress({ worldId, empireId: body.empireId });
   });
 
   app.get('/worlds/:worldId/exploration/:empireId', async (request, reply) => {

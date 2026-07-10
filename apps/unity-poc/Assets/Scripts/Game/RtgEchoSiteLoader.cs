@@ -72,8 +72,14 @@ namespace RoutesToGlory.Game
         [Tooltip("East offset (m) for 'far' markers — should exceed minConnectDistanceM from the corridor.")]
         public float farTapOffsetM = 1800f;
 
+        [Tooltip("Goodie huts are pinned on the corridor tour north leg (matches RtgPlayerLocation.CorridorTourLoop).")]
+        public float goodieHutCorridorFraction = 0.55f;
+
         private const string MarkerContainerName = "Markers";
         private int _scatterIndex;
+        private string _corridorGoodieId;
+
+        private const double CorridorDLat = 0.012;
 
         /// <summary>
         /// The most recently loaded/parsed world map, or null before the first load.
@@ -102,6 +108,18 @@ namespace RoutesToGlory.Game
         }
 
         private IEnumerator LoadRoutine()
+        {
+            yield return FetchAndSpawn();
+        }
+
+        /// <summary>Re-fetch the live map and respawn markers (e.g. after founding a goodie hut).</summary>
+        public IEnumerator ReloadFromApi()
+        {
+            if (dataSource != DataSource.LiveApi) yield break;
+            yield return FetchAndSpawn();
+        }
+
+        private IEnumerator FetchAndSpawn()
         {
             string json = null;
 
@@ -155,6 +173,7 @@ namespace RoutesToGlory.Game
             LastMap = map;
             Transform container = ResetContainer();
             _scatterIndex = 0;
+            _corridorGoodieId = SelectCorridorGoodieTarget(map);
             int settlements = 0, resources = 0;
 
             if (map.settlements != null)
@@ -209,7 +228,9 @@ namespace RoutesToGlory.Game
             float diameter = TierDiameter(s.tier);
 
             double lat = s.lat, lng = s.lng;
-            string tapTag = ApplyTapTestScatter(ref lat, ref lng);
+            bool isGoodieHut = s.is_goodie_hut != 0 || s.tier == "goodie_hut";
+            bool pinOnCorridor = isGoodieHut && s.id == _corridorGoodieId;
+            string tapTag = ApplyTapTestScatter(ref lat, ref lng, pinOnCorridor);
 
             GameObject root = CreateMarkerRoot($"Echo Site — {s.name} ({s.tier})", container);
             AddVisual(root.transform, PrimitiveType.Sphere, color, Vector3.one * diameter, Quaternion.identity);
@@ -235,12 +256,37 @@ namespace RoutesToGlory.Game
                 RtgMapMarker.Kind.Resource, r.id, ResourceName(r.resource_id), r.richness, lat, lng);
         }
 
+        private string SelectCorridorGoodieTarget(RtgWorldMap map)
+        {
+            if (map?.settlements == null) return null;
+
+            string bestId = null;
+            double bestDist = double.MaxValue;
+            foreach (RtgSettlement s in map.settlements)
+            {
+                if (s == null || (s.is_goodie_hut == 0 && s.tier != "goodie_hut")) continue;
+                double dist = HaversineM(scatterCenterLat, scatterCenterLng, s.lat, s.lng);
+                if (dist > scatterRadiusMeters || dist >= bestDist) continue;
+                bestDist = dist;
+                bestId = s.id;
+            }
+            return bestId;
+        }
+
         /// <summary>
         /// Cycles markers into on-corridor / near / far buckets for tap-to-connect testing.
+        /// The nearest Douglas goodie hut is pinned on the simulated tour's north corridor leg.
         /// Returns a short label suffix.
         /// </summary>
-        private string ApplyTapTestScatter(ref double lat, ref double lng)
+        private string ApplyTapTestScatter(ref double lat, ref double lng, bool isGoodieHut = false)
         {
+            if (isGoodieHut)
+            {
+                lat = scatterCenterLat + CorridorDLat * goodieHutCorridorFraction;
+                lng = scatterCenterLng;
+                return scatterForTapTest ? "\n◎ goodie hut · on route" : "";
+            }
+
             if (!scatterForTapTest) return "";
 
             double dist = HaversineM(scatterCenterLat, scatterCenterLng, lat, lng);
