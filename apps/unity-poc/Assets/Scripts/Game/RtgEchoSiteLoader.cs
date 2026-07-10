@@ -176,12 +176,23 @@ namespace RoutesToGlory.Game
             }
 
             Debug.Log($"[RTG] Spawned {settlements} Echo Site(s) and {resources} resource node(s).");
+            DrawPersistedRoutes(map);
+            RtgMapConnections.Apply(map, empireId);
+        }
+
+        private void DrawPersistedRoutes(RtgWorldMap map)
+        {
+            RtgPersistedRouteDrawer drawer = RtgPersistedRouteDrawer.FindOrCreate();
+            if (drawer == null) return;
+            drawer.DrawAll(map?.routes);
         }
 
         public void ClearMarkers()
         {
             Transform existing = transform.Find(MarkerContainerName);
             if (existing != null) DestroyObject(existing.gameObject);
+            RtgPersistedRouteDrawer drawer = RtgPersistedRouteDrawer.FindOrCreate();
+            drawer?.Clear();
         }
 
         private Transform ResetContainer()

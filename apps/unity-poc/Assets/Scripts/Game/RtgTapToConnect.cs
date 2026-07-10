@@ -75,6 +75,8 @@ namespace RoutesToGlory.Game
             RtgMapMarker marker = hit.collider.GetComponentInParent<RtgMapMarker>();
             if (marker == null) return;
 
+            if (marker.IsConnected) return;
+
             if (!_session.TryGetRoutePath(out var path) || path.Count < 1)
             {
                 ShowToast("Lay a route first — keep moving.");
@@ -93,15 +95,20 @@ namespace RoutesToGlory.Game
 
         private void OnClaimDone(RtgRouteSession.ClaimResult result)
         {
+            if (result.alreadyConnected) return;
+
             ShowToast(result.message);
 
-            if (result.ok && result.hasConnector)
-            {
-                RtgConnectorLineDrawer drawer = RtgConnectorLineDrawer.FindOrCreate();
-                drawer?.DrawConnector(
-                    result.anchorLat, result.anchorLng,
-                    result.targetLat, result.targetLng);
-            }
+            if (result.ok)
+                RefreshPersistedRoutes();
+        }
+
+        private void RefreshPersistedRoutes()
+        {
+            if (_session == null) return;
+            RtgPersistedRouteDrawer drawer = RtgPersistedRouteDrawer.FindOrCreate();
+            if (drawer == null) return;
+            drawer.StartCoroutine(drawer.RefreshFromApi(_session.apiBaseUrl, _session.worldId, _session.empireId));
         }
 
         private void ShowToast(string msg)

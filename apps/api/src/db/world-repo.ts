@@ -235,7 +235,7 @@ export async function getWorldMap(worldId: string) {
   );
 
   const resources = await query<Record<string, unknown>>(
-    `SELECT id, tile_id, resource_id, richness, yield_per_day, lat, lng
+    `SELECT id, tile_id, resource_id, richness, yield_per_day, owner_empire_id, lat, lng
      FROM map_resource_nodes WHERE world_id = ?`,
     [worldId],
   );
@@ -246,9 +246,26 @@ export async function getWorldMap(worldId: string) {
   // map wants numbers too).
   return {
     settlements: settlements.rows.map((r) => coerceCoords(r)),
-    routes: routes.rows.map((r) => coerceCoords(r, ['distance_m'])),
+    routes: routes.rows.map((r) => ({
+      ...coerceCoords(r, ['distance_m']),
+      path_json: coercePathJson(r.path_json),
+    })),
     resources: resources.rows.map((r) => coerceCoords(r)),
   };
+}
+
+type PathPoint = { lat: number; lng: number };
+
+/** Normalize route path vertices — MySQL JSON may store DECIMAL lat/lng as strings. */
+function coercePathJson(pathJson: unknown): PathPoint[] {
+  if (!Array.isArray(pathJson)) return [];
+  return pathJson.map((pt) => {
+    const p = pt as Record<string, unknown>;
+    return {
+      lat: typeof p.lat === 'string' ? Number(p.lat) : Number(p.lat),
+      lng: typeof p.lng === 'string' ? Number(p.lng) : Number(p.lng),
+    };
+  });
 }
 
 /** Convert lat/lng (+ any extra decimal columns) from DECIMAL strings to numbers. */

@@ -68,7 +68,37 @@
       "geofence_radius_m": 150
     }
   ],
-  "routes": [],
+  "routes": [
+    {
+      "id": "route-sample-leg",
+      "empire_id": "empire-sample",
+      "from_settlement_id": "s-capital",
+      "to_settlement_id": "s-verdant",
+      "distance_m": 1420,
+      "status": "active",
+      "empire_color": "#3b82f6",
+      "path_json": [
+        { "lat": 42.7597, "lng": -105.3819 },
+        { "lat": 42.7615, "lng": -105.3795 },
+        { "lat": 42.7640, "lng": -105.3768 },
+        { "lat": 42.7662, "lng": -105.3740 },
+        { "lat": 42.7681, "lng": -105.3705 }
+      ]
+    },
+    {
+      "id": "route-sample-connector",
+      "empire_id": "empire-sample",
+      "from_settlement_id": "s-capital",
+      "to_settlement_id": "s-hut",
+      "distance_m": 520,
+      "status": "active",
+      "empire_color": "#3b82f6",
+      "path_json": [
+        { "lat": 42.7620, "lng": -105.3760 },
+        { "lat": 42.7548, "lng": -105.3742 }
+      ]
+    }
+  ],
   "resources": [
     {
       "id": "r-xenite-1",

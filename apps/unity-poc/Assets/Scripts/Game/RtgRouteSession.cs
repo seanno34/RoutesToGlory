@@ -212,7 +212,10 @@ namespace RoutesToGlory.Game
                 else
                 {
                     string err = TryParseError(text) ?? $"Claim failed ({code})";
-                    done?.Invoke(ClaimResult.Fail(err));
+                    if (code == 409)
+                        done?.Invoke(ClaimResult.AlreadyConnected());
+                    else
+                        done?.Invoke(ClaimResult.Fail(err));
                 }
             });
         }
@@ -221,6 +224,7 @@ namespace RoutesToGlory.Game
         {
             public bool ok;
             public string message;
+            public bool alreadyConnected;
             public bool hasConnector;
             public double anchorLat, anchorLng, targetLat, targetLng;
 
@@ -229,6 +233,9 @@ namespace RoutesToGlory.Game
 
             public static ClaimResult Fail(string message) =>
                 new ClaimResult { ok = false, message = message };
+
+            public static ClaimResult AlreadyConnected() =>
+                new ClaimResult { ok = false, alreadyConnected = true };
         }
 
         private static string TryParseError(string json)
@@ -327,6 +334,7 @@ namespace RoutesToGlory.Game
                     string name = resp.settlement != null ? resp.settlement.name : "settlement";
                     Debug.Log($"[RTG] Route auto-connected to {name} (route {resp.routeId}).");
                     _state = State.Idle; // server completed the session
+                    RefreshPersistedRoutes();
 
                     // Gate the next auto-started leg until we leave this site.
                     _resumeLat = _curLat;
@@ -370,6 +378,8 @@ namespace RoutesToGlory.Game
                         ? $"Route: saved ({resp.status})"
                         : $"Route: ended ({(resp != null ? resp.status : "?")})";
                     Debug.Log($"[RTG] Route session ended: {text}");
+                    if (resp != null && resp.saved)
+                        RefreshPersistedRoutes();
                 }
                 else
                 {
@@ -426,6 +436,13 @@ namespace RoutesToGlory.Game
         // G17 + invariant culture: full double precision with a '.' decimal, so
         // coordinates survive the round-trip and never localize to a comma.
         private static string D(double v) => v.ToString("G17", CultureInfo.InvariantCulture);
+
+        private void RefreshPersistedRoutes()
+        {
+            RtgPersistedRouteDrawer drawer = RtgPersistedRouteDrawer.FindOrCreate();
+            if (drawer == null) return;
+            drawer.StartCoroutine(drawer.RefreshFromApi(apiBaseUrl, worldId, empireId));
+        }
 
         private static double Haversine(double lat1, double lng1, double lat2, double lng2)
         {

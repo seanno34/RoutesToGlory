@@ -427,6 +427,9 @@ namespace RoutesToGlory.Game
             _markerAnchor = root.GetComponent<CesiumGlobeAnchor>();
             if (_markerAnchor == null) _markerAnchor = root.AddComponent<CesiumGlobeAnchor>();
 
+            Transform staleLabel = root.transform.Find("Label");
+            if (staleLabel != null) DestroyImmediateSafe(staleLabel.gameObject);
+
             if (root.transform.Find("Beacon") == null)
                 BuildMarkerVisual(root.transform);
         }
@@ -516,53 +519,6 @@ namespace RoutesToGlory.Game
 
             var mr = beacon.GetComponent<MeshRenderer>();
             mr.sharedMaterial = _markerMaterial;
-            mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-
-            AddLabel(root, "You (GPS)", 40f);
-        }
-
-        private static readonly Vector2[] OutlineDirections =
-        {
-            new Vector2(1f, 0f), new Vector2(-1f, 0f), new Vector2(0f, 1f), new Vector2(0f, -1f),
-            new Vector2(1f, 1f), new Vector2(1f, -1f), new Vector2(-1f, 1f), new Vector2(-1f, -1f),
-        };
-
-        private static void AddLabel(Transform root, string text, float charSize)
-        {
-            var pivot = new GameObject("Label");
-            pivot.transform.SetParent(root, false);
-            pivot.transform.localPosition = new Vector3(0f, 50f, 0f);
-            pivot.AddComponent<RtgBillboard>();
-
-            float outline = charSize * 0.08f;
-            foreach (Vector2 dir in OutlineDirections)
-            {
-                Vector2 o = dir.normalized * outline;
-                CreateText(pivot.transform, text, charSize, Color.black, new Vector3(o.x, o.y, 0f));
-            }
-            CreateText(pivot.transform, text, charSize, new Color(1f, 0.95f, 0.6f),
-                new Vector3(0f, 0f, -charSize * 0.5f));
-        }
-
-        private static void CreateText(
-            Transform parent, string text, float charSize, Color color, Vector3 localPosition)
-        {
-            var go = new GameObject("Text");
-            go.transform.SetParent(parent, false);
-            go.transform.localPosition = localPosition;
-
-            Font font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-            var tm = go.AddComponent<TextMesh>();
-            tm.font = font;
-            tm.text = text;
-            tm.anchor = TextAnchor.LowerCenter;
-            tm.alignment = TextAlignment.Center;
-            tm.fontSize = 64;
-            tm.characterSize = charSize;
-            tm.color = color;
-
-            var mr = go.GetComponent<MeshRenderer>();
-            if (font != null) mr.sharedMaterial = font.material;
             mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
         }
 

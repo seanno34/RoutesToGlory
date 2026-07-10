@@ -36,6 +36,21 @@ function claimRadiusM(config: GameConfig): number {
   return config.routes.minConnectDistanceM ?? 800;
 }
 
+async function isSettlementAlreadyConnected(
+  worldId: string,
+  empireId: string,
+  settlementId: string,
+): Promise<boolean> {
+  const result = await query<{ id: string }>(
+    `SELECT id FROM routes
+     WHERE world_id = ? AND empire_id = ? AND status = 'active'
+       AND to_settlement_id = ?
+     LIMIT 1`,
+    [worldId, empireId, settlementId],
+  );
+  return result.rows.length > 0;
+}
+
 async function getOwnedSettlements(worldId: string, empireId: string) {
   const result = await query<{
     id: string;
@@ -186,6 +201,12 @@ async function claimSettlement(
     );
   }
 
+  if (await isSettlementAlreadyConnected(input.worldId, input.empireId, site.id)) {
+    throw Object.assign(new Error('Settlement already connected to your network'), {
+      statusCode: 409,
+    });
+  }
+
   const anchor = nearestPointOnPath(lat, lng, input.routePath);
   const connectorPath: PathPoint[] = [anchor, { lat, lng }];
 
@@ -320,8 +341,8 @@ async function claimResource(
 
   if (node.owner_empire_id) {
     if (node.owner_empire_id === input.empireId) {
-      throw Object.assign(new Error('Extractor mine already established here'), {
-        statusCode: 400,
+      throw Object.assign(new Error('Resource already connected to your network'), {
+        statusCode: 409,
       });
     }
     throw Object.assign(new Error('Resource claimed by another empire'), { statusCode: 403 });

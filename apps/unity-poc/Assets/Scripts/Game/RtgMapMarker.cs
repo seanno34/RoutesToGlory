@@ -17,6 +17,10 @@ namespace RoutesToGlory.Game
         public double lat;
         public double lng;
 
+        public bool IsConnected { get; private set; }
+
+        public void SetConnected(bool connected) => IsConnected = connected;
+
         public void Configure(Kind markerKind, string id, string name, string label, double latitude, double longitude)
         {
             kind = markerKind;
