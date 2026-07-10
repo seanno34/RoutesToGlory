@@ -347,6 +347,7 @@ namespace RoutesToGlory.Game
                 _queue.RemoveRange(0, take);
 
                 var resp = JsonUtility.FromJson<PointsResp>(text);
+                NotifyExplorationDelta(resp?.exploration);
                 if (resp != null && resp.connected)
                 {
                     string name = resp.settlement != null ? resp.settlement.name : "settlement";
@@ -484,8 +485,28 @@ namespace RoutesToGlory.Game
             public double lat, lng;
         }
 
+        private static void NotifyExplorationDelta(ExplorationDelta delta)
+        {
+            if (delta == null) return;
+            RtgFogOfWar fog = RtgFogOfWar.Find();
+            if (fog == null) return;
+            fog.ApplyExplorationDelta(delta.newlyRevealedTileIds, delta.newResourceNodeIds);
+        }
+
         [Serializable] private class BeginResp { public string sessionId; public string status; }
-        [Serializable] private class PointsResp { public bool connected; public string routeId; public ConnSettlement settlement; }
+        [Serializable] private class PointsResp
+        {
+            public bool connected;
+            public string routeId;
+            public ConnSettlement settlement;
+            public ExplorationDelta exploration;
+        }
+
+        [Serializable] private class ExplorationDelta
+        {
+            public string[] newlyRevealedTileIds;
+            public string[] newResourceNodeIds;
+        }
         [Serializable] private class ConnSettlement { public string name; }
         [Serializable] private class ClaimResp
         {

@@ -235,7 +235,28 @@ namespace RoutesToGlory.EditorTools
             Debug.Log("[RTG] Cleared Echo Site markers. Save with Cmd+S.");
         }
 
-        [MenuItem("Routes to Glory/7. Setup Player (GPS)", priority = 28)]
+        [MenuItem("Routes to Glory/7. Setup Fog Of War", priority = 28)]
+        public static void SetupFogOfWar()
+        {
+            CesiumGeoreference georeference = RequireGeoreference();
+            if (georeference == null) return;
+
+            RtgEchoSiteLoader loader = FindByName<RtgEchoSiteLoader>(EchoSitesName);
+            RtgFogOfWar fog = RtgFogOfWar.Ensure(loader);
+            if (fog == null)
+            {
+                Debug.LogError("[RTG] Could not create fog of war — georeference missing?");
+                return;
+            }
+
+            Selection.activeGameObject = fog.gameObject;
+            MarkDirty(georeference);
+            Debug.Log(
+                "[RTG] Fog of war component added. In Play mode it fetches explored tiles " +
+                "from the API and renders shader fog over hidden areas. Run '6b' first for live data. Save with Cmd+S.");
+        }
+
+        [MenuItem("Routes to Glory/8. Setup Player (GPS)", priority = 29)]
         public static void SetupPlayer()
         {
             CesiumGeoreference georeference = RequireGeoreference();
@@ -251,7 +272,7 @@ namespace RoutesToGlory.EditorTools
                 "or tick 'Follow With Camera' to chase it. Save with Cmd+S.");
         }
 
-        [MenuItem("Routes to Glory/8. Reset Dev World (routes + claims)", priority = 29)]
+        [MenuItem("Routes to Glory/9. Reset Dev World (routes + claims)", priority = 30)]
         public static void ResetDevWorldProgress()
         {
             if (!TryReadDevWorld(out RtgDevWorld dev))
@@ -294,10 +315,16 @@ namespace RoutesToGlory.EditorTools
                         loader.ClearMarkers();
 #if UNITY_2023_1_OR_NEWER
                         RtgPersistedRouteDrawer drawer = Object.FindFirstObjectByType<RtgPersistedRouteDrawer>();
+                        RtgFogOfWar fog = Object.FindFirstObjectByType<RtgFogOfWar>();
 #else
                         RtgPersistedRouteDrawer drawer = Object.FindObjectOfType<RtgPersistedRouteDrawer>();
+                        RtgFogOfWar fog = Object.FindObjectOfType<RtgFogOfWar>();
 #endif
                         drawer?.Clear();
+                        if (fog != null && Application.isPlaying)
+                            fog.StartCoroutine(fog.ReloadFromApi());
+                        else
+                            fog?.ClearFog();
                     }
                 }
                 else

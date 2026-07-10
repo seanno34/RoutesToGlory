@@ -197,6 +197,14 @@ namespace RoutesToGlory.Game
             Debug.Log($"[RTG] Spawned {settlements} Echo Site(s) and {resources} resource node(s).");
             DrawPersistedRoutes(map);
             RtgMapConnections.Apply(map, empireId);
+            SetupFogOfWar(container);
+        }
+
+        private void SetupFogOfWar(Transform markersContainer)
+        {
+            if (!Application.isPlaying) return;
+            RtgFogOfWar fog = RtgFogOfWar.Ensure(this);
+            if (fog != null) fog.OnMapSpawned(markersContainer);
         }
 
         private void DrawPersistedRoutes(RtgWorldMap map)
