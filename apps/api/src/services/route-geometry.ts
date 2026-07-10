@@ -75,6 +75,7 @@ function distancePointToSegmentM(
   return Math.hypot(px - cx, py - cy);
 }
 
+/** Closest point on the polyline to (lat, lng) — used as the route anchor for tap connects. */
 export function nearestPointOnPath(
   lat: number,
   lng: number,
@@ -89,18 +90,46 @@ export function nearestPointOnPath(
   for (let i = 1; i < path.length; i += 1) {
     const a = path[i - 1]!;
     const b = path[i]!;
-    const mid = {
-      lat: (a.lat + b.lat) / 2,
-      lng: (a.lng + b.lng) / 2,
-    };
-    const d = haversineM(lat, lng, mid.lat, mid.lng);
+    const foot = nearestPointOnSegment(lat, lng, a, b);
+    const d = haversineM(lat, lng, foot.lat, foot.lng);
     if (d < bestD) {
       bestD = d;
-      best = mid;
+      best = foot;
     }
   }
 
   return best;
+}
+
+function nearestPointOnSegment(
+  pLat: number,
+  pLng: number,
+  a: PathPoint,
+  b: PathPoint,
+): PathPoint {
+  const latM = 111_320;
+  const lngM = 111_320 * Math.cos(toRad(pLat));
+
+  const px = pLng * lngM;
+  const py = pLat * latM;
+  const ax = a.lng * lngM;
+  const ay = a.lat * latM;
+  const bx = b.lng * lngM;
+  const by = b.lat * latM;
+
+  const dx = bx - ax;
+  const dy = by - ay;
+  const lenSq = dx * dx + dy * dy;
+
+  if (lenSq < 1) return a;
+
+  let t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+
+  return {
+    lat: (ay + t * dy) / latM,
+    lng: (ax + t * dx) / lngM,
+  };
 }
 
 export function isWithinRouteCorridor(

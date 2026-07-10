@@ -6,7 +6,7 @@
 |---|---|
 | **v1 URL** | [8082ventures.com/rtg](https://8082ventures.com/rtg) |
 | **Domain (later)** | `routestoglory.com` — available; hold until post-v1 |
-| **Repo folder** | `mobile-gps-app` (internal workspace name) |
+| **Repo folder** | `routestoglory` (matches the GitHub repo `RoutesToGlory`) |
 
 When the PWA ships, set the app base path to **`/rtg/`** (e.g. Vite `base: '/rtg/'`).
 

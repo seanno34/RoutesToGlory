@@ -119,7 +119,9 @@ export const sessionRoutes: FastifyPluginAsync = async (app) => {
           point.speedMps ?? null,
           v.accepted ? 1 : 0,
           v.rejectReason ?? null,
-          point.recordedAt,
+          // Pass a Date (not the raw ISO string) so mysql2 formats it to a valid
+          // DATETIME; strict MySQL rejects the ISO 'T'/'Z'/millisecond form.
+          new Date(point.recordedAt),
         ],
       );
 

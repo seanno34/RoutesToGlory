@@ -207,6 +207,7 @@ namespace RoutesToGlory.EditorTools
                 ? "http://localhost:3001/api"
                 : dev.apiBaseUrl;
             loader.worldId = dev.worldId;
+            loader.empireId = dev.empireId;
             loader.loadOnPlay = true;
 
             // Clear any sample markers so we don't stack two data sets on top of
@@ -517,6 +518,7 @@ namespace RoutesToGlory.EditorTools
         {
             public string apiBaseUrl;
             public string worldId;
+            public string empireId;
             public string accessCode;
             public string slug;
         }

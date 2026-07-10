@@ -28,7 +28,7 @@ apps/api/migrations/001_initial.sql
 **Apply via migration runner** (recommended — from your laptop or SSH):
 
 ```bash
-cd /path/to/mobile-gps-app
+cd /path/to/routestoglory
 pnpm db:migrate
 ```
 
@@ -39,7 +39,7 @@ Uses `MYSQL_*` from the root `.env`. Or run `001_initial.sql` manually in SPanel
 ## 2. Build locally
 
 ```bash
-cd /path/to/mobile-gps-app
+cd /path/to/routestoglory
 
 # apps/web/.env — production values for the PWA build:
 #   VITE_API_BASE=/rtg/api

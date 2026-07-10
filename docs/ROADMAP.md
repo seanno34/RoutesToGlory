@@ -50,8 +50,8 @@ Real-world **GPS movement** drives exploration and **Light Road** construction i
 
 ### Design & config (done)
 
-- [x] Session-based GPS routes (one-shot sampling design; routes build instantly)
-- [x] Begin route / end route / auto-connect at settlements
+- [x] GPS routes build instantly from movement (session model under the hood)
+- [x] **Always-on route capture** — movement is recorded continuously and auto-connects at settlements; no manual Begin/End (server begin/end driven automatically)
 - [x] Goodie hut: found town **or** claim reward (gold / tech / alien unit)
 - [x] Progressive build complexity tiers (1–5, fast early → slow late)
 - [x] Real-time construction + gold rush (+ xenite discount)
@@ -108,6 +108,8 @@ Real-world **GPS movement** drives exploration and **Light Road** construction i
 | Map alignment | Real-world GPS; sci-fi “Survey World” fiction layer |
 | Narrative frame | Starship captain; one-way colonization; Star Gate = long-term mission win (v2) |
 | Routes / Light Roads | Only thing that builds instantly while player moves |
+| Route capture | **Always-on** — any movement while the app is open is captured; routes auto-connect at settlements and the next leg auto-starts. No manual Begin/End. (Adopted from v2 "always-on movement sync".) |
+| Tap-to-connect | Tap a nearby Echo Site or resource when it is within **minConnectDistanceM** (~1 km) of your active route **path** (not your GPS pin). Server anchors the connector at the **nearest route point**. |
 | Echo Sites | Colony nodes; real-world seeded anchors; connect into resource network |
 | Infrastructure | Real-time timers; complexity tiers 1–5 |
 | Goodie hut A | Instant town + population; modifiers queued at 50% time |
@@ -151,6 +153,24 @@ Prototype is "done" when we can make a confident go/no-go decision against:
 
 On **go**: write a short technical design doc capturing prototype learnings (what to keep, what to rebuild), then start `apps/game` on production-quality foundations.
 
+### Art & assets staging
+
+The Unity POC uses **graybox placeholders** (spheres, cubes, capsules, lines) on purpose. Real art is authored in the production project (`apps/game`), not the throwaway POC, because any placeholder art in `apps/unity-poc` is discarded at the production cutover. Standard progression: **placeholders → art-style test → vertical-slice hero assets → full production library.**
+
+| Phase | Art work | Where |
+|---|---|---|
+| **Prototype (now)** | Keep graybox placeholders. At most a cheap, throwaway **art-style test** (one hero mockup / kitbash) to de-risk "renders + reads well." | `apps/unity-poc` |
+| **Vertical slice** (post go/no-go) | First **production-quality** assets for a small representative set: 1 player ship, 1–2 Echo Site tiers, 2–3 resources, 1 goodie hut, Light Road as real VFX/Shader Graph. Lock the **asset pipeline** (import settings, LODs, atlases, Addressables, naming). Prove perf on-device. | `apps/game` |
+| **Production** | Full library: all settlement tiers, all 10 resources, alignment variants, animations, VFX, environment/skybox polish, UI. | `apps/game` |
+
+**Gates before commissioning any art** (avoid re-cutting assets later):
+- **Scale + camera framing locked** — assets are authored for their on-screen size and the overhead/tilted follow angle.
+- **Device performance budget** — poly/texture/draw-call limits from mid-range-phone testing, so artists build to budget.
+
+**Carries across the POC→production boundary (not throwaway):** the Light Road **shader/VFX**, **materials**, the **tile pipeline**, and an **art-style guide** (palette, silhouette language, material language). Because the Light Road is the signature mechanic and drives the "feels/looks good" judgment, prototyping its *shader* earlier than other art is worthwhile (Shader Graphs copy over cleanly).
+
+**Build vs. buy (solo dev):** for the vertical slice, favor **asset-store/marketplace kits + light customization** and a defined style guide over bespoke modeling; commission or build bespoke hero assets only where the marketplace can't deliver the look. Revisit bespoke production art once the core loop is validated.
+
 ---
 
 ## v2 parking lot
@@ -159,7 +179,8 @@ _Ideas only — not designed or scheduled. Add new bullets here; promote to v1 o
 
 ### Gameplay
 
-- **Always-on movement sync** — no Begin/End Route button; any player movement while the app is open translates to in-game movement; routes auto-created when criteria are met (distance, dwell, settlement proximity, etc. — TBD)
+- ~~**Always-on movement sync** — no Begin/End Route button; any player movement while the app is open translates to in-game movement~~ **(adopted into current design — see "Route capture" locked decision)**
+- **Route reinforcement / extension** — recognize when the player re-walks or extends an existing route and reinforce/merge it (route matching + dedup) instead of creating a duplicate; server-side feature, not yet built
 - **Static plot objects** — place mines, extractors, and similar buildings on surrounding city plots to gather resources without moving (complements route-based play)
 - **Super generator** — late-game capstone build; connected Echo Site network must generate enough energy to power the Star Gate
 - **Star Gate** — endgame objective: build, power, mission complete → unlock next Survey World
@@ -240,3 +261,5 @@ apps/api/src/routes/game.ts              # HTTP routes
 | 2026-07-06 | Star Gate + super generator moved to v2 parking lot (out of v1 scope) |
 | 2026-07-06 | v2: Events system — random positive/negative, video clips, obstacles/destruction/bonuses |
 | 2026-07-07 | Added POC → Production strategy: Unity POC is throwaway; keep single repo; production as `apps/game`; backend continuous; go/no-go exit criteria |
+| 2026-07-09 | Added Art & assets staging (placeholders → vertical-slice → production; art gates; build-vs-buy) |
+| 2026-07-09 | Route capture is now **always-on** (no manual Begin/End); adopted from v2. Route reinforcement/extension parked in v2. |

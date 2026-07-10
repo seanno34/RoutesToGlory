@@ -106,19 +106,6 @@ async function createConnectorRoute(
   return routeId;
 }
 
-function resolvePlayerPosition(input: ClaimNearRouteInput): PathPoint {
-  if (input.playerLat != null && input.playerLng != null) {
-    return { lat: input.playerLat, lng: input.playerLng };
-  }
-
-  const last = input.routePath[input.routePath.length - 1];
-  if (last) return last;
-
-  throw Object.assign(new Error('Player position required to establish mine route'), {
-    statusCode: 400,
-  });
-}
-
 function extractorName(resourceId: string): string {
   const def = ALIEN_RESOURCES[resourceId as keyof typeof ALIEN_RESOURCES];
   return def ? `${def.name} Extractor` : `${resourceId.replace(/_/g, ' ')} Extractor`;
@@ -350,8 +337,11 @@ async function claimResource(
     );
   }
 
-  const playerPos = resolvePlayerPosition(input);
-  const connectorPath: PathPoint[] = [playerPos, { lat, lng }];
+  // Connector runs from the nearest point on the active route — not the player's
+  // live GPS pin — so tap-to-connect works when you've passed nearby but aren't
+  // standing on the resource.
+  const anchor = nearestPointOnPath(lat, lng, input.routePath);
+  const connectorPath: PathPoint[] = [anchor, { lat, lng }];
   const extractorId = await createExtractorSettlement(
     input.worldId,
     input.empireId,

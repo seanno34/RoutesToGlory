@@ -18,6 +18,9 @@ namespace RoutesToGlory.Game
     {
         public enum LocationSource { SimulatedRoute, DeviceGps }
 
+        // Map = overhead (Google Maps). LowAngle = ~20° behind the pin.
+        public enum CameraPerspective { Map, LowAngle }
+
         // FixedLoop = walk the small hand-authored rectangle (or the `route` field).
         // TourNearbySites = auto-build a loop that threads past every Echo Site /
         // resource node near the play area so you can sight-see the whole map.
@@ -50,6 +53,9 @@ namespace RoutesToGlory.Game
         [Tooltip("Safety cap on how many stops the tour visits.")]
         public int maxTourStops = 80;
 
+        [Tooltip("If off, the pin follows a fixed road corridor loop instead of driving to every beacon — required for tap-to-connect testing.")]
+        public bool tourVisitsBeacons = false;
+
         [Tooltip("Seconds to wait for Echo Sites to load before falling back to the fixed loop.")]
         public float tourLoadTimeoutSeconds = 12f;
 
@@ -76,6 +82,10 @@ namespace RoutesToGlory.Game
         [Tooltip("Light Road color (bright energy ribbon).")]
         public Color roadColor = new Color(0.45f, 0.95f, 1.00f);
 
+        [Header("Route session")]
+        [Tooltip("Stream movement to the route-session API so a Light Road persists as a real route (needs live world via '6b').")]
+        public bool recordRouteSessions = true;
+
         [Header("Camera follow")]
         [Tooltip("If enabled, the camera stays overhead and auto-tracks the player (Google-Maps style). Untick for free-fly.")]
         public bool followWithCamera = true;
@@ -88,6 +98,22 @@ namespace RoutesToGlory.Game
 
         [Tooltip("Follow smoothing (0 = instant/locked; higher = smoother lag). ~5 feels like Google Maps.")]
         public float followSmoothing = 6f;
+
+        [Header("Camera perspectives")]
+        [Tooltip("Map = overhead. LowAngle = ~20° behind the pin (route-following view). Toggle in Play with the Route View / Map View button.")]
+        public CameraPerspective perspective = CameraPerspective.Map;
+
+        [Tooltip("Ground distance (m) the low-angle camera trails behind the player.")]
+        public float perspectiveTrailMeters = 180f;
+
+        [Tooltip("Elevation angle (degrees above the horizon) for the low-angle view.")]
+        public float perspectiveElevationDegrees = 20f;
+
+        [Tooltip("How quickly the camera swings behind the player's travel direction. Higher = snappier.")]
+        public float headingSmoothing = 10f;
+
+        [Tooltip("Ignore movement smaller than this (m) when updating travel heading — reduces GPS jitter.")]
+        public float minHeadingMoveMeters = 3f;
 
         [Header("Zoom (scroll wheel while following)")]
         [Tooltip("How much each scroll step zooms. Raise for faster zoom.")]
@@ -122,16 +148,25 @@ namespace RoutesToGlory.Game
         private Material _markerMaterial;
         private RtgLightRoad _lightRoad;
         private bool _roadStarted;
+        private RtgRouteSession _routeSession;
 
         private Camera _camera;
         private CesiumCameraController _cameraController;
         private CesiumOriginShift _cameraOriginShift;
         private bool _followActive;
 
+        // Travel heading for chase-cam: camera sits behind the direction of movement
+        // (+X east, +Z north). Radians; 0 = heading north.
+        private float _travelHeadingRad;
+        private bool _hasHeadingSample;
+        private Vector3 _lastHeadingSamplePos;
+
         private void Start()
         {
             EnsureMarker();
             EnsureLightRoad();
+            EnsureRouteSession();
+            EnsureTapToConnect();
             CacheCamera();
 
             // The tour route depends on the Echo Sites, which may still be loading
@@ -170,6 +205,10 @@ namespace RoutesToGlory.Game
                     _lightRoad.StartRecording();
                     _roadStarted = true;
                 }
+
+                // Feed the position to the route session (it only streams while a
+                // route is actively being recorded via the Begin Route button).
+                if (_routeSession != null) _routeSession.NotifyPosition(lat, lng);
             }
         }
 
@@ -234,6 +273,30 @@ namespace RoutesToGlory.Game
             };
         }
 
+        /// <summary>
+        /// ~3 km rectangular corridor through Douglas. The pin follows this road instead
+        /// of visiting every beacon, so scattered markers sit beside the route for
+        /// tap-to-connect testing.
+        /// </summary>
+        private static RtgWaypoint[] CorridorTourLoop()
+        {
+            const double cLat = 42.7597;
+            const double cLng = -105.3819;
+            const double dLat = 0.012;  // ~1.3 km north/south
+            const double dLng = 0.016;  // ~1.3 km east/west at this latitude
+
+            return new[]
+            {
+                new RtgWaypoint { lat = cLat,       lng = cLng },
+                new RtgWaypoint { lat = cLat + dLat, lng = cLng },
+                new RtgWaypoint { lat = cLat + dLat, lng = cLng + dLng },
+                new RtgWaypoint { lat = cLat,       lng = cLng + dLng },
+                new RtgWaypoint { lat = cLat - dLat, lng = cLng + dLng },
+                new RtgWaypoint { lat = cLat - dLat, lng = cLng },
+                new RtgWaypoint { lat = cLat,       lng = cLng },
+            };
+        }
+
         // ------------------------------------------------------------------ //
         // Tour of nearby sites
         // ------------------------------------------------------------------ //
@@ -255,20 +318,26 @@ namespace RoutesToGlory.Game
                 yield return null;
             }
 
-            RtgWaypoint[] tour = loader != null && loader.LastMap != null
-                ? BuildTourRoute(loader.LastMap)
-                : null;
+            RtgWaypoint[] tour = null;
+            if (loader != null && loader.LastMap != null)
+            {
+                tour = tourVisitsBeacons
+                    ? BuildTourRoute(loader.LastMap)
+                    : CorridorTourLoop();
+            }
 
             if (tour == null || tour.Length < 2)
             {
                 Debug.LogWarning(
-                    "[RTG] Tour route unavailable (no nearby sites loaded) — falling back to the fixed loop. " +
+                    "[RTG] Tour route unavailable — falling back to the fixed loop. " +
                     "Load Echo Sites first, or widen Tour Radius.");
                 tour = ResolveRoute();
             }
             else
             {
-                Debug.Log($"[RTG] Touring {tour.Length - 1} nearby site(s) around the play area.");
+                Debug.Log(tourVisitsBeacons
+                    ? $"[RTG] Touring {tour.Length - 1} nearby site(s) around the play area."
+                    : $"[RTG] Following corridor loop ({tour.Length} waypoints) — beacons are offset for tap testing.");
             }
 
             _provider = new RtgSimulatedLocationProvider(tour, tourSpeed);
@@ -387,6 +456,43 @@ namespace RoutesToGlory.Game
             _lightRoad = road;
         }
 
+        // Creates the route-session driver and hands it the live-API config from the
+        // Echo Site loader (set by "6b. Connect Echo Sites to Live API"). In sample
+        // mode the world/empire ids are blank, so Begin Route reports that it needs
+        // a live world instead of failing silently.
+        private void EnsureRouteSession()
+        {
+            if (!recordRouteSessions || !Application.isPlaying) return;
+            if (_routeSession != null) return;
+
+            var go = new GameObject("Route Session");
+            go.SetActive(false);
+            go.transform.SetParent(transform, false);
+            RtgRouteSession session = go.AddComponent<RtgRouteSession>();
+
+#if UNITY_2023_1_OR_NEWER
+            RtgEchoSiteLoader loader = Object.FindFirstObjectByType<RtgEchoSiteLoader>();
+#else
+            RtgEchoSiteLoader loader = Object.FindObjectOfType<RtgEchoSiteLoader>();
+#endif
+            if (loader != null)
+            {
+                session.apiBaseUrl = loader.apiBaseUrl;
+                session.worldId = loader.worldId;
+                session.empireId = loader.empireId;
+            }
+
+            go.SetActive(true);
+            _routeSession = session;
+        }
+
+        private void EnsureTapToConnect()
+        {
+            if (!Application.isPlaying) return;
+            if (GetComponent<RtgTapToConnect>() != null) return;
+            gameObject.AddComponent<RtgTapToConnect>();
+        }
+
         private void BuildMarkerVisual(Transform root)
         {
             Color playerColor = new Color(1.0f, 0.92f, 0.45f); // bright gold — clearly "you"
@@ -484,6 +590,7 @@ namespace RoutesToGlory.Game
 
             if (!_followActive) SetFollowActive(true);
 
+            UpdateTravelHeading();
             UpdateZoom();
             HandlePanInput();
 
@@ -523,7 +630,7 @@ namespace RoutesToGlory.Game
                     // Meters moved per screen pixel ≈ how tall the view is / screen height,
                     // so the map tracks the cursor/finger consistently at any zoom.
                     float metersPerPixel =
-                        (followHeightMeters * _zoom) / Mathf.Max(1, Screen.height) * panSpeed;
+                        (EffectiveFollowHeight() * _zoom) / Mathf.Max(1, Screen.height) * panSpeed;
 
                     // World axes near the origin: +X = east, +Z = north. Drag the map with
                     // the cursor, so the focus moves opposite the drag direction.
@@ -540,16 +647,40 @@ namespace RoutesToGlory.Game
             _panned = false; // focus glides back to the pin via smoothing
         }
 
+        private void TogglePerspective()
+        {
+            perspective = perspective == CameraPerspective.Map
+                ? CameraPerspective.LowAngle
+                : CameraPerspective.Map;
+
+            if (_followActive && _camera != null)
+            {
+                _camera.transform.position = DesiredCameraPosition(_focus);
+                _camera.transform.LookAt(_focus, Vector3.up);
+            }
+        }
+
         private void OnGUI()
         {
-            if (!Application.isPlaying || !followWithCamera || !_panned) return;
+            if (!Application.isPlaying || !followWithCamera) return;
 
-            const float w = 130f, h = 46f, margin = 24f;
-            var rect = new Rect(Screen.width - w - margin, Screen.height - h - margin, w, h);
-
+            const float w = 140f, h = 46f, margin = 24f, gap = 10f;
             var prev = GUI.skin.button.fontSize;
             GUI.skin.button.fontSize = 18;
-            if (GUI.Button(rect, "Center")) RecenterOnPlayer();
+
+            // Bottom-right: perspective toggle (always visible while following).
+            float bottom = Screen.height - h - margin;
+            var viewRect = new Rect(Screen.width - w - margin, bottom, w, h);
+            string viewLabel = perspective == CameraPerspective.Map ? "Route View" : "Map View";
+            if (GUI.Button(viewRect, viewLabel)) TogglePerspective();
+
+            // Above it when the user has panned away: re-center on the pin.
+            if (_panned)
+            {
+                var centerRect = new Rect(Screen.width - w - margin, bottom - h - gap, w, h);
+                if (GUI.Button(centerRect, "Center")) RecenterOnPlayer();
+            }
+
             GUI.skin.button.fontSize = prev;
         }
 
@@ -579,13 +710,75 @@ namespace RoutesToGlory.Game
         }
 
         // Near the georeference origin the local frame is axis-aligned: +Y is up,
-        // +Z is north. So "overhead, trailing south" = up * height - north * distance,
-        // scaled by the current zoom so the angle stays constant as you zoom (Google-Maps style).
+        // +X east, +Z north. Both perspectives trail behind the player's travel
+        // heading (chase cam), not a fixed south offset.
         private Vector3 DesiredCameraPosition(Vector3 target)
         {
-            return target
-                + Vector3.up * (followHeightMeters * _zoom)
-                - Vector3.forward * (followDistanceMeters * _zoom);
+            float zoom = _zoom;
+            Vector3 behind = -TravelDirectionXZ() * (TrailDistanceMeters(zoom));
+
+            if (perspective == CameraPerspective.Map)
+            {
+                return target + Vector3.up * (followHeightMeters * zoom) + behind;
+            }
+
+            float trail = perspectiveTrailMeters * zoom;
+            float height = trail * Mathf.Tan(perspectiveElevationDegrees * Mathf.Deg2Rad);
+            return target + Vector3.up * height + behind;
+        }
+
+        private float TrailDistanceMeters(float zoom)
+        {
+            return perspective == CameraPerspective.Map
+                ? followDistanceMeters * zoom
+                : perspectiveTrailMeters * zoom;
+        }
+
+        /// <summary>Unit vector on the ground plane pointing where the player is moving.</summary>
+        private Vector3 TravelDirectionXZ()
+        {
+            float sin = Mathf.Sin(_travelHeadingRad);
+            float cos = Mathf.Cos(_travelHeadingRad);
+            return new Vector3(sin, 0f, cos);
+        }
+
+        private void UpdateTravelHeading()
+        {
+            if (_marker == null) return;
+
+            Vector3 pos = _marker.position;
+            if (!_hasHeadingSample)
+            {
+                _lastHeadingSamplePos = pos;
+                _hasHeadingSample = true;
+                return;
+            }
+
+            Vector3 delta = pos - _lastHeadingSamplePos;
+            delta.y = 0f;
+            if (delta.sqrMagnitude < minHeadingMoveMeters * minHeadingMoveMeters)
+                return;
+
+            float targetHeading = Mathf.Atan2(delta.x, delta.z);
+            _lastHeadingSamplePos = pos;
+
+            if (headingSmoothing > 0f)
+            {
+                float t = 1f - Mathf.Exp(-headingSmoothing * Time.deltaTime);
+                float curDeg = _travelHeadingRad * Mathf.Rad2Deg;
+                float tgtDeg = targetHeading * Mathf.Rad2Deg;
+                _travelHeadingRad = Mathf.LerpAngle(curDeg, tgtDeg, t) * Mathf.Deg2Rad;
+            }
+            else
+            {
+                _travelHeadingRad = targetHeading;
+            }
+        }
+
+        private float EffectiveFollowHeight()
+        {
+            if (perspective == CameraPerspective.Map) return followHeightMeters;
+            return perspectiveTrailMeters * Mathf.Tan(perspectiveElevationDegrees * Mathf.Deg2Rad);
         }
 
         private void UpdateZoom()
@@ -624,6 +817,7 @@ namespace RoutesToGlory.Game
                 _panned = false;
                 _focusTarget = _marker.position;
                 _focus = _focusTarget;
+                _hasHeadingSample = false;
                 _camera.transform.position = DesiredCameraPosition(_focus);
                 _camera.transform.LookAt(_focus, Vector3.up);
             }

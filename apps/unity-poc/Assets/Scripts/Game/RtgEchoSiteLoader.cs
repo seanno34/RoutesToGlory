@@ -31,6 +31,9 @@ namespace RoutesToGlory.Game
         [Tooltip("World id (UUID) to load when dataSource = LiveApi")]
         public string worldId = "";
 
+        [Tooltip("Empire id (UUID) for the player; used by route sessions. Set by '6b. Connect Echo Sites to Live API'.")]
+        public string empireId = "";
+
         [Tooltip("File under Assets/StreamingAssets/ to load when dataSource = SampleFile")]
         public string sampleFileName = "sample-world-map.json";
 
@@ -53,7 +56,24 @@ namespace RoutesToGlory.Game
         [Tooltip("Load automatically when entering Play mode.")]
         public bool loadOnPlay = true;
 
+        [Header("Tap-to-connect test layout")]
+        [Tooltip("Offset nearby markers off the tour corridor so you can test tap-claim (near) and reject (far).")]
+        public bool scatterForTapTest = true;
+
+        [Tooltip("Only scatter items within this radius of the play center (Douglas). Far metro sites stay put.")]
+        public float scatterRadiusMeters = 8000f;
+
+        public double scatterCenterLat = 42.7597;
+        public double scatterCenterLng = -105.3819;
+
+        [Tooltip("East offset (m) for 'near' markers — should be within minConnectDistanceM of the corridor.")]
+        public float nearTapOffsetM = 450f;
+
+        [Tooltip("East offset (m) for 'far' markers — should exceed minConnectDistanceM from the corridor.")]
+        public float farTapOffsetM = 1800f;
+
         private const string MarkerContainerName = "Markers";
+        private int _scatterIndex;
 
         /// <summary>
         /// The most recently loaded/parsed world map, or null before the first load.
@@ -134,6 +154,7 @@ namespace RoutesToGlory.Game
 
             LastMap = map;
             Transform container = ResetContainer();
+            _scatterIndex = 0;
             int settlements = 0, resources = 0;
 
             if (map.settlements != null)
@@ -176,10 +197,15 @@ namespace RoutesToGlory.Game
             Color color = AlignmentColor(s.alignment, s.is_goodie_hut != 0);
             float diameter = TierDiameter(s.tier);
 
+            double lat = s.lat, lng = s.lng;
+            string tapTag = ApplyTapTestScatter(ref lat, ref lng);
+
             GameObject root = CreateMarkerRoot($"Echo Site — {s.name} ({s.tier})", container);
             AddVisual(root.transform, PrimitiveType.Sphere, color, Vector3.one * diameter, Quaternion.identity);
-            AddLabel(root.transform, $"{s.name}\n{TierLabel(s.tier)} · {s.alignment}", diameter);
-            AnchorAt(root, s.lng, s.lat, groundHeightMeters + settlementFloatHeight);
+            AddLabel(root.transform, $"{s.name}\n{TierLabel(s.tier)} · {s.alignment}{tapTag}", diameter);
+            AnchorAt(root, lng, lat, groundHeightMeters + settlementFloatHeight);
+            root.AddComponent<RtgMapMarker>().Configure(
+                RtgMapMarker.Kind.Settlement, s.id, s.name, s.tier, lat, lng);
         }
 
         private void SpawnResource(RtgResourceNode r, Transform container)
@@ -187,11 +213,67 @@ namespace RoutesToGlory.Game
             Color color = ResourceColor(r.resource_id);
             float size = RichnessSize(r.richness);
 
+            double lat = r.lat, lng = r.lng;
+            string tapTag = ApplyTapTestScatter(ref lat, ref lng);
+
             GameObject root = CreateMarkerRoot($"Resource — {r.resource_id} ({r.richness})", container);
-            // Cube tilted into a "crystal" so resource nodes read differently from sites.
             AddVisual(root.transform, PrimitiveType.Cube, color, Vector3.one * size, Quaternion.Euler(45f, 45f, 0f));
-            AddLabel(root.transform, $"{ResourceName(r.resource_id)}\n{r.richness}", size);
-            AnchorAt(root, r.lng, r.lat, groundHeightMeters + resourceFloatHeight);
+            AddLabel(root.transform, $"{ResourceName(r.resource_id)}\n{r.richness}{tapTag}", size);
+            AnchorAt(root, lng, lat, groundHeightMeters + resourceFloatHeight);
+            root.AddComponent<RtgMapMarker>().Configure(
+                RtgMapMarker.Kind.Resource, r.id, ResourceName(r.resource_id), r.richness, lat, lng);
+        }
+
+        /// <summary>
+        /// Cycles markers into on-corridor / near / far buckets for tap-to-connect testing.
+        /// Returns a short label suffix.
+        /// </summary>
+        private string ApplyTapTestScatter(ref double lat, ref double lng)
+        {
+            if (!scatterForTapTest) return "";
+
+            double dist = HaversineM(scatterCenterLat, scatterCenterLng, lat, lng);
+            if (dist > scatterRadiusMeters)
+            {
+                _scatterIndex++;
+                return "";
+            }
+
+            int bucket = _scatterIndex % 3;
+            _scatterIndex++;
+
+            double eastM = bucket switch
+            {
+                1 => nearTapOffsetM,
+                2 => farTapOffsetM,
+                _ => 0,
+            };
+
+            if (eastM > 0)
+            {
+                double lngM = 111_320.0 * System.Math.Cos(lat * System.Math.PI / 180.0);
+                lng += eastM / lngM;
+            }
+
+            return bucket switch
+            {
+                0 => "\n◎ tap: map",
+                1 => "\n◎ tap: near",
+                2 => "\n✕ tap: far",
+                _ => "",
+            };
+        }
+
+        private static double HaversineM(double lat1, double lng1, double lat2, double lng2)
+        {
+            const double R = 6_371_000;
+            double ToRad(double d) => d * System.Math.PI / 180.0;
+            double dLat = ToRad(lat2 - lat1);
+            double dLng = ToRad(lng2 - lng1);
+            double a = System.Math.Sin(dLat / 2) * System.Math.Sin(dLat / 2) +
+                       System.Math.Cos(ToRad(lat1)) * System.Math.Cos(ToRad(lat2)) *
+                       System.Math.Sin(dLng / 2) * System.Math.Sin(dLng / 2);
+            return 2 * R * System.Math.Asin(System.Math.Sqrt(a));
         }
 
         // ------------------------------------------------------------------ //
@@ -215,10 +297,7 @@ namespace RoutesToGlory.Game
             GameObject go = GameObject.CreatePrimitive(shape);
             go.name = "Beacon";
 
-            // No physics on visual-only beacons.
-            Collider col = go.GetComponent<Collider>();
-            if (col != null) DestroyObject(col);
-
+            // Keep the primitive collider so tap raycasts can hit markers.
             go.transform.SetParent(root, false);
             go.transform.localRotation = localRotation;
             go.transform.localScale = scale;
