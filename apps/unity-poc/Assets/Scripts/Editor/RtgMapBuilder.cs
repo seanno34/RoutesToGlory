@@ -272,6 +272,57 @@ namespace RoutesToGlory.EditorTools
                 "or tick 'Follow With Camera' to chase it. Save with Cmd+S.");
         }
 
+        [MenuItem("Routes to Glory/8b. Sync Player Ship Art", priority = 29)]
+        public static void SyncPlayerShipArt()
+        {
+            // Assets/ → unity-poc/ → apps/ → images/ (sibling of unity-poc)
+            string srcDir = Path.GetFullPath(Path.Combine(Application.dataPath, "../../images"));
+            string dstDir = Path.Combine(Application.dataPath, "Resources/RTG_PlayerShip");
+
+            if (!Directory.Exists(srcDir))
+            {
+                Debug.LogError($"[RTG] Source folder not found: {srcDir}");
+                return;
+            }
+
+            Directory.CreateDirectory(dstDir);
+            int copied = 0;
+
+            foreach (string srcPath in Directory.GetFiles(srcDir, "glider_*.png"))
+            {
+                string fileName = Path.GetFileName(srcPath);
+                File.Copy(srcPath, Path.Combine(dstDir, fileName), overwrite: true);
+                copied++;
+            }
+
+            if (copied == 0)
+            {
+                Debug.LogWarning(
+                    $"[RTG] No glider_*.png files in {srcDir}. Add concept art to apps/images/ first.");
+                return;
+            }
+
+            AssetDatabase.Refresh();
+
+            Material shipMat = AssetDatabase.LoadAssetAtPath<Material>(
+                "Assets/Resources/RTG_PlayerShip/PlayerShip.mat");
+            if (shipMat == null || shipMat.shader == null)
+            {
+                Debug.LogError(
+                    "[RTG] PlayerShip.mat is missing or has no shader. " +
+                    "It must live at Assets/Resources/RTG_PlayerShip/PlayerShip.mat " +
+                    "and reference RoutesToGlory/PlayerShipSprite.");
+            }
+
+            RtgPlayerLocation player = FindByName<RtgPlayerLocation>(PlayerName);
+            if (player != null)
+                player.RefreshMarkerVisual();
+
+            Debug.Log(
+                $"[RTG] Synced {copied} glider image(s) to Resources/RTG_PlayerShip. " +
+                "Map and Route views both use glider_01 (top-down). Re-export to Xcode after changes.");
+        }
+
         [MenuItem("Routes to Glory/9. Reset Dev World (routes + claims)", priority = 30)]
         public static void ResetDevWorldProgress()
         {

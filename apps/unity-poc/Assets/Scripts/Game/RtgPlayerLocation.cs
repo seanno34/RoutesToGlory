@@ -28,6 +28,21 @@ namespace RoutesToGlory.Game
         // and back — for terrain / fog / tap-claim testing.
         public enum RouteMode { FixedLoop, TourNearbySites, HomeToCasper }
 
+        public enum PlayerMarkerStyle { SpaceshipSprite, GoldPin }
+
+        [Header("Player ship")]
+        [Tooltip("SpaceshipSprite uses concept art from Resources/RTG_PlayerShip/. GoldPin is the legacy sphere.")]
+        public PlayerMarkerStyle markerStyle = PlayerMarkerStyle.SpaceshipSprite;
+
+        [Tooltip("Optional override. If unset, loads Resources/RTG_PlayerShip/glider_01.")]
+        public Texture2D shipTexture;
+
+        [Tooltip("Wingspan of the top-down ship sprite in meters.")]
+        public float shipSizeMeters = 24f;
+
+        [Tooltip("Tune if the ship nose points backward (180 = flip).")]
+        public float shipHeadingOffsetDegrees = 0f;
+
         [Header("Source")]
         public LocationSource source = LocationSource.SimulatedRoute;
 
@@ -168,6 +183,7 @@ namespace RoutesToGlory.Game
         private RtgRouteSession _routeSession;
         private RtgCesiumCreditsToggle _creditsToggle;
         private RtgTerrainHeight _terrainHeight;
+        private RtgPlayerShipVisual _shipVisual;
 
         private Camera _camera;
         private CesiumCameraController _cameraController;
@@ -183,6 +199,7 @@ namespace RoutesToGlory.Game
         private void Start()
         {
             EnsureMarker();
+            RefreshMarkerVisual();
             EnsureTerrainHeight();
             EnsureLightRoad();
             EnsureRouteSession();
@@ -253,6 +270,12 @@ namespace RoutesToGlory.Game
 
         private void LateUpdate()
         {
+            if (_marker != null)
+            {
+                UpdateTravelHeading();
+                UpdateShipHeading();
+            }
+
             UpdateCameraFollow();
         }
 
@@ -264,6 +287,7 @@ namespace RoutesToGlory.Game
         public void EditorPlaceAtStart()
         {
             EnsureMarker();
+            RefreshMarkerVisual();
 
             // Tour mode's full route is built at Play time from the loaded sites, so in
             // the editor just drop the pin at the tour center for a sensible preview.
@@ -459,7 +483,8 @@ namespace RoutesToGlory.Game
         {
             if (_marker != null)
             {
-                _markerAnchor = _marker.GetComponent<CesiumGlobeAnchor>();
+                if (_markerAnchor == null)
+                    _markerAnchor = _marker.GetComponent<CesiumGlobeAnchor>();
                 return;
             }
 
@@ -478,8 +503,33 @@ namespace RoutesToGlory.Game
             Transform staleLabel = root.transform.Find("Label");
             if (staleLabel != null) DestroyImmediateSafe(staleLabel.gameObject);
 
-            if (root.transform.Find("Beacon") == null)
+            if (root.transform.Find("Beacon") == null && root.transform.Find("Ship") == null)
                 BuildMarkerVisual(root.transform);
+        }
+
+        /// <summary>Rebuild pin/ship from current marker style and texture.</summary>
+        public void RefreshMarkerVisual()
+        {
+            if (_marker == null) return;
+            SyncMarkerVisual(_marker);
+        }
+
+        private void SyncMarkerVisual(Transform root)
+        {
+            Transform beacon = root.Find("Beacon");
+            Transform ship = root.Find("Ship");
+
+            if (markerStyle == PlayerMarkerStyle.SpaceshipSprite)
+            {
+                if (beacon != null) DestroyImmediateSafe(beacon.gameObject);
+                BuildShipVisual(root);
+                return;
+            }
+
+            if (ship != null) DestroyImmediateSafe(ship.gameObject);
+            _shipVisual = null;
+            if (beacon != null) DestroyImmediateSafe(beacon.gameObject);
+            BuildGoldPinVisual(root);
         }
 
         private void EnsureLightRoad()
@@ -566,6 +616,46 @@ namespace RoutesToGlory.Game
 
         private void BuildMarkerVisual(Transform root)
         {
+            if (markerStyle == PlayerMarkerStyle.SpaceshipSprite)
+                BuildShipVisual(root);
+            else
+                BuildGoldPinVisual(root);
+        }
+
+        private void BuildShipVisual(Transform root)
+        {
+            Transform existingShip = root.Find("Ship");
+            if (existingShip != null) DestroyImmediateSafe(existingShip.gameObject);
+            _shipVisual = null;
+
+            Texture2D tex = ResolveShipTexture();
+            if (tex == null)
+            {
+                Debug.LogWarning(
+                    "[RTG] Ship texture missing — falling back to gold pin. " +
+                    "Run Routes to Glory → 8b. Sync Player Ship Art.");
+                BuildGoldPinVisual(root);
+                return;
+            }
+
+            var shipGo = new GameObject("Ship");
+            shipGo.transform.SetParent(root, false);
+            _shipVisual = shipGo.AddComponent<RtgPlayerShipVisual>();
+            _shipVisual.Configure(tex, shipSizeMeters, shipHeadingOffsetDegrees);
+
+            if (!_shipVisual.IsReady)
+            {
+                Debug.LogWarning("[RTG] Ship visual failed — falling back to gold pin.");
+                DestroyImmediateSafe(shipGo);
+                _shipVisual = null;
+                BuildGoldPinVisual(root);
+            }
+        }
+
+        private void BuildGoldPinVisual(Transform root)
+        {
+            Transform existingBeacon = root.Find("Beacon");
+            if (existingBeacon != null) DestroyImmediateSafe(existingBeacon.gameObject);
             Color playerColor = new Color(1.0f, 0.92f, 0.45f); // bright gold — clearly "you"
 
             _markerMaterial = new Material(Shader.Find("Universal Render Pipeline/Lit"))
@@ -581,6 +671,21 @@ namespace RoutesToGlory.Game
                 "Beacon", RtgMeshPrimitives.Sphere, _markerMaterial, root);
             beacon.transform.localScale = new Vector3(10f, 18f, 10f);
         }
+
+        private Texture2D ResolveShipTexture()
+        {
+            if (shipTexture != null) return shipTexture;
+            return Resources.Load<Texture2D>("RTG_PlayerShip/glider_01");
+        }
+
+        private void UpdateShipHeading()
+        {
+            if (_shipVisual == null) return;
+            _shipVisual.SetHeadingRadians(_travelHeadingRad);
+        }
+
+        /// <summary>Travel direction on the ground plane (+Z = north). Radians.</summary>
+        public float TravelHeadingRadians => _travelHeadingRad;
 
         // ------------------------------------------------------------------ //
         // Public focus queries (fog sheet, tap-connect, etc.)
@@ -649,7 +754,6 @@ namespace RoutesToGlory.Game
 
             if (!_followActive) SetFollowActive(true);
 
-            UpdateTravelHeading();
             UpdateZoom();
             SmoothZoom();
             HandlePanInput();
@@ -692,10 +796,16 @@ namespace RoutesToGlory.Game
                 return;
             }
 
-            if (isDown && _wasPointerDown)
+            // New press — anchor pointer so the first drag frame doesn't jump from (0,0).
+            if (isDown && !_wasPointerDown)
+            {
+                _lastPointer = pos;
+            }
+            else if (isDown && _wasPointerDown)
             {
                 Vector2 delta = pos - _lastPointer;
-                if (delta.sqrMagnitude > 4f)
+                const float minPanPixels = 14f;
+                if (delta.sqrMagnitude > minPanPixels * minPanPixels)
                 {
                     _panned = true;
 

@@ -10,9 +10,15 @@ namespace RoutesToGlory.Game
     {
         private static Mesh _sphere;
         private static Mesh _cube;
+        private static Mesh _groundQuad;
+        private static Mesh _verticalQuad;
 
         public static Mesh Sphere => _sphere ??= BuildUvSphere(18, 12);
         public static Mesh Cube => _cube ??= BuildCube();
+        /// <summary>Horizontal quad on the XZ plane (normal +Y). UV top = +Z (nose).</summary>
+        public static Mesh GroundQuad => _groundQuad ??= BuildGroundQuad();
+        /// <summary>Vertical quad on the XY plane (normal +Z). UV top = +Y.</summary>
+        public static Mesh VerticalQuad => _verticalQuad ??= BuildVerticalQuad();
 
         public static GameObject CreateMeshObject(string name, Mesh mesh, Material material, Transform parent)
         {
@@ -28,6 +34,58 @@ namespace RoutesToGlory.Game
             renderer.receiveShadows = false;
 
             return go;
+        }
+
+        private static Mesh BuildGroundQuad()
+        {
+            var mesh = new Mesh { name = "RTG_GroundQuad" };
+            mesh.vertices = new[]
+            {
+                new Vector3(-0.5f, 0f, -0.5f),
+                new Vector3(0.5f, 0f, -0.5f),
+                new Vector3(-0.5f, 0f, 0.5f),
+                new Vector3(0.5f, 0f, 0.5f),
+            };
+            mesh.uv = new[]
+            {
+                new Vector2(0f, 0f),
+                new Vector2(1f, 0f),
+                new Vector2(0f, 1f),
+                new Vector2(1f, 1f),
+            };
+            mesh.normals = new[]
+            {
+                Vector3.up, Vector3.up, Vector3.up, Vector3.up,
+            };
+            mesh.triangles = new[] { 0, 2, 1, 2, 3, 1 };
+            mesh.RecalculateBounds();
+            return mesh;
+        }
+
+        private static Mesh BuildVerticalQuad()
+        {
+            var mesh = new Mesh { name = "RTG_VerticalQuad" };
+            mesh.vertices = new[]
+            {
+                new Vector3(-0.5f, -0.5f, 0f),
+                new Vector3(0.5f, -0.5f, 0f),
+                new Vector3(-0.5f, 0.5f, 0f),
+                new Vector3(0.5f, 0.5f, 0f),
+            };
+            mesh.uv = new[]
+            {
+                new Vector2(0f, 0f),
+                new Vector2(1f, 0f),
+                new Vector2(0f, 1f),
+                new Vector2(1f, 1f),
+            };
+            mesh.normals = new[]
+            {
+                Vector3.forward, Vector3.forward, Vector3.forward, Vector3.forward,
+            };
+            mesh.triangles = new[] { 0, 2, 1, 2, 3, 1 };
+            mesh.RecalculateBounds();
+            return mesh;
         }
 
         private static Mesh BuildCube()
