@@ -55,6 +55,18 @@ namespace RoutesToGlory.Game
         [Tooltip("Travel speed for the 'tour nearby sites' loop (m/s). Higher = quicker sight-seeing across the whole area.")]
         public float tourSpeed = 90f;
 
+        [Header("Throttle (runtime UI)")]
+        [Tooltip("Lowest multiplier on the in-game throttle lever.")]
+        [Min(0.01f)]
+        public float minSpeedThrottle = 0.25f;
+
+        [Tooltip("Highest multiplier on the in-game throttle lever.")]
+        [Min(0.02f)]
+        public float maxSpeedThrottle = 4f;
+
+        [Tooltip("Starting throttle multiplier. Clamped between min and max.")]
+        public float speedThrottle = 1f;
+
         [Tooltip("Looping real-world route for FixedLoop mode. Defaults to a loop around Douglas, WY if empty.")]
         public RtgWaypoint[] route;
 
@@ -175,6 +187,8 @@ namespace RoutesToGlory.Game
         private bool _wasPointerDown;
 
         private IRtgLocationProvider _provider;
+        private RtgWaypoint[] _cachedSimulatedWaypoints;
+        private Coroutine _tourCoroutine;
         private Transform _marker;
         private CesiumGlobeAnchor _markerAnchor;
         private Material _markerMaterial;
@@ -198,6 +212,7 @@ namespace RoutesToGlory.Game
 
         private void Start()
         {
+            ClampSpeedThrottle();
             EnsureMarker();
             RefreshMarkerVisual();
             EnsureTerrainHeight();
@@ -218,26 +233,16 @@ namespace RoutesToGlory.Game
             // The tour route depends on the Echo Sites, which may still be loading
             // (async in Play mode for live data), so build it in a coroutine that
             // waits for them. Everything else starts a provider immediately.
-            if (source == LocationSource.SimulatedRoute && routeMode == RouteMode.TourNearbySites)
-            {
-                StartCoroutine(BeginTourWhenSitesReady());
-            }
-            else
-            {
-                _provider = CreateProvider();
-                _provider.Begin();
-                if (routeMode == RouteMode.HomeToCasper)
-                {
-                    RtgWaypoint[] road = HomeToCasperRoute();
-                    Debug.Log(
-                        $"[RTG] Home ↔ Casper test drive at {homeTestSpeedMph:0} mph " +
-                        $"({MphToMps(homeTestSpeedMph):0.#} m/s), {road.Length} OSRM road points.");
-                }
-            }
+            BeginLocationProvider();
         }
 
         private void OnDisable()
         {
+            if (_tourCoroutine != null)
+            {
+                StopCoroutine(_tourCoroutine);
+                _tourCoroutine = null;
+            }
             _provider?.End();
         }
 
@@ -316,9 +321,117 @@ namespace RoutesToGlory.Game
                 return new RtgDeviceLocationProvider();
 
             if (routeMode == RouteMode.HomeToCasper)
-                return new RtgSimulatedLocationProvider(HomeToCasperRoute(), MphToMps(homeTestSpeedMph));
+                return new RtgSimulatedLocationProvider(HomeToCasperRoute(), EffectiveSimulatedSpeed());
 
-            return new RtgSimulatedLocationProvider(ResolveRoute(), simulatedSpeed);
+            if (routeMode == RouteMode.TourNearbySites
+                && _cachedSimulatedWaypoints != null
+                && _cachedSimulatedWaypoints.Length >= 2)
+            {
+                return new RtgSimulatedLocationProvider(_cachedSimulatedWaypoints, EffectiveSimulatedSpeed());
+            }
+
+            return new RtgSimulatedLocationProvider(ResolveRoute(), EffectiveSimulatedSpeed());
+        }
+
+        private float EffectiveSimulatedSpeed()
+        {
+            return MphToMps(EffectiveSimulatedSpeedMph());
+        }
+
+        private float BaseSimulatedSpeedMph()
+        {
+            return routeMode switch
+            {
+                RouteMode.HomeToCasper => homeTestSpeedMph,
+                RouteMode.TourNearbySites => MpsToMph(tourSpeed),
+                _ => MpsToMph(simulatedSpeed),
+            };
+        }
+
+        private void OnValidate()
+        {
+            if (maxSpeedThrottle < minSpeedThrottle + 0.01f)
+                maxSpeedThrottle = minSpeedThrottle + 0.01f;
+            speedThrottle = Mathf.Clamp(speedThrottle, minSpeedThrottle, maxSpeedThrottle);
+        }
+
+        private void ClampSpeedThrottle()
+        {
+            float min = Mathf.Max(0.01f, minSpeedThrottle);
+            float max = Mathf.Max(min + 0.01f, maxSpeedThrottle);
+            minSpeedThrottle = min;
+            maxSpeedThrottle = max;
+            speedThrottle = Mathf.Clamp(speedThrottle, min, max);
+        }
+
+        private float EffectiveSimulatedSpeedMph()
+        {
+            return BaseSimulatedSpeedMph() * speedThrottle;
+        }
+
+        private static float MpsToMph(float mps) => mps * 3600f / 1609.344f;
+
+        private void ApplyThrottleToProvider()
+        {
+            if (_provider is RtgSimulatedLocationProvider sim)
+                sim.SpeedMetersPerSecond = EffectiveSimulatedSpeed();
+        }
+
+        private void BeginLocationProvider()
+        {
+            if (source == LocationSource.SimulatedRoute && routeMode == RouteMode.TourNearbySites
+                && (_cachedSimulatedWaypoints == null || _cachedSimulatedWaypoints.Length < 2))
+            {
+                if (_tourCoroutine != null)
+                    StopCoroutine(_tourCoroutine);
+                _tourCoroutine = StartCoroutine(BeginTourWhenSitesReady());
+                return;
+            }
+
+            _provider = CreateProvider();
+            _provider.Begin();
+
+            if (source == LocationSource.SimulatedRoute && routeMode == RouteMode.HomeToCasper)
+            {
+                Debug.Log(
+                    $"[RTG] Home ↔ Casper test drive at {FormatSpeedLabel()} " +
+                    $"({EffectiveSimulatedSpeed():0.#} m/s), {HomeToCasperRoute().Length} OSRM road points.");
+            }
+        }
+
+        private void ToggleLocationSource()
+        {
+            LocationSource next = source == LocationSource.DeviceGps
+                ? LocationSource.SimulatedRoute
+                : LocationSource.DeviceGps;
+            SetLocationSource(next);
+        }
+
+        private void SetLocationSource(LocationSource newSource)
+        {
+            if (source == newSource && _provider != null) return;
+
+            if (_tourCoroutine != null)
+            {
+                StopCoroutine(_tourCoroutine);
+                _tourCoroutine = null;
+            }
+
+            _provider?.End();
+            _provider = null;
+            source = newSource;
+
+            if (_lightRoad != null)
+            {
+                _lightRoad.ClearRoad();
+                _roadStarted = false;
+            }
+
+            _hasHeadingSample = false;
+            _panned = false;
+
+            BeginLocationProvider();
+            Debug.Log($"[RTG] Location source → {(newSource == LocationSource.DeviceGps ? "GPS" : "Plan Route")}.");
         }
 
         private RtgWaypoint[] ResolveRoute()
@@ -412,8 +525,10 @@ namespace RoutesToGlory.Game
                     : $"[RTG] Following corridor loop ({tour.Length} waypoints) — beacons are offset for tap testing.");
             }
 
-            _provider = new RtgSimulatedLocationProvider(tour, tourSpeed);
+            _cachedSimulatedWaypoints = tour;
+            _provider = new RtgSimulatedLocationProvider(tour, EffectiveSimulatedSpeed());
             _provider.Begin();
+            _tourCoroutine = null;
         }
 
         // Collect every settlement + resource within tourRadius of the center, order
@@ -885,18 +1000,17 @@ namespace RoutesToGlory.Game
 
             _gameUiRects.Clear();
 
-            if (source == LocationSource.SimulatedRoute && routeMode == RouteMode.HomeToCasper)
-                DrawRestartRouteButton();
-
-            if (!followWithCamera) return;
-
-            // 2× size for on-device testing; stacked center-right for one-handed reach.
             const float margin = 24f;
             const float gap = 12f;
             const float zoomW = 144f;
             const float zoomH = 92f;
             const float wideW = 280f;
             const float wideH = 92f;
+
+            DrawMovementControls();
+
+            if (source == LocationSource.SimulatedRoute && routeMode == RouteMode.HomeToCasper)
+                DrawRestartRouteButton();
 
             var prev = GUI.skin.button.fontSize;
             GUI.skin.button.fontSize = 28;
@@ -907,33 +1021,205 @@ namespace RoutesToGlory.Game
 
             var zoomInRect = new Rect(right, midY - zoomH - gap * 0.5f, zoomW, zoomH);
             var zoomOutRect = new Rect(right, midY + gap * 0.5f, zoomW, zoomH);
-            var viewRect = new Rect(wideRight, zoomInRect.yMin - gap - wideH, wideW, wideH);
-            Rect centerRect = default;
-            if (_panned)
-                centerRect = new Rect(wideRight, viewRect.yMin - gap - wideH, wideW, wideH);
 
-            if (_panned && GUI.Button(centerRect, "Center")) RecenterOnPlayer();
+            if (followWithCamera)
+            {
+                var viewRect = new Rect(wideRight, zoomInRect.yMin - gap - wideH, wideW, wideH);
+                Rect centerRect = default;
+                if (_panned)
+                    centerRect = new Rect(wideRight, viewRect.yMin - gap - wideH, wideW, wideH);
 
-            string viewLabel = perspective == CameraPerspective.Map ? "Route View" : "Map View";
-            if (GUI.Button(viewRect, viewLabel)) TogglePerspective();
+                if (_panned && GUI.Button(centerRect, "Center")) RecenterOnPlayer();
 
-            if (GUI.Button(zoomInRect, "+")) { _zoomTarget = Mathf.Clamp(_zoomTarget / 1.35f, minZoom, maxZoom); }
-            if (GUI.Button(zoomOutRect, "−")) { _zoomTarget = Mathf.Clamp(_zoomTarget * 1.35f, minZoom, maxZoom); }
+                string viewLabel = perspective == CameraPerspective.Map ? "Route View" : "Map View";
+                if (GUI.Button(viewRect, viewLabel)) TogglePerspective();
+
+                if (GUI.Button(zoomInRect, "+"))
+                    _zoomTarget = Mathf.Clamp(_zoomTarget / 1.35f, minZoom, maxZoom);
+                if (GUI.Button(zoomOutRect, "−"))
+                    _zoomTarget = Mathf.Clamp(_zoomTarget * 1.35f, minZoom, maxZoom);
+
+                if (_panned) _gameUiRects.Add(centerRect);
+                _gameUiRects.Add(viewRect);
+            }
+
+            if (source == LocationSource.SimulatedRoute)
+            {
+                float throttleTop = followWithCamera
+                    ? zoomOutRect.yMax + gap
+                    : midY + zoomH + gap;
+                DrawThrottleLever(right, throttleTop, zoomW);
+            }
+
+            if (followWithCamera)
+            {
+                _gameUiRects.Add(zoomInRect);
+                _gameUiRects.Add(zoomOutRect);
+            }
 
             const float infoSize = 92f;
             var infoRect = new Rect(margin, Screen.height - margin - infoSize, infoSize, infoSize);
             if (GUI.Button(infoRect, _creditsToggle != null && _creditsToggle.IsVisible ? "×" : "i"))
-            {
                 _creditsToggle?.Toggle();
-            }
             _gameUiRects.Add(infoRect);
 
-            if (_panned) _gameUiRects.Add(centerRect);
-            _gameUiRects.Add(viewRect);
-            _gameUiRects.Add(zoomInRect);
-            _gameUiRects.Add(zoomOutRect);
-
             GUI.skin.button.fontSize = prev;
+        }
+
+        private void DrawMovementControls()
+        {
+            const float margin = 24f;
+            const float gap = 12f;
+            const float wideW = 280f;
+            const float btnH = 92f;
+
+            float infoTop = Screen.height - margin - 92f;
+            float sourceY = infoTop - gap - btnH;
+
+            var prevFont = GUI.skin.button.fontSize;
+            GUI.skin.button.fontSize = 28;
+
+            string sourceLabel = source == LocationSource.DeviceGps ? "GPS" : "Plan Route";
+            var sourceRect = new Rect(margin, sourceY, wideW, btnH);
+            if (GUI.Button(sourceRect, sourceLabel))
+                ToggleLocationSource();
+            _gameUiRects.Add(sourceRect);
+
+            GUI.skin.button.fontSize = prevFont;
+        }
+
+        private static GUIStyle BrightLabel(int fontSize, Color color, FontStyle fontStyle = FontStyle.Normal)
+        {
+            return new GUIStyle(GUI.skin.label)
+            {
+                alignment = TextAnchor.MiddleCenter,
+                fontSize = fontSize,
+                fontStyle = fontStyle,
+                clipping = TextClipping.Clip,
+                wordWrap = false,
+                normal = { textColor = color },
+                hover = { textColor = color },
+                active = { textColor = color },
+                focused = { textColor = color },
+            };
+        }
+
+        private void DrawThrottleLever(float panelX, float panelY, float panelW)
+        {
+            float minThrottle = Mathf.Max(0.01f, minSpeedThrottle);
+            float maxThrottle = Mathf.Max(minThrottle + 0.01f, maxSpeedThrottle);
+            const float desiredPanelH = 520f;
+            const float margin = 24f;
+
+            float width = Mathf.Max(panelW, 168f);
+            float availableH = Screen.height - margin - panelY;
+            float panelH = Mathf.Min(desiredPanelH, availableH);
+            const float headerH = 80f;
+            float footerH = Mathf.Max(96f, panelH * 0.22f);
+            var panelRect = new Rect(panelX - (width - panelW), panelY, width, panelH);
+            _gameUiRects.Add(panelRect);
+
+            Color prevColor = GUI.color;
+            var prevLabel = GUI.skin.label.fontSize;
+
+            GUI.color = new Color(0.06f, 0.09f, 0.18f, 0.94f);
+            GUI.Box(panelRect, GUIContent.none);
+
+            Color titleColor = new Color(0.97f, 0.99f, 1f);
+            Color subColor = new Color(0.93f, 0.97f, 1f);
+            Color tierColor = Color.Lerp(new Color(0.98f, 0.99f, 1f), ThrottleGlowColor(speedThrottle), 0.4f);
+            Color mphColor = new Color(0.98f, 1f, 1f);
+
+            var titleStyle = BrightLabel(20, titleColor, FontStyle.Bold);
+            var tierStyle = BrightLabel(22, tierColor, FontStyle.Bold);
+            var speedStyle = BrightLabel(28, mphColor, FontStyle.Bold);
+            var mphRangeStyle = BrightLabel(16, subColor);
+            var cruiseStyle = BrightLabel(17, subColor);
+
+            float baseMph = BaseSimulatedSpeedMph();
+            float minMph = baseMph * minThrottle;
+            float maxMph = baseMph * maxThrottle;
+            float currentMph = EffectiveSimulatedSpeedMph();
+            float footerTop = panelRect.yMax - footerH;
+
+            GUI.Label(new Rect(panelRect.x, panelRect.y + 6f, panelRect.width, 22f), "THROTTLE", titleStyle);
+            GUI.Label(
+                new Rect(panelRect.x, panelRect.y + 26f, panelRect.width, 34f),
+                $"{currentMph:0} MPH",
+                speedStyle);
+
+            var trackRect = new Rect(
+                panelRect.x + 28f,
+                panelRect.y + headerH,
+                48f,
+                panelRect.height - headerH - footerH);
+            GUI.Label(
+                new Rect(panelRect.x + 82f, trackRect.y - 2f, 56f, 24f),
+                $"{maxMph:0}",
+                mphRangeStyle);
+            GUI.Label(
+                new Rect(panelRect.x + 82f, trackRect.yMax - 22f, 56f, 24f),
+                $"{minMph:0}",
+                mphRangeStyle);
+            float fillT = Mathf.InverseLerp(minThrottle, maxThrottle, speedThrottle);
+            float fillH = trackRect.height * fillT;
+            var fillRect = new Rect(trackRect.x + 4f, trackRect.yMax - fillH - 4f, trackRect.width - 8f, fillH);
+
+            GUI.color = new Color(0.12f, 0.18f, 0.28f, 1f);
+            GUI.Box(trackRect, GUIContent.none);
+            GUI.color = ThrottleGlowColor(speedThrottle);
+            GUI.Box(fillRect, GUIContent.none);
+
+            // Bright cap at current power level
+            if (fillH > 6f)
+            {
+                GUI.color = Color.Lerp(ThrottleGlowColor(speedThrottle), Color.white, 0.45f);
+                GUI.Box(new Rect(fillRect.x, fillRect.y - 3f, fillRect.width, 6f), GUIContent.none);
+            }
+
+            GUI.color = Color.white;
+            float newThrottle = GUI.VerticalSlider(trackRect, speedThrottle, minThrottle, maxThrottle);
+            if (!Mathf.Approximately(newThrottle, speedThrottle))
+            {
+                speedThrottle = Mathf.Clamp(newThrottle, minThrottle, maxThrottle);
+                ApplyThrottleToProvider();
+            }
+
+            GUI.Label(
+                new Rect(panelRect.x, footerTop + 8f, panelRect.width, 28f),
+                ThrottleTierLabel(speedThrottle),
+                tierStyle);
+            GUI.Label(
+                new Rect(panelRect.x, footerTop + 38f, panelRect.width, 24f),
+                $"cruise {baseMph:0} · {speedThrottle:0.0}×",
+                cruiseStyle);
+
+            GUI.color = prevColor;
+            GUI.skin.label.fontSize = prevLabel;
+        }
+
+        private static string ThrottleTierLabel(float throttle)
+        {
+            if (throttle >= 2.5f) return "WARP";
+            if (throttle >= 1.5f) return "BURN";
+            if (throttle >= 0.75f) return "FAST";
+            return "CRUISE";
+        }
+
+        private static Color ThrottleGlowColor(float throttle)
+        {
+            if (throttle >= 2.5f) return new Color(1f, 0.35f, 0.95f);
+            if (throttle >= 1.5f) return new Color(1f, 0.55f, 0.2f);
+            if (throttle >= 0.75f) return new Color(0.3f, 0.95f, 1f);
+            return new Color(0.35f, 0.75f, 0.95f);
+        }
+
+        private string FormatSpeedLabel()
+        {
+            if (source == LocationSource.DeviceGps)
+                return _provider != null ? _provider.Status : "GPS";
+
+            return $"{EffectiveSimulatedSpeedMph():0} MPH";
         }
 
         private void RecenterOnPlayer()

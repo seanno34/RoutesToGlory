@@ -44,7 +44,7 @@ namespace RoutesToGlory.Game
         private const double MetersPerDegreeLat = 111320.0;
 
         private readonly RtgWaypoint[] _route;
-        private readonly float _speedMetersPerSecond;
+        private float _speedMetersPerSecond;
 
         private int _segment;
         private double _distanceIntoSegment;
@@ -55,6 +55,12 @@ namespace RoutesToGlory.Game
         {
             _route = route;
             _speedMetersPerSecond = Mathf.Max(0f, speedMetersPerSecond);
+        }
+
+        public float SpeedMetersPerSecond
+        {
+            get => _speedMetersPerSecond;
+            set => _speedMetersPerSecond = Mathf.Max(0f, value);
         }
 
         public string Status => $"Simulated · {_speedMetersPerSecond:0.#} m/s";

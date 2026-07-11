@@ -164,10 +164,10 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 191ec9124dc424b2592dcef99dc2a079, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::RoutesToGlory.Game.RtgPlayerShipVisual
-  texture: {fileID: 2800000, guid: 9594246a662fe4dad82f366f9da3f562, type: 3}
+  texture: {fileID: 0}
   sizeMeters: 42
   headingOffsetDegrees: 0
-  groundClearanceMeters: 0.5
+  groundClearanceMeters: 1
 --- !u!1 &265368706
 GameObject:
   m_ObjectHideFlags: 0
@@ -194,7 +194,7 @@ Transform:
   m_GameObject: {fileID: 265368706}
   serializedVersion: 2
   m_LocalRotation: {x: 1.3877788e-17, y: 6.1107604e-17, z: -4.652616e-18, w: 1}
-  m_LocalPosition: {x: -2.8265934e-16, y: 15, z: -0.0000116410665}
+  m_LocalPosition: {x: -2.8265934e-16, y: 15, z: -0.000011641532}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
@@ -232,8 +232,8 @@ MonoBehaviour:
       z: 0.7342070531464151
       w: 0
     c3:
-      x: -1244351.4773069993
-      y: -4523170.196949052
+      x: -1244351.4773069995
+      y: -4523170.196949053
       z: 4308952.4126340905
       w: 1
   _localToGlobeFixedMatrixIsValid: 1
@@ -290,6 +290,9 @@ MonoBehaviour:
   routeMode: 2
   simulatedSpeed: 100
   tourSpeed: 500
+  minSpeedThrottle: 0.25
+  maxSpeedThrottle: 10
+  speedThrottle: 1
   route: []
   tourRadiusMeters: 15000
   tourCenterLatitude: 42.7597
