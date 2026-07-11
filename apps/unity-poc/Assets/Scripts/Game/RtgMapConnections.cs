@@ -36,12 +36,9 @@ namespace RoutesToGlory.Game
                 }
             }
 
-#if UNITY_2023_1_OR_NEWER
-            RtgMapMarker[] markers = Object.FindObjectsByType<RtgMapMarker>(FindObjectsSortMode.None);
-#else
-            RtgMapMarker[] markers = Object.FindObjectsOfType<RtgMapMarker>();
-#endif
-            foreach (RtgMapMarker marker in markers)
+            RtgMapMarkerRegistry.Refresh();
+
+            foreach (RtgMapMarker marker in RtgMapMarkerRegistry.All)
             {
                 if (marker == null) continue;
                 bool connected = marker.kind == RtgMapMarker.Kind.Settlement

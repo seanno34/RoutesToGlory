@@ -54,3 +54,18 @@ export function isNearRoute(
 ): boolean {
   return distancePointToPathM(lat, lng, path) <= radiusM;
 }
+
+export function decimatePath<T extends { lat: number; lng: number }>(
+  path: T[],
+  maxPoints: number,
+): T[] {
+  if (path.length <= maxPoints || maxPoints < 2) return path;
+
+  const result: T[] = [];
+  const step = (path.length - 1) / (maxPoints - 1);
+  for (let i = 0; i < maxPoints; i += 1) {
+    const idx = Math.min(path.length - 1, Math.round(i * step));
+    result.push(path[idx]!);
+  }
+  return result;
+}

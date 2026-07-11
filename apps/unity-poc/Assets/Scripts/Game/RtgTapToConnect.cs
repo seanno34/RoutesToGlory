@@ -43,6 +43,7 @@ namespace RoutesToGlory.Game
             _echoLoader = Object.FindObjectOfType<RtgEchoSiteLoader>();
 #endif
             _camera = Camera.main;
+            RtgMapMarkerRegistry.Refresh();
             StartCoroutine(LoadConnectRadius());
         }
 
@@ -84,23 +85,33 @@ namespace RoutesToGlory.Game
 
             if (marker.IsConnected) return;
 
-            if (!_session.TryGetRoutePath(out var path) || path.Count < 1)
-            {
-                ShowToast("Lay a route first — keep moving.");
-                return;
-            }
+            _session.TryGetRoutePath(out List<RtgRouteGeometry.LatLng> activeLeg);
+            RtgRoute[] persisted = _echoLoader != null ? _echoLoader.LastMap?.routes : null;
 
-            double dist = RtgRouteGeometry.DistancePointToPathM(marker.lat, marker.lng, path);
-            if (dist > maxConnectDistanceM)
+            if (!RtgRouteCorridor.IsWithinNetwork(
+                    marker.lat,
+                    marker.lng,
+                    activeLeg,
+                    persisted,
+                    _session.empireId,
+                    maxConnectDistanceM,
+                    out double dist))
             {
-                ShowToast($"Too far from your route ({dist:0} m — need ≤{maxConnectDistanceM:0} m).");
+                bool hasNetwork = (activeLeg != null && activeLeg.Count > 0) ||
+                                  (persisted != null && persisted.Length > 0);
+                if (!hasNetwork)
+                    ShowToast("Lay a route first — keep moving.");
+                else
+                    ShowToast($"Too far from your route ({dist:0} m — need ≤{maxConnectDistanceM:0} m).");
                 return;
             }
 
             if (marker.IsGoodieHut)
             {
                 _pendingGoodie = marker;
-                _pendingGoodiePath = new List<RtgRouteGeometry.LatLng>(path);
+                _pendingGoodiePath = activeLeg != null
+                    ? new List<RtgRouteGeometry.LatLng>(activeLeg)
+                    : null;
                 return;
             }
 
@@ -109,15 +120,10 @@ namespace RoutesToGlory.Game
 
         private RtgMapMarker FindMarkerNearScreenPoint(Vector2 screenPos)
         {
-#if UNITY_2023_1_OR_NEWER
-            RtgMapMarker[] markers = Object.FindObjectsByType<RtgMapMarker>(FindObjectsSortMode.None);
-#else
-            RtgMapMarker[] markers = Object.FindObjectsOfType<RtgMapMarker>();
-#endif
             RtgMapMarker best = null;
             float bestDist = tapHitRadiusPixels;
 
-            foreach (RtgMapMarker marker in markers)
+            foreach (RtgMapMarker marker in RtgMapMarkerRegistry.All)
             {
                 if (marker == null || !marker.gameObject.activeInHierarchy) continue;
 
@@ -165,15 +171,9 @@ namespace RoutesToGlory.Game
         private static void MarkConnected(string targetId)
         {
             if (string.IsNullOrEmpty(targetId)) return;
-#if UNITY_2023_1_OR_NEWER
-            foreach (RtgMapMarker marker in Object.FindObjectsByType<RtgMapMarker>(FindObjectsSortMode.None))
-#else
-            foreach (RtgMapMarker marker in Object.FindObjectsOfType<RtgMapMarker>())
-#endif
-            {
-                if (marker != null && marker.targetId == targetId)
-                    marker.SetConnected(true);
-            }
+            RtgMapMarker marker = RtgMapMarkerRegistry.FindByTargetId(targetId);
+            if (marker != null)
+                marker.SetConnected(true);
         }
 
         private void RefreshAfterClaim(RtgRouteSession.ClaimResult result)
@@ -181,9 +181,24 @@ namespace RoutesToGlory.Game
             if (_session == null) return;
 
             if (result.reloadMap && _echoLoader != null)
+            {
                 StartCoroutine(_echoLoader.ReloadFromApi());
-            else
-                RefreshPersistedRoutes();
+                return;
+            }
+
+            if (result.hasConnector)
+            {
+                RtgPersistedRouteDrawer drawer = RtgPersistedRouteDrawer.FindOrCreate();
+                drawer?.AppendConnector(
+                    result.connectorRouteId,
+                    result.anchorLat,
+                    result.anchorLng,
+                    result.targetLat,
+                    result.targetLng);
+                return;
+            }
+
+            RefreshPersistedRoutes();
         }
 
         private void RefreshPersistedRoutes()

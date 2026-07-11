@@ -196,7 +196,8 @@ export const api = {
     body: {
       empireId: string;
       sessionId?: string;
-      routePath: Array<{ lat: number; lng: number }>;
+      routePath?: Array<{ lat: number; lng: number }>;
+      useNetworkRoutes?: boolean;
       playerLat?: number;
       playerLng?: number;
       targetKind: 'settlement' | 'resource';

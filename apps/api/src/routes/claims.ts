@@ -4,19 +4,25 @@ import { GoodieHutChoiceSchema } from '@empire/shared';
 import { isDatabaseEnabled } from '../db/client.js';
 import { claimNearRoute } from '../services/route-claim.js';
 
-const ClaimNearRouteSchema = z.object({
-  empireId: z.string().uuid(),
-  sessionId: z.string().uuid().optional(),
-  routePath: z.array(z.object({ lat: z.number(), lng: z.number() })).min(1),
-  playerLat: z.number().optional(),
-  playerLng: z.number().optional(),
-  /** POC scatter pin — corridor check uses these for goodie huts when near the DB site. */
-  approachLat: z.number().optional(),
-  approachLng: z.number().optional(),
-  targetKind: z.enum(['settlement', 'resource']),
-  targetId: z.string().uuid(),
-  goodieChoice: GoodieHutChoiceSchema.optional(),
-});
+const ClaimNearRouteSchema = z
+  .object({
+    empireId: z.string().uuid(),
+    sessionId: z.string().uuid().optional(),
+    routePath: z.array(z.object({ lat: z.number(), lng: z.number() })).optional(),
+    useNetworkRoutes: z.boolean().optional(),
+    playerLat: z.number().optional(),
+    playerLng: z.number().optional(),
+    /** POC scatter pin — corridor check uses these for goodie huts when near the DB site. */
+    approachLat: z.number().optional(),
+    approachLng: z.number().optional(),
+    targetKind: z.enum(['settlement', 'resource']),
+    targetId: z.string().uuid(),
+    goodieChoice: GoodieHutChoiceSchema.optional(),
+  })
+  .refine(
+    (body) => body.useNetworkRoutes || (body.routePath != null && body.routePath.length > 0),
+    { message: 'routePath or useNetworkRoutes required' },
+  );
 
 export const claimRoutes: FastifyPluginAsync = async (app) => {
   app.post('/worlds/:worldId/claim', async (request, reply) => {
@@ -32,6 +38,7 @@ export const claimRoutes: FastifyPluginAsync = async (app) => {
       empireId: body.empireId,
       sessionId: body.sessionId,
       routePath: body.routePath,
+      useNetworkRoutes: body.useNetworkRoutes,
       playerLat: body.playerLat,
       playerLng: body.playerLng,
       approachLat: body.approachLat,

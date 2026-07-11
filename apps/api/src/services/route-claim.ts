@@ -4,9 +4,14 @@ import { resolveGoodieHutConnect } from './goodie-hut.js';
 import { configStore } from './config-store.js';
 import { query, newId } from '../db/client.js';
 import {
+  bboxesOverlap,
+  decimatePath,
+  expandBboxAroundPoint,
   haversineM,
-  isWithinRouteCorridor,
+  isWithinAnyRouteCorridor,
+  nearestPointOnAnyPath,
   nearestPointOnPath,
+  pathBbox,
   type PathPoint,
 } from './route-geometry.js';
 
@@ -14,7 +19,10 @@ export interface ClaimNearRouteInput {
   worldId: string;
   empireId: string;
   sessionId?: string;
-  routePath: PathPoint[];
+  /** Optional active-leg hint (decimated client-side). Omit when useNetworkRoutes is true. */
+  routePath?: PathPoint[];
+  /** When true, corridor checks use persisted empire routes from the DB instead of a huge client upload. */
+  useNetworkRoutes?: boolean;
   playerLat?: number;
   playerLng?: number;
   approachLat?: number;
@@ -36,6 +44,98 @@ export interface ClaimResult {
 
 function claimRadiusM(config: GameConfig): number {
   return config.routes.minConnectDistanceM ?? 800;
+}
+
+const MAX_CLIENT_PATH_POINTS = 256;
+const MAX_NETWORK_PATH_POINTS = 512;
+
+async function loadNetworkRoutePaths(
+  worldId: string,
+  empireId: string,
+  probeLat: number,
+  probeLng: number,
+  radiusM: number,
+): Promise<PathPoint[][]> {
+  const result = await query<{ path_json: string }>(
+    `SELECT path_json FROM routes
+     WHERE world_id = ? AND empire_id = ? AND status = 'active'`,
+    [worldId, empireId],
+  );
+
+  const probeBbox = expandBboxAroundPoint(probeLat, probeLng, radiusM * 1.5);
+  const paths: PathPoint[][] = [];
+
+  for (const row of result.rows) {
+    let path: PathPoint[];
+    try {
+      path = JSON.parse(row.path_json) as PathPoint[];
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(path) || path.length < 1) continue;
+
+    const simplified = decimatePath(path, MAX_NETWORK_PATH_POINTS);
+    const bbox = pathBbox(simplified);
+    if (!bbox || !bboxesOverlap(bbox, probeBbox)) continue;
+    paths.push(simplified);
+  }
+
+  return paths;
+}
+
+async function resolveCorridorPaths(
+  input: ClaimNearRouteInput,
+  probeLat: number,
+  probeLng: number,
+  radiusM: number,
+): Promise<PathPoint[][]> {
+  const paths: PathPoint[][] = [];
+
+  if (input.routePath && input.routePath.length > 0) {
+    const hint =
+      input.routePath.length > MAX_CLIENT_PATH_POINTS
+        ? decimatePath(input.routePath, MAX_CLIENT_PATH_POINTS)
+        : input.routePath;
+    paths.push(hint);
+  }
+
+  if (input.useNetworkRoutes) {
+    const network = await loadNetworkRoutePaths(
+      input.worldId,
+      input.empireId,
+      probeLat,
+      probeLng,
+      radiusM,
+    );
+    paths.push(...network);
+  }
+
+  return paths;
+}
+
+function assertWithinCorridor(
+  lat: number,
+  lng: number,
+  paths: PathPoint[][],
+  radiusM: number,
+  label: string,
+): void {
+  if (paths.length === 0) {
+    throw Object.assign(new Error('Active route path required'), { statusCode: 400 });
+  }
+
+  if (!isWithinAnyRouteCorridor(lat, lng, paths, radiusM)) {
+    throw Object.assign(
+      new Error(`${label} must be within ${radiusM}m of your route network`),
+      { statusCode: 400 },
+    );
+  }
+}
+
+function corridorAnchor(lat: number, lng: number, paths: PathPoint[][]): PathPoint {
+  return paths.length === 1
+    ? nearestPointOnPath(lat, lng, paths[0]!)
+    : nearestPointOnAnyPath(lat, lng, paths);
 }
 
 function rewardSummary(reward: unknown): string {
@@ -168,8 +268,9 @@ export async function claimNearRoute(input: ClaimNearRouteInput): Promise<ClaimR
   const config = configStore.get();
   const radiusM = claimRadiusM(config);
 
-  if (input.routePath.length < 1) {
-    throw Object.assign(new Error('Active route path required'), { statusCode: 400 });
+  const hasClientPath = (input.routePath?.length ?? 0) > 0;
+  if (!hasClientPath && !input.useNetworkRoutes) {
+    throw Object.assign(new Error('routePath or useNetworkRoutes required'), { statusCode: 400 });
   }
 
   if (input.targetKind === 'settlement') {
@@ -233,12 +334,8 @@ async function claimSettlement(
     lng = corridorLng;
   }
 
-  if (!isWithinRouteCorridor(corridorLat, corridorLng, input.routePath, radiusM)) {
-    throw Object.assign(
-      new Error(`Target must be within ${radiusM}m of your active route`),
-      { statusCode: 400 },
-    );
-  }
+  const corridorPaths = await resolveCorridorPaths(input, corridorLat, corridorLng, radiusM);
+  assertWithinCorridor(corridorLat, corridorLng, corridorPaths, radiusM, 'Target');
 
   if (await isSettlementAlreadyConnected(input.worldId, input.empireId, site.id)) {
     throw Object.assign(new Error('Settlement already connected to your network'), {
@@ -246,7 +343,7 @@ async function claimSettlement(
     });
   }
 
-  const anchor = nearestPointOnPath(lat, lng, input.routePath);
+  const anchor = corridorAnchor(lat, lng, corridorPaths);
   const connectorPath: PathPoint[] = [anchor, { lat, lng }];
 
   let message = `Connected to ${site.name}.`;
@@ -400,17 +497,13 @@ async function claimResource(
     }
   }
 
-  if (!isWithinRouteCorridor(lat, lng, input.routePath, radiusM)) {
-    throw Object.assign(
-      new Error(`Resource must be within ${radiusM}m of your active route`),
-      { statusCode: 400 },
-    );
-  }
+  const corridorPaths = await resolveCorridorPaths(input, lat, lng, radiusM);
+  assertWithinCorridor(lat, lng, corridorPaths, radiusM, 'Resource');
 
-  // Connector runs from the nearest point on the active route — not the player's
+  // Connector runs from the nearest point on the route network — not the player's
   // live GPS pin — so tap-to-connect works when you've passed nearby but aren't
   // standing on the resource.
-  const anchor = nearestPointOnPath(lat, lng, input.routePath);
+  const anchor = corridorAnchor(lat, lng, corridorPaths);
   const connectorPath: PathPoint[] = [anchor, { lat, lng }];
   const extractorId = await createExtractorSettlement(
     input.worldId,

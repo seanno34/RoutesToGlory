@@ -17,6 +17,7 @@ import {
 } from './lib/geolocation';
 import { MapView } from './components/MapView';
 import { ClaimModal } from './components/ClaimModal';
+import { decimatePath } from './lib/route-corridor';
 import type { ActiveRoute } from './lib/api';
 
 const STORAGE_KEY = 'rtg.bootstrap';
@@ -437,13 +438,14 @@ export function App() {
     targetId: string,
     goodieChoice?: 'found_town' | 'claim_reward',
   ) => {
-    if (!bootstrap || claimPath.length < 1) return;
+    if (!bootstrap || !canClaim) return;
     setLoading(true);
     try {
       const result = await api.claimNearRoute(bootstrap.id, {
         empireId: bootstrap.empireId,
         sessionId: sessionId ?? undefined,
-        routePath: claimPath,
+        useNetworkRoutes: true,
+        routePath: claimPath.length > 0 ? decimatePath(claimPath, 64) : undefined,
         playerLat: userPos?.lat,
         playerLng: userPos?.lng,
         targetKind,

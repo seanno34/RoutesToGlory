@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Collections.Generic;
 using CesiumForUnity;
 using UnityEngine;
 using UnityEngine.Networking;
@@ -31,7 +32,19 @@ namespace RoutesToGlory.Game
 
         private Transform _geoRoot;
         private RtgTerrainHeight _terrainHeight;
-        private int _lineIndex;
+        private RtgGeoWorld _geoWorld;
+        private Material _travelMat;
+        private Material _connectorMat;
+        private readonly Dictionary<string, RouteLine> _lines = new();
+        private int _anonymousLineIndex;
+
+        private sealed class RouteLine
+        {
+            public GameObject root;
+            public LineRenderer line;
+            public int pointCount;
+            public bool isConnector;
+        }
 
         public static RtgPersistedRouteDrawer FindOrCreate()
         {
@@ -54,25 +67,69 @@ namespace RoutesToGlory.Game
         {
             _geoRoot = transform.parent != null ? transform.parent : transform;
             _terrainHeight = RtgTerrainHeight.FindOrCreate();
+            _geoWorld = new RtgGeoWorld(_geoRoot, _terrainHeight, groundHeightMeters);
+            EnsureMaterials();
+        }
+
+        private void OnDestroy()
+        {
+            _geoWorld?.Dispose();
         }
 
         /// <summary>Replace all drawn routes with the given map snapshot.</summary>
         public void DrawAll(RtgRoute[] routes)
         {
-            Clear();
-            if (routes == null) return;
+            SyncRoutes(routes);
+        }
 
+        /// <summary>Incrementally add/update/remove routes without clearing the whole network.</summary>
+        public void SyncRoutes(RtgRoute[] routes)
+        {
+            var seen = new HashSet<string>();
             int drawn = 0;
-            foreach (RtgRoute route in routes)
+
+            if (routes != null)
             {
-                if (route?.path_json == null || route.path_json.Length < 2) continue;
-                if (!string.IsNullOrEmpty(route.status) && route.status != "active") continue;
-                DrawRoute(route);
-                drawn++;
+                foreach (RtgRoute route in routes)
+                {
+                    if (!IsDrawable(route)) continue;
+                    seen.Add(route.id);
+                    UpsertRoute(route);
+                    drawn++;
+                }
             }
 
+            var stale = new List<string>();
+            foreach (KeyValuePair<string, RouteLine> kv in _lines)
+            {
+                if (!seen.Contains(kv.Key))
+                    stale.Add(kv.Key);
+            }
+            foreach (string id in stale)
+                RemoveRoute(id);
+
             if (drawn > 0)
-                Debug.Log($"[RTG] Drew {drawn} persisted route(s) from map.");
+                Debug.Log($"[RTG] Synced {drawn} persisted route(s).");
+        }
+
+        /// <summary>Draw a single connector returned by POST /claim without refetching the full map.</summary>
+        public void AppendConnector(
+            string routeId,
+            double anchorLat,
+            double anchorLng,
+            double targetLat,
+            double targetLng)
+        {
+            var route = new RtgRoute
+            {
+                id = string.IsNullOrEmpty(routeId) ? $"connector-{_anonymousLineIndex}" : routeId,
+                path_json = new[]
+                {
+                    new RtgPathPoint { lat = anchorLat, lng = anchorLng },
+                    new RtgPathPoint { lat = targetLat, lng = targetLng },
+                },
+            };
+            UpsertRoute(route);
         }
 
         /// <summary>Re-fetch routes from the API and redraw (after connect / claim).</summary>
@@ -93,36 +150,73 @@ namespace RoutesToGlory.Game
 
             RtgWorldMap map = JsonUtility.FromJson<RtgWorldMap>(req.downloadHandler.text);
             if (map?.routes != null)
-                DrawAll(map.routes);
+                SyncRoutes(map.routes);
             if (!string.IsNullOrWhiteSpace(playerEmpireId))
                 RtgMapConnections.Apply(map, playerEmpireId);
         }
 
         public void Clear()
         {
-            for (int i = transform.childCount - 1; i >= 0; i--)
-                DestroyObject(transform.GetChild(i).gameObject);
-            _lineIndex = 0;
+            foreach (KeyValuePair<string, RouteLine> kv in _lines)
+            {
+                if (kv.Value?.root != null)
+                    DestroyObject(kv.Value.root);
+            }
+            _lines.Clear();
+            _anonymousLineIndex = 0;
         }
 
-        private void DrawRoute(RtgRoute route)
+        private static bool IsDrawable(RtgRoute route)
+        {
+            if (route?.path_json == null || route.path_json.Length < 2) return false;
+            return string.IsNullOrEmpty(route.status) || route.status == "active";
+        }
+
+        private void UpsertRoute(RtgRoute route)
         {
             bool isConnector = route.path_json.Length == 2;
+            RtgPathPoint[] displayPath = isConnector
+                ? route.path_json
+                : RtgRoutePathUtil.DecimatePathPointsForDisplay(route.path_json);
+
+            if (_lines.TryGetValue(route.id, out RouteLine existing))
+            {
+                if (existing.pointCount == displayPath.Length)
+                    return;
+                DestroyObject(existing.root);
+                _lines.Remove(route.id);
+            }
+
+            _lines[route.id] = CreateRouteLine(route.id, displayPath, isConnector, route.empire_color);
+        }
+
+        private void RemoveRoute(string routeId)
+        {
+            if (!_lines.TryGetValue(routeId, out RouteLine entry)) return;
+            if (entry.root != null)
+                DestroyObject(entry.root);
+            _lines.Remove(routeId);
+        }
+
+        private RouteLine CreateRouteLine(
+            string routeId,
+            RtgPathPoint[] displayPath,
+            bool isConnector,
+            string empireColorHex)
+        {
             Color color = isConnector
                 ? connectorColor
-                : TryParseHexColor(route.empire_color, travelRouteColor);
+                : TryParseHexColor(empireColorHex, travelRouteColor);
             float width = isConnector ? connectorWidthMeters : travelWidthMeters;
             float heightOffset = isConnector ? connectorHeightAboveTerrainM : travelHeightAboveTerrainM;
 
-            var positions = new Vector3[route.path_json.Length];
-            for (int i = 0; i < route.path_json.Length; i++)
-            {
-                RtgPathPoint p = route.path_json[i];
-                positions[i] = WorldFromLatLng(p.lng, p.lat, heightOffset);
-            }
+            var positions = new Vector3[displayPath.Length];
+            _geoWorld.FillWorldPositions(displayPath, heightOffset, positions);
 
-            var go = new GameObject(isConnector ? $"Connector {_lineIndex}" : $"Route {_lineIndex}");
-            _lineIndex++;
+            var go = new GameObject(isConnector ? $"Connector {routeId}" : $"Route {routeId}");
+            if (isConnector && routeId.StartsWith("connector-"))
+                _anonymousLineIndex++;
+
             go.transform.SetParent(transform, false);
 
             var line = go.AddComponent<LineRenderer>();
@@ -136,12 +230,7 @@ namespace RoutesToGlory.Game
             line.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
             line.receiveShadows = false;
             line.sortingOrder = isConnector ? 2 : 0;
-
-            Shader shader = Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Sprites/Default");
-            var mat = new Material(shader) { name = isConnector ? "RTG_ConnectorPersisted" : "RTG_RoutePersisted" };
-            if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", color);
-            if (mat.HasProperty("_Color")) mat.SetColor("_Color", color);
-            line.material = mat;
+            line.material = isConnector ? _connectorMat : _travelMat;
 
             if (!isConnector)
             {
@@ -159,6 +248,29 @@ namespace RoutesToGlory.Game
                     });
                 line.colorGradient = gradient;
             }
+
+            return new RouteLine
+            {
+                root = go,
+                line = line,
+                pointCount = displayPath.Length,
+                isConnector = isConnector,
+            };
+        }
+
+        private void EnsureMaterials()
+        {
+            if (_travelMat != null && _connectorMat != null) return;
+
+            Shader shader = Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Sprites/Default");
+
+            _travelMat = new Material(shader) { name = "RTG_RoutePersisted" };
+            if (_travelMat.HasProperty("_BaseColor")) _travelMat.SetColor("_BaseColor", travelRouteColor);
+            if (_travelMat.HasProperty("_Color")) _travelMat.SetColor("_Color", travelRouteColor);
+
+            _connectorMat = new Material(shader) { name = "RTG_ConnectorPersisted" };
+            if (_connectorMat.HasProperty("_BaseColor")) _connectorMat.SetColor("_BaseColor", connectorColor);
+            if (_connectorMat.HasProperty("_Color")) _connectorMat.SetColor("_Color", connectorColor);
         }
 
         private static Color TryParseHexColor(string hex, Color fallback)
@@ -183,26 +295,6 @@ namespace RoutesToGlory.Game
             }
 
             return new Color(r / 255f, g / 255f, b / 255f, a);
-        }
-
-        private Vector3 WorldFromLatLng(double lng, double lat, float heightAboveTerrainM)
-        {
-            if (_geoRoot == null) _geoRoot = transform.parent;
-            if (_terrainHeight == null)
-                _terrainHeight = RtgTerrainHeight.FindOrCreate();
-
-            double heightM = _terrainHeight != null
-                ? _terrainHeight.GetGroundHeight(lat, lng) + heightAboveTerrainM
-                : groundHeightMeters + heightAboveTerrainM;
-
-            var probe = new GameObject("_geo_probe");
-            probe.transform.SetParent(_geoRoot, false);
-            var anchor = probe.AddComponent<CesiumGlobeAnchor>();
-            anchor.SetPositionLongitudeLatitudeHeight(lng, lat, heightM);
-            Vector3 world = probe.transform.position;
-            if (Application.isPlaying) Destroy(probe);
-            else DestroyImmediate(probe);
-            return world;
         }
 
         private static void DestroyObject(Object obj)

@@ -205,6 +205,7 @@ namespace RoutesToGlory.Game
 
             Debug.Log($"[RTG] Spawned {settlements} Echo Site(s) and {resources} resource node(s).");
             DrawPersistedRoutes(map);
+            RtgMapMarkerRegistry.Refresh();
             RtgMapConnections.Apply(map, empireId);
             SetupFogOfWar(container, map?.routes);
         }
@@ -220,7 +221,7 @@ namespace RoutesToGlory.Game
         {
             RtgPersistedRouteDrawer drawer = RtgPersistedRouteDrawer.FindOrCreate();
             if (drawer == null) return;
-            drawer.DrawAll(map?.routes);
+            drawer.SyncRoutes(map?.routes);
         }
 
         public void ClearMarkers()
@@ -255,6 +256,7 @@ namespace RoutesToGlory.Game
             AnchorAt(root, lng, lat, groundHeightMeters + settlementFloatHeight);
             root.AddComponent<RtgMapMarker>().Configure(
                 RtgMapMarker.Kind.Settlement, s.id, s.name, s.tier, lat, lng);
+            RtgMapMarkerRegistry.Register(root.GetComponent<RtgMapMarker>());
         }
 
         private void SpawnResource(RtgResourceNode r, Transform container)
@@ -271,6 +273,7 @@ namespace RoutesToGlory.Game
             AnchorAt(root, lng, lat, groundHeightMeters + resourceFloatHeight);
             root.AddComponent<RtgMapMarker>().Configure(
                 RtgMapMarker.Kind.Resource, r.id, ResourceName(r.resource_id), r.richness, lat, lng);
+            RtgMapMarkerRegistry.Register(root.GetComponent<RtgMapMarker>());
         }
 
         private string SelectCorridorGoodieTarget(RtgWorldMap map)

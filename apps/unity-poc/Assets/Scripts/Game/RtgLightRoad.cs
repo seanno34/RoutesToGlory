@@ -88,13 +88,25 @@ namespace RoutesToGlory.Game
         private void AppendPoint(Vector3 worldPoint)
         {
             _points.Add(worldPoint);
+            bool droppedOldest = false;
             if (_points.Count > Mathf.Max(2, maxPoints))
+            {
                 _points.RemoveAt(0);
+                droppedOldest = true;
+            }
 
-            // Point additions are infrequent (only every pointSpacingMeters of
-            // travel), so rewriting the whole buffer here is cheap.
-            _line.positionCount = _points.Count;
-            _line.SetPositions(_points.ToArray());
+            if (droppedOldest)
+            {
+                _line.positionCount = _points.Count;
+                for (int i = 0; i < _points.Count; i++)
+                    _line.SetPosition(i, _points[i]);
+                return;
+            }
+
+            int index = _points.Count - 1;
+            if (_line.positionCount < _points.Count)
+                _line.positionCount = _points.Count;
+            _line.SetPosition(index, worldPoint);
         }
 
         private void ConfigureLine()

@@ -159,6 +159,18 @@ namespace RoutesToGlory.Game
             return path.Count > 0;
         }
 
+        /// <summary>Decimated active leg for lightweight claim payloads.</summary>
+        public bool TryGetClaimPathHint(out List<RtgRouteGeometry.LatLng> path)
+        {
+            if (!TryGetRoutePath(out path) || path.Count < 1)
+            {
+                path = null;
+                return false;
+            }
+            path = RtgRoutePathUtil.DecimateForClaim(path);
+            return path.Count > 0;
+        }
+
         /// <summary>
         /// Connect a tapped map item to the nearest point on this route via
         /// POST /worlds/:worldId/claim. The server anchors the connector there,
@@ -174,23 +186,25 @@ namespace RoutesToGlory.Game
         {
             List<RtgRouteGeometry.LatLng> path;
             if (pathOverride != null && pathOverride.Count > 0)
-                path = pathOverride;
-            else if (!TryGetRoutePath(out path) || path.Count < 1)
-            {
-                done?.Invoke(ClaimResult.Fail("No active route path."));
-                yield break;
-            }
+                path = RtgRoutePathUtil.DecimateForClaim(pathOverride);
+            else if (!TryGetClaimPathHint(out path))
+                path = null;
 
             var sb = new StringBuilder("{\"empireId\":\"").Append(empireId).Append("\",");
             if (!string.IsNullOrEmpty(_sessionId))
                 sb.Append("\"sessionId\":\"").Append(_sessionId).Append("\",");
-            sb.Append("\"routePath\":[");
-            for (int i = 0; i < path.Count; i++)
+            sb.Append("\"useNetworkRoutes\":true");
+            if (path != null && path.Count > 0)
             {
-                if (i > 0) sb.Append(',');
-                sb.Append("{\"lat\":").Append(D(path[i].lat)).Append(",\"lng\":").Append(D(path[i].lng)).Append('}');
+                sb.Append(",\"routePath\":[");
+                for (int i = 0; i < path.Count; i++)
+                {
+                    if (i > 0) sb.Append(',');
+                    sb.Append("{\"lat\":").Append(D(path[i].lat)).Append(",\"lng\":").Append(D(path[i].lng)).Append('}');
+                }
+                sb.Append(']');
             }
-            sb.Append("],\"targetKind\":\"").Append(marker.KindApiValue).Append("\",");
+            sb.Append(",\"targetKind\":\"").Append(marker.KindApiValue).Append("\",");
             sb.Append("\"targetId\":\"").Append(marker.targetId).Append("\"");
             // Pin position on the map (may be scatter-offset for tap testing).
             sb.Append(",\"approachLat\":").Append(D(marker.lat));
@@ -212,6 +226,11 @@ namespace RoutesToGlory.Game
                         : $"Connected to {marker.displayName}.";
 
                     ClaimResult result = ClaimResult.Ok(msg, reloadMap, marker.targetId);
+                    if (resp != null)
+                    {
+                        result.connectorRouteId = resp.connectorRouteId;
+                        result.linkedRouteId = resp.linkedRouteId;
+                    }
                     if (resp?.connectorPath != null && resp.connectorPath.Length >= 2)
                     {
                         result.hasConnector = true;
@@ -240,6 +259,8 @@ namespace RoutesToGlory.Game
             public string message;
             public bool alreadyConnected;
             public bool hasConnector;
+            public string connectorRouteId;
+            public string linkedRouteId;
             public double anchorLat, anchorLng, targetLat, targetLng;
             public bool reloadMap;
             public string connectedTargetId;
@@ -567,6 +588,8 @@ namespace RoutesToGlory.Game
         {
             public bool ok;
             public string message;
+            public string connectorRouteId;
+            public string linkedRouteId;
             public ConnectorPt[] connectorPath;
         }
 
