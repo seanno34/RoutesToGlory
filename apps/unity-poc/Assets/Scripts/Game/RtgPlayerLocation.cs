@@ -24,7 +24,9 @@ namespace RoutesToGlory.Game
         // FixedLoop = walk the small hand-authored rectangle (or the `route` field).
         // TourNearbySites = auto-build a loop that threads past every Echo Site /
         // resource node near the play area so you can sight-see the whole map.
-        public enum RouteMode { FixedLoop, TourNearbySites }
+        // HomeToCasper = simulated drive from home (10 Tiffany Ln) to Casper, WY
+        // and back — for terrain / fog / tap-claim testing.
+        public enum RouteMode { FixedLoop, TourNearbySites, HomeToCasper }
 
         [Header("Source")]
         public LocationSource source = LocationSource.SimulatedRoute;
@@ -58,6 +60,10 @@ namespace RoutesToGlory.Game
 
         [Tooltip("Seconds to wait for Echo Sites to load before falling back to the fixed loop.")]
         public float tourLoadTimeoutSeconds = 12f;
+
+        [Header("Home ↔ Casper test drive")]
+        [Tooltip("Simulated speed for HomeToCasper mode (mph). 80 ≈ quick terrain test.")]
+        public float homeTestSpeedMph = 80f;
 
         [Header("Placement")]
         [Tooltip("Approx. ground height (m above ellipsoid) near Douglas, WY.")]
@@ -161,6 +167,7 @@ namespace RoutesToGlory.Game
         private bool _roadStarted;
         private RtgRouteSession _routeSession;
         private RtgCesiumCreditsToggle _creditsToggle;
+        private RtgTerrainHeight _terrainHeight;
 
         private Camera _camera;
         private CesiumCameraController _cameraController;
@@ -176,6 +183,7 @@ namespace RoutesToGlory.Game
         private void Start()
         {
             EnsureMarker();
+            EnsureTerrainHeight();
             EnsureLightRoad();
             EnsureRouteSession();
             EnsureTapToConnect();
@@ -201,6 +209,13 @@ namespace RoutesToGlory.Game
             {
                 _provider = CreateProvider();
                 _provider.Begin();
+                if (routeMode == RouteMode.HomeToCasper)
+                {
+                    RtgWaypoint[] road = HomeToCasperRoute();
+                    Debug.Log(
+                        $"[RTG] Home ↔ Casper test drive at {homeTestSpeedMph:0} mph " +
+                        $"({MphToMps(homeTestSpeedMph):0.#} m/s), {road.Length} OSRM road points.");
+                }
             }
         }
 
@@ -216,8 +231,11 @@ namespace RoutesToGlory.Game
             _provider.Tick(Time.deltaTime);
             if (_provider.TryGetLatLng(out double lat, out double lng))
             {
-                _markerAnchor.SetPositionLongitudeLatitudeHeight(
-                    lng, lat, groundHeightMeters + markerHeight);
+                double heightM = _terrainHeight != null
+                    ? _terrainHeight.GetPlacementHeight(lat, lng)
+                    : groundHeightMeters + markerHeight;
+
+                _markerAnchor.SetPositionLongitudeLatitudeHeight(lng, lat, heightM);
 
                 // First real fix — begin tracing the Light Road (avoids a stray
                 // segment from wherever the marker sat before we had a position).
@@ -272,6 +290,10 @@ namespace RoutesToGlory.Game
         {
             if (source == LocationSource.DeviceGps)
                 return new RtgDeviceLocationProvider();
+
+            if (routeMode == RouteMode.HomeToCasper)
+                return new RtgSimulatedLocationProvider(HomeToCasperRoute(), MphToMps(homeTestSpeedMph));
+
             return new RtgSimulatedLocationProvider(ResolveRoute(), simulatedSpeed);
         }
 
@@ -317,6 +339,11 @@ namespace RoutesToGlory.Game
                 new RtgWaypoint { lat = cLat,       lng = cLng },
             };
         }
+
+        /// <summary>Home (10 Tiffany Ln) → Casper, WY → home via OSRM road geometry.</summary>
+        public static RtgWaypoint[] HomeToCasperRoute() => RtgRoadRoutes.HomeToCasperLoop();
+
+        private static float MphToMps(float mph) => mph * 1609.344f / 3600f;
 
         // ------------------------------------------------------------------ //
         // Tour of nearby sites
@@ -455,9 +482,6 @@ namespace RoutesToGlory.Game
                 BuildMarkerVisual(root.transform);
         }
 
-        // The Light Road is a runtime-only visual, so we only build it in Play mode.
-        // The GameObject is created inactive, configured, then activated so the
-        // RtgLightRoad reads our tuned values in its Awake instead of the defaults.
         private void EnsureLightRoad()
         {
             if (!drawLightRoad || !Application.isPlaying || _marker == null) return;
@@ -478,6 +502,21 @@ namespace RoutesToGlory.Game
 
             go.SetActive(true);
             _lightRoad = road;
+        }
+
+        private void EnsureTerrainHeight()
+        {
+            if (!Application.isPlaying) return;
+            if (_terrainHeight != null) return;
+
+            _terrainHeight = RtgTerrainHeight.FindOrCreate();
+            if (_terrainHeight == null)
+            {
+                Debug.LogWarning("[RTG] No Cesium3DTileset found — spaceship will use flat ground height.");
+                return;
+            }
+
+            _terrainHeight.Configure(groundHeightMeters, markerHeight);
         }
 
         // Creates the route-session driver and hands it the live-API config from the
@@ -665,12 +704,37 @@ namespace RoutesToGlory.Game
                     if (Application.isMobilePlatform)
                         metersPerPixel *= mobilePanScale;
 
-                    _focusTarget += (-delta.x * Vector3.right - delta.y * Vector3.forward) * metersPerPixel;
+                    _focusTarget += ScreenPanDeltaToWorld(delta, metersPerPixel);
                 }
             }
 
             _lastPointer = pos;
             _wasPointerDown = isDown;
+        }
+
+        /// <summary>
+        /// Converts a screen-space drag (pixels) into a world-space focus shift on the
+        /// ground plane, using the camera orientation so panning feels like Google Maps
+        /// regardless of chase-cam / travel heading.
+        /// </summary>
+        private Vector3 ScreenPanDeltaToWorld(Vector2 screenDelta, float metersPerPixel)
+        {
+            Vector3 right = _camera.transform.right;
+            Vector3 forward = _camera.transform.forward;
+            right.y = 0f;
+            forward.y = 0f;
+
+            if (right.sqrMagnitude < 1e-8f)
+                right = Vector3.right;
+            else
+                right.Normalize();
+
+            if (forward.sqrMagnitude < 1e-8f)
+                forward = Vector3.forward;
+            else
+                forward.Normalize();
+
+            return (-screenDelta.x * right - screenDelta.y * forward) * metersPerPixel;
         }
 
         /// <summary>
@@ -707,9 +771,14 @@ namespace RoutesToGlory.Game
 
         private void OnGUI()
         {
-            if (!Application.isPlaying || !followWithCamera) return;
+            if (!Application.isPlaying) return;
 
             _gameUiRects.Clear();
+
+            if (source == LocationSource.SimulatedRoute && routeMode == RouteMode.HomeToCasper)
+                DrawRestartRouteButton();
+
+            if (!followWithCamera) return;
 
             // 2× size for on-device testing; stacked center-right for one-handed reach.
             const float margin = 24f;
@@ -935,6 +1004,46 @@ namespace RoutesToGlory.Game
         {
             if (Application.isPlaying) Destroy(obj);
             else DestroyImmediate(obj);
+        }
+
+        /// <summary>Dev helper: jump back to route start and clear the live Light Road.</summary>
+        public void RestartSimulatedRoute()
+        {
+            if (_lightRoad != null)
+            {
+                _lightRoad.ClearRoad();
+                _roadStarted = false;
+            }
+
+            if (_provider is RtgSimulatedLocationProvider sim)
+                sim.Restart();
+
+            _panned = false;
+            _hasHeadingSample = false;
+            if (_marker != null)
+            {
+                _focusTarget = _marker.position;
+                _focus = _focusTarget;
+            }
+
+            Debug.Log("[RTG] Simulated route restarted from home.");
+        }
+
+        private void DrawRestartRouteButton()
+        {
+            const float margin = 24f;
+            const float wideW = 280f;
+            const float wideH = 92f;
+            float wideRight = Screen.width - wideW - margin;
+            float y = Screen.height - margin - wideH;
+
+            var prev = GUI.skin.button.fontSize;
+            GUI.skin.button.fontSize = 28;
+            var restartRect = new Rect(wideRight, y, wideW, wideH);
+            if (GUI.Button(restartRect, "Restart Route"))
+                RestartSimulatedRoute();
+            _gameUiRects.Add(restartRect);
+            GUI.skin.button.fontSize = prev;
         }
     }
 }

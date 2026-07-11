@@ -1,5 +1,7 @@
 import type { GameConfig, GpsPointInput } from '@empire/shared';
 import { query, newId } from '../db/client.js';
+import { revealTilesAlongRoutePath } from '../db/exploration-repo.js';
+import { configStore } from '../services/config-store.js';
 
 export interface ValidatedPoint {
   accepted: boolean;
@@ -195,22 +197,92 @@ export function detectGeofenceConnect(
   )[0]!;
 }
 
-function nearestSettlementId(
+/** Only anchor a route end to a node when the path actually enters its geofence. */
+function nodeAnchorAtPoint(
   settlements: SettlementRow[],
   lat: number,
   lng: number,
 ): string | null {
-  if (settlements.length === 0) return null;
-
-  return settlements
-    .map((s) => ({
-      id: s.id,
-      dist: haversineM(lat, lng, Number(s.lat), Number(s.lng)),
-    }))
-    .sort((a, b) => a.dist - b.dist)[0]!.id;
+  for (const s of settlements) {
+    const dist = haversineM(lat, lng, Number(s.lat), Number(s.lng));
+    if (dist <= s.geofence_radius_m) return s.id;
+  }
+  return null;
 }
 
-/** Persist a manually ended GPS session as a permanent route on the map. */
+function pathDistanceM(points: Array<{ lat: number; lng: number }>): number {
+  let distanceM = 0;
+  for (let i = 1; i < points.length; i += 1) {
+    distanceM += haversineM(
+      Number(points[i - 1]!.lat),
+      Number(points[i - 1]!.lng),
+      Number(points[i]!.lat),
+      Number(points[i]!.lng),
+    );
+  }
+  return distanceM;
+}
+
+async function insertPersistedRoute(params: {
+  worldId: string;
+  empireId: string;
+  sessionId: string;
+  points: Array<{ lat: number; lng: number }>;
+  fromSettlementId: string | null;
+  toSettlementId: string | null;
+  sessionEndReason: 'recorded' | 'connected';
+  eventPayload: Record<string, unknown>;
+}): Promise<string> {
+  const routeId = newId();
+  const distanceM = pathDistanceM(params.points);
+
+  await query(
+    `INSERT INTO routes (
+       id, world_id, empire_id, session_id, from_settlement_id, to_settlement_id,
+       path_json, distance_m, status
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')`,
+    [
+      routeId,
+      params.worldId,
+      params.empireId,
+      params.sessionId,
+      params.fromSettlementId,
+      params.toSettlementId,
+      JSON.stringify(params.points),
+      distanceM,
+    ],
+  );
+
+  await query(
+    `UPDATE route_sessions
+     SET status = 'completed', end_reason = ?, ended_at = NOW()
+     WHERE id = ?`,
+    [params.sessionEndReason, params.sessionId],
+  );
+
+  await query(
+    `INSERT INTO world_events (id, world_id, type, payload)
+     VALUES (?, ?, 'route_established', ?)`,
+    [
+      newId(),
+      params.worldId,
+      JSON.stringify({ ...params.eventPayload, routeId }),
+    ],
+  );
+
+  const config = configStore.get();
+  await revealTilesAlongRoutePath(
+    params.worldId,
+    params.empireId,
+    params.points,
+    config,
+    { spawnResources: false },
+  );
+
+  return routeId;
+}
+
+/** Persist any driven path (≥2 points). Node anchors are optional — bonuses come later. */
 export async function saveRouteSessionOnEnd(
   sessionId: string,
   clientPath?: Array<{ lat: number; lng: number }>,
@@ -274,73 +346,27 @@ export async function saveRouteSessionOnEnd(
   const end = points[points.length - 1]!;
   const fromSettlementId =
     session.origin_settlement_id ??
-    nearestSettlementId(settlements, Number(start.lat), Number(start.lng));
+    nodeAnchorAtPoint(settlements, Number(start.lat), Number(start.lng));
   const toSettlementId =
     session.target_settlement_id ??
-    nearestSettlementId(settlements, Number(end.lat), Number(end.lng)) ??
-    fromSettlementId;
+    nodeAnchorAtPoint(settlements, Number(end.lat), Number(end.lng));
 
-  if (!fromSettlementId || !toSettlementId) {
-    await query(
-      `UPDATE route_sessions
-       SET status = 'abandoned', end_reason = 'manual', ended_at = NOW()
-       WHERE id = ?`,
-      [sessionId],
-    );
-    return { saved: false, reason: 'no_settlement_anchor' };
-  }
-
-  let distanceM = 0;
-  for (let i = 1; i < points.length; i += 1) {
-    distanceM += haversineM(
-      Number(points[i - 1]!.lat),
-      Number(points[i - 1]!.lng),
-      Number(points[i]!.lat),
-      Number(points[i]!.lng),
-    );
-  }
-
-  const routeId = newId();
-  await query(
-    `INSERT INTO routes (
-       id, world_id, empire_id, session_id, from_settlement_id, to_settlement_id,
-       path_json, distance_m, status
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')`,
-    [
-      routeId,
-      session.world_id,
-      session.empire_id,
+  const routeId = await insertPersistedRoute({
+    worldId: session.world_id,
+    empireId: session.empire_id,
+    sessionId,
+    points,
+    fromSettlementId,
+    toSettlementId,
+    sessionEndReason: 'recorded',
+    eventPayload: {
       sessionId,
+      empireId: session.empire_id,
       fromSettlementId,
       toSettlementId,
-      JSON.stringify(points),
-      distanceM,
-    ],
-  );
-
-  await query(
-    `UPDATE route_sessions
-     SET status = 'completed', end_reason = 'manual', ended_at = NOW()
-     WHERE id = ?`,
-    [sessionId],
-  );
-
-  await query(
-    `INSERT INTO world_events (id, world_id, type, payload)
-     VALUES (?, ?, 'route_established', ?)`,
-    [
-      newId(),
-      session.world_id,
-      JSON.stringify({
-        routeId,
-        sessionId,
-        empireId: session.empire_id,
-        fromSettlementId,
-        toSettlementId,
-        manualEnd: true,
-      }),
-    ],
-  );
+      travelLeg: true,
+    },
+  });
 
   return { saved: true, routeId };
 }
@@ -360,55 +386,21 @@ export async function completeRouteSession(
   );
 
   const points = pointsResult.rows;
-  let distanceM = 0;
-  for (let i = 1; i < points.length; i++) {
-    distanceM += haversineM(
-      points[i - 1]!.lat,
-      points[i - 1]!.lng,
-      points[i]!.lat,
-      points[i]!.lng,
-    );
-  }
-
-  const routeId = newId();
-  await query(
-    `INSERT INTO routes (
-       id, world_id, empire_id, session_id, from_settlement_id, to_settlement_id,
-       path_json, distance_m, status
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')`,
-    [
-      routeId,
-      worldId,
-      empireId,
+  const routeId = await insertPersistedRoute({
+    worldId,
+    empireId,
+    sessionId,
+    points,
+    fromSettlementId: fromSettlementId ?? toSettlementId,
+    toSettlementId,
+    sessionEndReason: 'connected',
+    eventPayload: {
       sessionId,
-      fromSettlementId ?? toSettlementId,
+      empireId,
       toSettlementId,
-      JSON.stringify(points),
-      distanceM,
-    ],
-  );
-
-  await query(
-    `UPDATE route_sessions
-     SET status = 'completed', end_reason = 'connected', ended_at = NOW()
-     WHERE id = ?`,
-    [sessionId],
-  );
-
-  await query(
-    `INSERT INTO world_events (id, world_id, type, payload)
-     VALUES (?, ?, 'route_established', ?)`,
-    [
-      newId(),
-      worldId,
-      JSON.stringify({
-        routeId,
-        sessionId,
-        empireId,
-        toSettlementId,
-      }),
-    ],
-  );
+      nodeConnected: true,
+    },
+  });
 
   return { routeId };
 }

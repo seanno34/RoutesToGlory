@@ -12,11 +12,14 @@ namespace RoutesToGlory.Game
     /// </summary>
     public class RtgPersistedRouteDrawer : MonoBehaviour
     {
-        [Tooltip("Height above ellipsoid for route vertices (match map markers).")]
+        [Tooltip("Ellipsoid height fallback when terrain is not sampled yet.")]
         public double groundHeightMeters = 1476.0;
 
-        [Tooltip("Extra meters above ground so lines clear terrain.")]
-        public float heightAboveGroundM = 6f;
+        [Tooltip("Meters above terrain for saved travel legs (below the live Light Road).")]
+        public float travelHeightAboveTerrainM = 2f;
+
+        [Tooltip("Meters above terrain for tap-claim connector lines.")]
+        public float connectorHeightAboveTerrainM = 7f;
 
         [Header("Travel routes (multi-point GPS legs)")]
         public Color travelRouteColor = new Color(0.30f, 0.75f, 0.95f, 0.85f);
@@ -27,6 +30,7 @@ namespace RoutesToGlory.Game
         public float connectorWidthMeters = 6f;
 
         private Transform _geoRoot;
+        private RtgTerrainHeight _terrainHeight;
         private int _lineIndex;
 
         public static RtgPersistedRouteDrawer FindOrCreate()
@@ -49,6 +53,7 @@ namespace RoutesToGlory.Game
         private void Awake()
         {
             _geoRoot = transform.parent != null ? transform.parent : transform;
+            _terrainHeight = RtgTerrainHeight.FindOrCreate();
         }
 
         /// <summary>Replace all drawn routes with the given map snapshot.</summary>
@@ -107,13 +112,13 @@ namespace RoutesToGlory.Game
                 ? connectorColor
                 : TryParseHexColor(route.empire_color, travelRouteColor);
             float width = isConnector ? connectorWidthMeters : travelWidthMeters;
+            float heightOffset = isConnector ? connectorHeightAboveTerrainM : travelHeightAboveTerrainM;
 
-            double h = groundHeightMeters + heightAboveGroundM;
             var positions = new Vector3[route.path_json.Length];
             for (int i = 0; i < route.path_json.Length; i++)
             {
                 RtgPathPoint p = route.path_json[i];
-                positions[i] = WorldFromLatLng(p.lng, p.lat, h);
+                positions[i] = WorldFromLatLng(p.lng, p.lat, heightOffset);
             }
 
             var go = new GameObject(isConnector ? $"Connector {_lineIndex}" : $"Route {_lineIndex}");
@@ -130,6 +135,7 @@ namespace RoutesToGlory.Game
             line.alignment = LineAlignment.View;
             line.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
             line.receiveShadows = false;
+            line.sortingOrder = isConnector ? 2 : 0;
 
             Shader shader = Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Sprites/Default");
             var mat = new Material(shader) { name = isConnector ? "RTG_ConnectorPersisted" : "RTG_RoutePersisted" };
@@ -179,9 +185,15 @@ namespace RoutesToGlory.Game
             return new Color(r / 255f, g / 255f, b / 255f, a);
         }
 
-        private Vector3 WorldFromLatLng(double lng, double lat, double heightM)
+        private Vector3 WorldFromLatLng(double lng, double lat, float heightAboveTerrainM)
         {
             if (_geoRoot == null) _geoRoot = transform.parent;
+            if (_terrainHeight == null)
+                _terrainHeight = RtgTerrainHeight.FindOrCreate();
+
+            double heightM = _terrainHeight != null
+                ? _terrainHeight.GetGroundHeight(lat, lng) + heightAboveTerrainM
+                : groundHeightMeters + heightAboveTerrainM;
 
             var probe = new GameObject("_geo_probe");
             probe.transform.SetParent(_geoRoot, false);

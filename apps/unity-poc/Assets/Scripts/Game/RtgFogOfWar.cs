@@ -14,8 +14,8 @@ namespace RoutesToGlory.Game
     /// </summary>
     public class RtgFogOfWar : MonoBehaviour
     {
-        private const float DefaultLiveRevealM = 35f;
-        private const int MaxRevealRects = 64;
+        private const float DefaultLiveRevealM = 60f;
+        private const int RevealTexSize = 256;
         private const float DefaultFogSheetSizeM = 14_000f;
 
         [Header("API (filled by Echo Site loader / 6b)")]
@@ -43,14 +43,19 @@ namespace RoutesToGlory.Game
         private readonly Dictionary<string, RevealAabb> _permanentReveal = new();
         private readonly HashSet<string> _shimmeringResources = new();
         private readonly HashSet<string> _seenMarkers = new();
-        private readonly Vector4[] _revealRectBuffer = new Vector4[MaxRevealRects];
+        private readonly Color32[] _revealPixels = new Color32[RevealTexSize * RevealTexSize];
+
+        private Texture2D _revealTexture;
+        private bool _revealTextureDirty = true;
 
         private Transform _fogRoot;
         private Transform _markerRoot;
         private Material _fogMaterial;
+        private MaterialPropertyBlock _fogPropertyBlock;
         private CesiumGeoreference _georeference;
         private CesiumGlobeAnchor _sheetAnchor;
         private MeshRenderer _sheetRenderer;
+        private RtgTerrainHeight _terrainHeight;
         private bool _ready;
         private bool _initializing;
         private bool _sheetSpawned;
@@ -58,12 +63,12 @@ namespace RoutesToGlory.Game
         private double _sheetCenterLng;
         private double _focusLat, _focusLng;
         private bool _hasFocus;
+        private RtgRoute[] _pendingRoutes;
 
         private static readonly int PlayerLatLngId = Shader.PropertyToID("_PlayerLatLng");
         private static readonly int LiveRevealRadiusId = Shader.PropertyToID("_LiveRevealRadiusM");
         private static readonly int FogSheetBoundsId = Shader.PropertyToID("_FogSheetBounds");
-        private static readonly int RevealRectCountId = Shader.PropertyToID("_RevealRectCount");
-        private static readonly int RevealRectsId = Shader.PropertyToID("_RevealRects");
+        private static readonly int RevealTexId = Shader.PropertyToID("_RevealTex");
 
         private struct RevealAabb
         {
@@ -124,19 +129,56 @@ namespace RoutesToGlory.Game
                 _fogRoot.SetParent(transform, false);
         }
 
-        public void OnMapSpawned(Transform markersContainer)
+        private void Start()
+        {
+            if (!Application.isPlaying) return;
+            StartCoroutine(DelayedBootstrap());
+        }
+
+        private IEnumerator DelayedBootstrap()
+        {
+            // Echo sites normally trigger init; this fallback covers slow/failed map loads.
+            yield return new WaitForSeconds(3f);
+            if (_ready || _initializing) yield break;
+
+            SyncFromEchoLoader();
+            Debug.LogWarning(
+                "[RTG] Fog bootstrap — echo sites did not initialize fog; starting standalone.");
+
+            _initializing = true;
+            yield return InitializeRoutine();
+        }
+
+        private void SyncFromEchoLoader()
+        {
+#if UNITY_2023_1_OR_NEWER
+            RtgEchoSiteLoader loader = UnityEngine.Object.FindFirstObjectByType<RtgEchoSiteLoader>();
+#else
+            RtgEchoSiteLoader loader = UnityEngine.Object.FindObjectOfType<RtgEchoSiteLoader>();
+#endif
+            if (loader == null) return;
+
+            apiBaseUrl = loader.apiBaseUrl;
+            worldId = loader.worldId;
+            empireId = loader.empireId;
+            groundHeightMeters = loader.groundHeightMeters;
+        }
+
+        public void OnMapSpawned(Transform markersContainer, RtgRoute[] routes = null)
         {
             _markerRoot = markersContainer;
             if (!Application.isPlaying) return;
 
             if (_ready)
             {
+                RevealAlongPersistedRoutes(routes);
                 RefreshMarkerVisibility();
                 return;
             }
 
             if (_initializing) return;
             _initializing = true;
+            _pendingRoutes = routes;
             StartCoroutine(InitializeRoutine());
         }
 
@@ -144,18 +186,39 @@ namespace RoutesToGlory.Game
         {
             bool live = !string.IsNullOrWhiteSpace(worldId) && !string.IsNullOrWhiteSpace(empireId);
             if (live)
+            {
                 yield return FetchFogConfig();
+                yield return FetchExplorationState();
+            }
+
+            RevealAlongPersistedRoutes(_pendingRoutes);
+            _pendingRoutes = null;
 
             yield return WaitForInitialFocus();
 
             double startLat = _hasFocus ? _focusLat : 42.7597;
             double startLng = _hasFocus ? _focusLng : -105.3819;
+
+            if (_fogMaterial == null)
+            {
+                Debug.LogError("[RTG] Fog material missing — overlay will not render.");
+                _initializing = false;
+                yield break;
+            }
+
             EnsureFogSheet(startLat, startLng);
 
+            if (!_sheetSpawned)
+            {
+                Debug.LogError("[RTG] Fog sheet failed to spawn.");
+                _initializing = false;
+                yield break;
+            }
+
             if (TryGetPlayerLatLng(out double pinLat, out double pinLng))
-                EnsurePinOccupiedTileRevealed(pinLat, pinLng);
+                TryRevealEntireTile(RtgFogTileMath.LatLngToTileId(pinLat, pinLng, tileSizeM));
             else
-                EnsurePinOccupiedTileRevealed(startLat, startLng);
+                TryRevealEntireTile(RtgFogTileMath.LatLngToTileId(startLat, startLng, tileSizeM));
 
             _initializing = false;
             _ready = true;
@@ -183,6 +246,34 @@ namespace RoutesToGlory.Game
             }
         }
 
+        private IEnumerator FetchExplorationState()
+        {
+            string url = $"{apiBaseUrl.TrimEnd('/')}/worlds/{worldId}/exploration/{empireId}";
+            using UnityWebRequest req = UnityWebRequest.Get(url);
+            yield return req.SendWebRequest();
+
+            if (req.result != UnityWebRequest.Result.Success)
+            {
+                Debug.LogWarning($"[RTG] Exploration fetch failed ({req.responseCode}): {req.error}");
+                yield break;
+            }
+
+            var resp = JsonUtility.FromJson<ExplorationResp>(req.downloadHandler.text);
+            if (resp?.exploredTileIds == null || resp.exploredTileIds.Length == 0)
+            {
+                Debug.LogWarning("[RTG] Exploration fetch returned no explored tiles.");
+                yield break;
+            }
+
+            foreach (string tileId in resp.exploredTileIds)
+            {
+                if (!TryRevealEntireTile(tileId))
+                    Debug.LogWarning($"[RTG] Skipped invalid explored tile id: {tileId}");
+            }
+
+            Debug.Log($"[RTG] Restored {resp.exploredTileIds.Length} explored tile(s) from server.");
+        }
+
         private IEnumerator FetchFogConfig()
         {
             string url = $"{apiBaseUrl.TrimEnd('/')}/config/public";
@@ -203,6 +294,7 @@ namespace RoutesToGlory.Game
         private void ApplyFogConfig(FogConfig cfg)
         {
             if (cfg.tileSizeM > 0) tileSizeM = cfg.tileSizeM;
+            if (cfg.revealRadiusM > 0) liveRevealRadiusM = cfg.revealRadiusM;
             if (cfg.unexploredOpacity >= 0) unexploredOpacity = cfg.unexploredOpacity;
             if (cfg.resourceShimmerDurationMs > 0) resourceShimmerDurationMs = cfg.resourceShimmerDurationMs;
             if (_fogMaterial != null)
@@ -211,13 +303,13 @@ namespace RoutesToGlory.Game
 
         public void ApplyExplorationDelta(string[] newlyRevealedTileIds, string[] newResourceNodeIds)
         {
-            if (!_ready) return;
-
             if (newlyRevealedTileIds != null)
             {
                 foreach (string tileId in newlyRevealedTileIds)
                     RevealEntireTile(tileId);
             }
+
+            if (!_ready) return;
 
             if (newResourceNodeIds != null)
             {
@@ -228,13 +320,30 @@ namespace RoutesToGlory.Game
 
         private void RevealEntireTile(string tileId)
         {
-            if (string.IsNullOrEmpty(tileId)) return;
+            if (_permanentReveal.ContainsKey(tileId)) return;
+            if (!TryRevealEntireTile(tileId))
+                Debug.LogWarning($"[RTG] Could not reveal tile: {tileId}");
+        }
+
+        private bool TryRevealEntireTile(string tileId)
+        {
+            if (string.IsNullOrEmpty(tileId)) return false;
+
+            string[] parts = tileId.Split(':');
+            if (parts.Length != 2 || !int.TryParse(parts[0], out _) || !int.TryParse(parts[1], out _))
+                return false;
+
+            if (_permanentReveal.ContainsKey(tileId))
+                return false;
 
             RtgFogTileMath.TileIdToCenter(tileId, tileSizeM, out double cLat, out double cLng);
             ComputeTileBounds(cLat, cLng, out float south, out float west, out float north, out float east);
 
             _permanentReveal[tileId] = new RevealAabb { South = south, West = west, North = north, East = east };
-            ShimmerResourcesInTile(tileId);
+            _revealTextureDirty = true;
+            if (_ready)
+                ShimmerResourcesInTile(tileId);
+            return true;
         }
 
         private void LateUpdate()
@@ -255,6 +364,7 @@ namespace RoutesToGlory.Game
             _hasFocus = true;
 
             MaybeRecenterFogSheet(sheetLat, sheetLng);
+            SyncFogSheetHeight();
             CommitPermanentReveal(playerLat, playerLng);
             EnsurePinOccupiedTileRevealed(playerLat, playerLng);
             // Bounds must match the anchored mesh center, not the live view center.
@@ -270,11 +380,28 @@ namespace RoutesToGlory.Game
 
             _sheetCenterLat = lat;
             _sheetCenterLng = lng;
-            if (_sheetAnchor != null)
-            {
-                _sheetAnchor.SetPositionLongitudeLatitudeHeight(
-                    lng, lat, groundHeightMeters + fogHeightAboveGround);
-            }
+            _revealTextureDirty = true;
+            SyncFogSheetHeight();
+        }
+
+        private void SyncFogSheetHeight()
+        {
+            if (_sheetAnchor == null) return;
+
+            double heightM = GetFogSheetEllipsoidHeight(_sheetCenterLat, _sheetCenterLng);
+            _sheetAnchor.SetPositionLongitudeLatitudeHeight(
+                _sheetCenterLng, _sheetCenterLat, heightM);
+        }
+
+        private double GetFogSheetEllipsoidHeight(double lat, double lng)
+        {
+            if (_terrainHeight == null)
+                _terrainHeight = RtgTerrainHeight.FindOrCreate();
+
+            if (_terrainHeight != null)
+                return _terrainHeight.GetGroundHeight(lat, lng) + fogHeightAboveGround;
+
+            return groundHeightMeters + fogHeightAboveGround;
         }
 
         private void UpdateFogShaderUniforms(double playerLat, double playerLng)
@@ -288,26 +415,101 @@ namespace RoutesToGlory.Game
             _fogMaterial.SetFloat(LiveRevealRadiusId, liveRevealRadiusM);
             _fogMaterial.SetVector(FogSheetBoundsId, new Vector4(south, west, north, east));
 
-            int count = PackRevealRectsForSheet(south, west, north, east);
-            _fogMaterial.SetInt(RevealRectCountId, count);
-            _fogMaterial.SetVectorArray(RevealRectsId, _revealRectBuffer);
+            if (_revealTextureDirty)
+                RebuildRevealTexture(south, west, north, east);
+
+            ApplyRevealTextureToRenderer();
         }
 
-        private int PackRevealRectsForSheet(float sheetSouth, float sheetWest, float sheetNorth, float sheetEast)
+        private void ApplyRevealTextureToRenderer()
         {
-            int count = 0;
+            if (_sheetRenderer == null || _revealTexture == null) return;
+
+            _fogPropertyBlock ??= new MaterialPropertyBlock();
+            _sheetRenderer.GetPropertyBlock(_fogPropertyBlock);
+            _fogPropertyBlock.SetTexture(RevealTexId, _revealTexture);
+            _sheetRenderer.SetPropertyBlock(_fogPropertyBlock);
+
+            if (_fogMaterial != null)
+                _fogMaterial.SetTexture(RevealTexId, _revealTexture);
+        }
+
+        private void RebuildRevealTexture(float sheetSouth, float sheetWest, float sheetNorth, float sheetEast)
+        {
+            EnsureRevealTexture();
+
+            for (int i = 0; i < _revealPixels.Length; i++)
+                _revealPixels[i] = new Color32(0, 0, 0, 255);
+
+            double latSpan = sheetNorth - sheetSouth;
+            double lngSpan = sheetEast - sheetWest;
+            if (latSpan <= 0 || lngSpan <= 0)
+            {
+                _revealTexture.SetPixels32(_revealPixels);
+                _revealTexture.Apply(false, false);
+                _revealTextureDirty = false;
+                return;
+            }
+
             foreach (RevealAabb aabb in _permanentReveal.Values)
             {
                 if (aabb.IsEmpty) continue;
-                if (!aabb.IntersectsSheet(sheetSouth, sheetWest, sheetNorth, sheetEast))
-                    continue;
-
-                _revealRectBuffer[count++] = new Vector4(
-                    (float)aabb.South, (float)aabb.West, (float)aabb.North, (float)aabb.East);
-                if (count >= MaxRevealRects) break;
+                FillAabbInTexture(
+                    aabb.South, aabb.West, aabb.North, aabb.East,
+                    sheetSouth, sheetWest, sheetNorth, sheetEast);
             }
 
-            return count;
+            _revealTexture.SetPixels32(_revealPixels);
+            _revealTexture.Apply(false, false);
+            _revealTextureDirty = false;
+        }
+
+        private void FillAabbInTexture(
+            double south, double west, double north, double east,
+            float sheetSouth, float sheetWest, float sheetNorth, float sheetEast)
+        {
+            if (north <= sheetSouth || south >= sheetNorth || east <= sheetWest || west >= sheetEast)
+                return;
+
+            double latSpan = sheetNorth - sheetSouth;
+            double lngSpan = sheetEast - sheetWest;
+            if (latSpan <= 0 || lngSpan <= 0) return;
+
+            double clampSouth = Math.Max(south, sheetSouth);
+            double clampNorth = Math.Min(north, sheetNorth);
+            double clampWest = Math.Max(west, sheetWest);
+            double clampEast = Math.Min(east, sheetEast);
+
+            int size = RevealTexSize;
+            int px0 = Math.Max(0, (int)Math.Floor((clampWest - sheetWest) / lngSpan * (size - 1)));
+            int px1 = Math.Min(size - 1, (int)Math.Ceiling((clampEast - sheetWest) / lngSpan * (size - 1)));
+            int py0 = Math.Max(0, (int)Math.Floor((clampSouth - sheetSouth) / latSpan * (size - 1)));
+            int py1 = Math.Min(size - 1, (int)Math.Ceiling((clampNorth - sheetSouth) / latSpan * (size - 1)));
+
+            var white = new Color32(255, 255, 255, 255);
+            for (int py = py0; py <= py1; py++)
+            {
+                int row = py * size;
+                for (int px = px0; px <= px1; px++)
+                    _revealPixels[row + px] = white;
+            }
+        }
+
+        private void EnsureRevealTexture()
+        {
+            if (_revealTexture != null) return;
+
+            _revealTexture = new Texture2D(
+                RevealTexSize,
+                RevealTexSize,
+                TextureFormat.RGBA32,
+                false,
+                true)
+            {
+                name = "RTG_FogReveal",
+                filterMode = FilterMode.Bilinear,
+                wrapMode = TextureWrapMode.Clamp,
+            };
         }
 
         /// <summary>
@@ -318,55 +520,69 @@ namespace RoutesToGlory.Game
         private void EnsurePinOccupiedTileRevealed(double lat, double lng)
         {
             string tileId = RtgFogTileMath.LatLngToTileId(lat, lng, tileSizeM);
-            RevealEntireTile(tileId);
+            TryRevealEntireTile(tileId);
         }
 
         private void CommitPermanentReveal(double lat, double lng)
         {
-            double dLat = liveRevealRadiusM / RtgFogTileMath.LatM;
-            double lngM = RtgFogTileMath.LatM * Math.Cos(lat * Math.PI / 180.0);
-            double dLng = liveRevealRadiusM / lngM;
-
-            double stampSouth = lat - dLat;
-            double stampNorth = lat + dLat;
-            double stampWest = lng - dLng;
-            double stampEast = lng + dLng;
-
             List<string> tiles = RtgFogTileMath.TilesInRadius(
-                lat, lng, liveRevealRadiusM + tileSizeM, tileSizeM);
+                lat, lng, liveRevealRadiusM, tileSizeM);
 
             foreach (string tileId in tiles)
+                TryRevealEntireTile(tileId);
+        }
+
+        public void RevealAlongPersistedRoutes(RtgRoute[] routes)
+        {
+            if (routes == null) return;
+
+            int revealed = 0;
+            foreach (RtgRoute route in routes)
             {
-                RtgFogTileMath.TileIdToCenter(tileId, tileSizeM, out double cLat, out double cLng);
-                ComputeTileBounds(cLat, cLng, out float south, out float west, out float north, out float east);
+                if (route?.path_json == null || route.path_json.Length < 1) continue;
+                if (!string.IsNullOrEmpty(route.status) && route.status != "active") continue;
 
-                double overlapSouth = Math.Max(south, stampSouth);
-                double overlapNorth = Math.Min(north, stampNorth);
-                double overlapWest = Math.Max(west, stampWest);
-                double overlapEast = Math.Min(east, stampEast);
-                if (overlapSouth >= overlapNorth || overlapWest >= overlapEast)
-                    continue;
-
-                if (!_permanentReveal.TryGetValue(tileId, out RevealAabb aabb) || aabb.IsEmpty)
-                {
-                    aabb = new RevealAabb
-                    {
-                        South = overlapSouth,
-                        West = overlapWest,
-                        North = overlapNorth,
-                        East = overlapEast,
-                    };
-                }
-                else
-                {
-                    aabb.South = Math.Min(aabb.South, overlapSouth);
-                    aabb.West = Math.Min(aabb.West, overlapWest);
-                    aabb.North = Math.Max(aabb.North, overlapNorth);
-                    aabb.East = Math.Max(aabb.East, overlapEast);
-                }
-
-                _permanentReveal[tileId] = aabb;
+                revealed += RevealAlongPath(route.path_json);
             }
+
+            if (revealed > 0)
+                Debug.Log($"[RTG] Revealed fog along {revealed} persisted route corridor sample(s).");
+        }
+
+        private int RevealAlongPath(RtgPathPoint[] path)
+        {
+            if (path == null || path.Length == 0) return 0;
+
+            int samples = 0;
+            RevealTilesNearPoint(path[0].lat, path[0].lng);
+            samples++;
+
+            for (int i = 1; i < path.Length; i++)
+            {
+                RtgPathPoint from = path[i - 1];
+                RtgPathPoint to = path[i];
+                double dist = DistanceMeters(from.lat, from.lng, to.lat, to.lng);
+                double stepM = Math.Max(tileSizeM * 0.5, liveRevealRadiusM);
+                int steps = Math.Max(1, (int)Math.Ceiling(dist / stepM));
+
+                for (int s = 1; s <= steps; s++)
+                {
+                    double t = s / (double)steps;
+                    double sampleLat = from.lat + (to.lat - from.lat) * t;
+                    double sampleLng = from.lng + (to.lng - from.lng) * t;
+                    RevealTilesNearPoint(sampleLat, sampleLng);
+                    samples++;
+                }
+            }
+
+            return samples;
+        }
+
+        private void RevealTilesNearPoint(double lat, double lng)
+        {
+            foreach (string tileId in RtgFogTileMath.TilesInRadius(
+                         lat, lng, liveRevealRadiusM, tileSizeM))
+                TryRevealEntireTile(tileId);
         }
 
         private bool IsPermanentlyRevealed(double lat, double lng)
@@ -398,11 +614,11 @@ namespace RoutesToGlory.Game
             _sheetRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
             _sheetRenderer.receiveShadows = false;
             _sheetRenderer.allowOcclusionWhenDynamic = false;
-            _sheetRenderer.sharedMaterial = _fogMaterial;
+            _sheetRenderer.material = _fogMaterial;
 
             _sheetAnchor = go.AddComponent<CesiumGlobeAnchor>();
             _sheetAnchor.SetPositionLongitudeLatitudeHeight(
-                centerLng, centerLat, groundHeightMeters + fogHeightAboveGround);
+                centerLng, centerLat, GetFogSheetEllipsoidHeight(centerLat, centerLng));
 
             _sheetSpawned = true;
         }
@@ -567,13 +783,6 @@ namespace RoutesToGlory.Game
         {
             if (_fogMaterial != null) return;
 
-            Material template = Resources.Load<Material>("RTG_FogOfWar");
-            if (template != null)
-            {
-                _fogMaterial = new Material(template) { name = "RTG_FogOfWar_Runtime" };
-                return;
-            }
-
             Shader shader = Shader.Find("RoutesToGlory/FogOfWarOverlay");
             if (shader == null)
             {
@@ -587,12 +796,15 @@ namespace RoutesToGlory.Game
                 return;
             }
 
-            _fogMaterial = new Material(shader) { name = "RTG_FogOfWar" };
+            _fogMaterial = new Material(shader) { name = "RTG_FogOfWar_Runtime" };
             _fogMaterial.SetColor("_FogColor", new Color(0.0588f, 0.0902f, 0.1647f, 1f));
             _fogMaterial.SetFloat("_Opacity", unexploredOpacity);
             _fogMaterial.SetFloat("_NoiseScale", 0.015f);
             _fogMaterial.SetFloat("_PulseSpeed", 0.35f);
             _fogMaterial.SetFloat("_EdgeShimmer", 0f);
+            _fogMaterial.SetFloat(LiveRevealRadiusId, liveRevealRadiusM);
+            EnsureRevealTexture();
+            _fogMaterial.SetTexture(RevealTexId, _revealTexture);
         }
 
         public void ClearFog()
@@ -611,6 +823,12 @@ namespace RoutesToGlory.Game
             _sheetSpawned = false;
             _shimmeringResources.Clear();
             _seenMarkers.Clear();
+            _revealTextureDirty = true;
+            if (_revealTexture != null)
+            {
+                Destroy(_revealTexture);
+                _revealTexture = null;
+            }
         }
 
         public IEnumerator ReloadFromApi()
@@ -618,6 +836,12 @@ namespace RoutesToGlory.Game
             ClearFog();
             _initializing = true;
             yield return InitializeRoutine();
+        }
+
+        [Serializable]
+        private class ExplorationResp
+        {
+            public string[] exploredTileIds;
         }
 
         [Serializable]
@@ -630,6 +854,7 @@ namespace RoutesToGlory.Game
         private class FogConfig
         {
             public float tileSizeM;
+            public float revealRadiusM;
             public float unexploredOpacity;
             public int resourceShimmerDurationMs;
         }

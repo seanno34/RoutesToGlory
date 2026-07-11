@@ -1,5 +1,5 @@
 {
-  "_comment": "Copy to rtg-dev-world.json and fill in a world seeded in your local MySQL. Create one with: curl -X POST http://localhost:3001/api/worlds -H 'Content-Type: application/json' -d '{\"name\":\"Douglas Survey\",\"spawnLat\":42.7597,\"spawnLng\":-105.3822}'. Then 'Routes to Glory > 6b. Connect Echo Sites to Live API' reads this file. For iPhone builds on the same Wi‑Fi as your Mac, set apiBaseUrl to your Mac's LAN IP (e.g. http://192.168.1.42:3001/api) — localhost only works in the Unity Editor.",
+  "_comment": "Copy to rtg-dev-world.json (gitignored) and fill in a world seeded in your local MySQL. Unity loads this automatically in Play mode (Editor: apps/unity-poc/rtg-dev-world.json; device: copy the same file to Assets/StreamingAssets/rtg-dev-world.json before building). Create a world with: curl -X POST http://localhost:3001/api/worlds -H 'Content-Type: application/json' -d '{\"name\":\"Douglas Survey\",\"spawnLat\":42.7597,\"spawnLng\":-105.3822}'. For iPhone on the same Wi‑Fi, apiBaseUrl must be your Mac LAN IP (e.g. http://172.20.10.10:3001/api when on iPhone hotspot) — localhost only works in the Unity Editor on the same machine.",
   "apiBaseUrl": "http://localhost:3001/api",
   "worldId": "00000000-0000-0000-0000-000000000000",
   "empireId": "00000000-0000-0000-0000-000000000000",

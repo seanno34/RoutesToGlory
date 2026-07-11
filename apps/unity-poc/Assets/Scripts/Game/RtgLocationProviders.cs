@@ -59,7 +59,9 @@ namespace RoutesToGlory.Game
 
         public string Status => $"Simulated · {_speedMetersPerSecond:0.#} m/s";
 
-        public void Begin()
+        public void Begin() => Restart();
+
+        public void Restart()
         {
             _segment = 0;
             _distanceIntoSegment = 0.0;
@@ -84,7 +86,15 @@ namespace RoutesToGlory.Game
                 RtgWaypoint b = _route[(_segment + 1) % _route.Length];
                 double segLength = SegmentLengthMeters(a, b);
 
-                if (segLength < 0.001 || _distanceIntoSegment < segLength)
+                // Skip duplicate consecutive waypoints (e.g. loop start/end both "home").
+                if (segLength < 0.5)
+                {
+                    _distanceIntoSegment = 0.0;
+                    _segment = (_segment + 1) % _route.Length;
+                    continue;
+                }
+
+                if (_distanceIntoSegment < segLength)
                 {
                     double t = segLength < 0.001 ? 0.0 : _distanceIntoSegment / segLength;
                     _lat = a.lat + (b.lat - a.lat) * t;

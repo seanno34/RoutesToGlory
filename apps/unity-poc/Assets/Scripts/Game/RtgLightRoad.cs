@@ -108,8 +108,7 @@ namespace RoutesToGlory.Game
             _line.positionCount = 0;
             _line.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
             _line.receiveShadows = false;
-
-            // Unlit so the road reads as a constant bright energy ribbon regardless
+            _line.sortingOrder = 1;
             // of the scene's alien lighting.
             Shader shader = Shader.Find("Universal Render Pipeline/Unlit");
             if (shader == null) shader = Shader.Find("Sprites/Default");

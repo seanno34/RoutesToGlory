@@ -9,16 +9,9 @@ using UnityEngine.Networking;
 namespace RoutesToGlory.Game
 {
     /// <summary>
-    /// Turns player movement into a real, persisted route on the server by driving
-    /// the @empire/api route-session endpoints: begin → stream GPS points → the
-    /// server validates them, auto-connects at a settlement's geofence, and saves a
-    /// route. This is the "Light Road becomes a real route" plumbing, using the
-    /// exact same contract the production web/mobile client will.
-    ///
-    /// Timestamps are fabricated from a plausible ground speed so the server's GPS
-    /// validation (accuracy / speed / gap / duplicate) accepts them even though the
-    /// editor's simulated pin moves faster than a real walk. On device, real GPS
-    /// timestamps replace these with no other changes.
+    /// Streams movement to the API as route sessions. Every leg with ≥2 GPS samples
+    /// is persisted as a travel route — node connection (Echo Sites, resources, etc.)
+    /// is tracked separately for future bonuses, not required to save the path.
     /// </summary>
     public class RtgRouteSession : MonoBehaviour
     {
@@ -42,6 +35,9 @@ namespace RoutesToGlory.Game
 
         [Tooltip("After auto-connecting at a site, wait until the player moves this far from it before starting the next route (prevents instantly reconnecting while still inside the geofence).")]
         public float resumeAfterMeters = 250f;
+
+        [Tooltip("Auto-save the current leg and start a fresh session after this many meters of travel (keeps long drives durable even without closing the app). 0 = only save on shutdown or node connect.")]
+        public float legCheckpointMeters = 1500f;
 
         private const int MaxBatch = 20;
 
@@ -67,6 +63,8 @@ namespace RoutesToGlory.Game
         // left the connected site's geofence (see resumeAfterMeters).
         private double _resumeLat, _resumeLng;
         private bool _hasResumeGate;
+        private bool _checkpointSaving;
+        private bool _shutdownSaveStarted;
 
         // ------------------------------------------------------------------ //
         // Public API (called by the player each frame + by the on-screen buttons)
@@ -106,6 +104,7 @@ namespace RoutesToGlory.Game
             _fullPath.Add(new PathPoint { lat = lat, lng = lng });
             _lastLat = lat;
             _lastLng = lng;
+            MaybeCheckpointLeg();
         }
 
         public void ToggleFromButton()
@@ -193,12 +192,11 @@ namespace RoutesToGlory.Game
             }
             sb.Append("],\"targetKind\":\"").Append(marker.KindApiValue).Append("\",");
             sb.Append("\"targetId\":\"").Append(marker.targetId).Append("\"");
+            // Pin position on the map (may be scatter-offset for tap testing).
+            sb.Append(",\"approachLat\":").Append(D(marker.lat));
+            sb.Append(",\"approachLng\":").Append(D(marker.lng));
             if (!string.IsNullOrEmpty(goodieChoice))
-            {
                 sb.Append(",\"goodieChoice\":\"").Append(goodieChoice).Append("\"");
-                sb.Append(",\"approachLat\":").Append(D(marker.lat));
-                sb.Append(",\"approachLng\":").Append(D(marker.lng));
-            }
             sb.Append('}');
 
             bool reloadMap = !string.IsNullOrEmpty(goodieChoice);
@@ -351,7 +349,7 @@ namespace RoutesToGlory.Game
                 if (resp != null && resp.connected)
                 {
                     string name = resp.settlement != null ? resp.settlement.name : "settlement";
-                    Debug.Log($"[RTG] Route auto-connected to {name} (route {resp.routeId}).");
+                    Debug.Log($"[RTG] Node connected at {name} — leg saved (route {resp.routeId}). Bonuses TBD.");
                     _state = State.Idle; // server completed the session
                     RefreshPersistedRoutes();
 
@@ -360,7 +358,7 @@ namespace RoutesToGlory.Game
                     _resumeLng = _curLng;
                     _hasResumeGate = true;
                     StatusText = autoRecord
-                        ? $"Route: connected → {name} · continuing"
+                        ? $"Route: node connected → {name}"
                         : $"Route: connected → {name}";
                 }
             });
@@ -394,7 +392,7 @@ namespace RoutesToGlory.Game
                 {
                     var resp = JsonUtility.FromJson<EndResp>(text);
                     StatusText = resp != null && resp.saved
-                        ? $"Route: saved ({resp.status})"
+                        ? "Route: travel leg saved"
                         : $"Route: ended ({(resp != null ? resp.status : "?")})";
                     Debug.Log($"[RTG] Route session ended: {text}");
                     if (resp != null && resp.saved)
@@ -421,6 +419,63 @@ namespace RoutesToGlory.Game
             bool ok = req.result == UnityWebRequest.Result.Success;
             string text = ok ? req.downloadHandler.text : (req.downloadHandler?.text ?? req.error);
             done?.Invoke(req.responseCode, text, ok);
+        }
+
+        private void MaybeCheckpointLeg()
+        {
+            if (!autoRecord || legCheckpointMeters <= 0f) return;
+            if (_state != State.Active || _checkpointSaving || _shutdownSaveStarted) return;
+            if (_cumulativeDistanceM < legCheckpointMeters) return;
+            if (_fullPath.Count < 2) return;
+
+            _checkpointSaving = true;
+            StartCoroutine(CheckpointSaveRoutine());
+        }
+
+        private IEnumerator CheckpointSaveRoutine()
+        {
+            Debug.Log($"[RTG] Checkpoint save after {_cumulativeDistanceM:0} m…");
+            yield return EndRoutine();
+            _checkpointSaving = false;
+        }
+
+        private void OnApplicationPause(bool paused)
+        {
+            if (paused) TryPersistActiveRouteOnShutdown();
+        }
+
+        private void OnApplicationQuit()
+        {
+            TryPersistActiveRouteOnShutdown();
+        }
+
+        private void OnDestroy()
+        {
+            TryPersistActiveRouteOnShutdown();
+        }
+
+        /// <summary>
+        /// Flush and end the active leg when the app backgrounds or closes so
+        /// real-world drives persist without needing an Echo Site geofence connect.
+        /// </summary>
+        private void TryPersistActiveRouteOnShutdown()
+        {
+            if (_shutdownSaveStarted || _state != State.Active) return;
+            if (_fullPath.Count < 2 && _queue.Count == 0) return;
+
+            _shutdownSaveStarted = true;
+            StartCoroutine(ShutdownSaveRoutine());
+        }
+
+        private IEnumerator ShutdownSaveRoutine()
+        {
+            Debug.Log("[RTG] Saving in-progress route before shutdown…");
+            int guard = 0;
+            while (_state == State.Active && _queue.Count > 0 && guard++ < 50)
+                yield return FlushOnce();
+
+            if (_state == State.Active)
+                yield return EndRoutine();
         }
 
         // ------------------------------------------------------------------ //

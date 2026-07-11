@@ -91,6 +91,11 @@ namespace RoutesToGlory.Game
         // Cache runtime-created emissive materials by color so we don't leak one per marker.
         private readonly Dictionary<Color, Material> _materialCache = new();
 
+        private void Awake()
+        {
+            RtgDevWorldConfig.TryApplyTo(this);
+        }
+
         private void Start()
         {
             if (Application.isPlaying && loadOnPlay)
@@ -135,7 +140,11 @@ namespace RoutesToGlory.Game
 
                 if (req.result != UnityWebRequest.Result.Success)
                 {
-                    Debug.LogError($"[RTG] Echo Site load failed: {req.responseCode} {req.error} ({url})");
+                    Debug.LogError(
+                        $"[RTG] Echo Site load failed: {req.responseCode} {req.error} ({url}). " +
+                        "Is @empire/api running (pnpm --filter @empire/api dev)? " +
+                        "On iPhone, apiBaseUrl must be your Mac LAN IP, not localhost. " +
+                        "Check rtg-dev-world.json / RTG Echo Sites in the scene.");
                     yield break;
                 }
                 json = req.downloadHandler.text;
@@ -197,14 +206,14 @@ namespace RoutesToGlory.Game
             Debug.Log($"[RTG] Spawned {settlements} Echo Site(s) and {resources} resource node(s).");
             DrawPersistedRoutes(map);
             RtgMapConnections.Apply(map, empireId);
-            SetupFogOfWar(container);
+            SetupFogOfWar(container, map?.routes);
         }
 
-        private void SetupFogOfWar(Transform markersContainer)
+        private void SetupFogOfWar(Transform markersContainer, RtgRoute[] routes = null)
         {
             if (!Application.isPlaying) return;
             RtgFogOfWar fog = RtgFogOfWar.Ensure(this);
-            if (fog != null) fog.OnMapSpawned(markersContainer);
+            if (fog != null) fog.OnMapSpawned(markersContainer, routes);
         }
 
         private void DrawPersistedRoutes(RtgWorldMap map)
@@ -238,7 +247,7 @@ namespace RoutesToGlory.Game
             double lat = s.lat, lng = s.lng;
             bool isGoodieHut = s.is_goodie_hut != 0 || s.tier == "goodie_hut";
             bool pinOnCorridor = isGoodieHut && s.id == _corridorGoodieId;
-            string tapTag = ApplyTapTestScatter(ref lat, ref lng, pinOnCorridor);
+            string tapTag = ApplyTapTestScatter(ref lat, ref lng, pinOnCorridor, s.id);
 
             GameObject root = CreateMarkerRoot($"Echo Site — {s.name} ({s.tier})", container);
             AddVisual(root.transform, PrimitiveType.Sphere, color, Vector3.one * diameter, Quaternion.identity);
@@ -254,7 +263,7 @@ namespace RoutesToGlory.Game
             float size = RichnessSize(r.richness);
 
             double lat = r.lat, lng = r.lng;
-            string tapTag = ApplyTapTestScatter(ref lat, ref lng);
+            string tapTag = ApplyTapTestScatter(ref lat, ref lng, false, r.id);
 
             GameObject root = CreateMarkerRoot($"Resource — {r.resource_id} ({r.richness})", container);
             AddVisual(root.transform, PrimitiveType.Cube, color, Vector3.one * size, Quaternion.Euler(45f, 45f, 0f));
@@ -286,7 +295,8 @@ namespace RoutesToGlory.Game
         /// The nearest Douglas goodie hut is pinned on the simulated tour's north corridor leg.
         /// Returns a short label suffix.
         /// </summary>
-        private string ApplyTapTestScatter(ref double lat, ref double lng, bool isGoodieHut = false)
+        private string ApplyTapTestScatter(
+            ref double lat, ref double lng, bool isGoodieHut = false, string stableId = null)
         {
             if (isGoodieHut)
             {
@@ -299,13 +309,12 @@ namespace RoutesToGlory.Game
 
             double dist = HaversineM(scatterCenterLat, scatterCenterLng, lat, lng);
             if (dist > scatterRadiusMeters)
-            {
-                _scatterIndex++;
                 return "";
-            }
 
-            int bucket = _scatterIndex % 3;
-            _scatterIndex++;
+            // Stable bucket per marker so reload/claim does not reshuffle positions.
+            int bucket = 0;
+            if (!string.IsNullOrEmpty(stableId))
+                bucket = Mathf.Abs(stableId.GetHashCode()) % 3;
 
             double eastM = bucket switch
             {

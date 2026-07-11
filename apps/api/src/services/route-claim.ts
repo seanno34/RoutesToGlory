@@ -388,8 +388,17 @@ async function claimResource(
     throw Object.assign(new Error('Resource claimed by another empire'), { statusCode: 403 });
   }
 
-  const lat = Number(node.lat);
-  const lng = Number(node.lng);
+  let lat = Number(node.lat);
+  let lng = Number(node.lng);
+
+  const APPROACH_MAX_DRIFT_M = 5000;
+  if (input.approachLat != null && input.approachLng != null) {
+    const drift = haversineM(lat, lng, input.approachLat, input.approachLng);
+    if (drift <= APPROACH_MAX_DRIFT_M) {
+      lat = input.approachLat;
+      lng = input.approachLng;
+    }
+  }
 
   if (!isWithinRouteCorridor(lat, lng, input.routePath, radiusM)) {
     throw Object.assign(

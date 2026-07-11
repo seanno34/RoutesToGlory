@@ -150,7 +150,7 @@ namespace RoutesToGlory.Game
         {
             if (result.alreadyConnected)
             {
-                RefreshAfterClaim(result.connectedTargetId);
+                RefreshAfterClaim(result);
                 return;
             }
 
@@ -159,7 +159,7 @@ namespace RoutesToGlory.Game
             if (!result.ok) return;
 
             MarkConnected(result.connectedTargetId);
-            RefreshAfterClaim(result.connectedTargetId);
+            RefreshAfterClaim(result);
         }
 
         private static void MarkConnected(string targetId)
@@ -176,12 +176,11 @@ namespace RoutesToGlory.Game
             }
         }
 
-        private void RefreshAfterClaim(string targetId)
+        private void RefreshAfterClaim(RtgRouteSession.ClaimResult result)
         {
-            MarkConnected(targetId);
             if (_session == null) return;
 
-            if (_echoLoader != null)
+            if (result.reloadMap && _echoLoader != null)
                 StartCoroutine(_echoLoader.ReloadFromApi());
             else
                 RefreshPersistedRoutes();

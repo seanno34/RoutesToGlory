@@ -23,19 +23,21 @@ Material:
   m_LockedProperties: 
   m_SavedProperties:
     serializedVersion: 3
-    m_TexEnvs: []
+    m_TexEnvs:
+    - _RevealTex:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
     m_Ints: []
     m_Floats:
     - _EdgeShimmer: 0
-    - _LiveRevealRadiusM: 35
+    - _LiveRevealRadiusM: 60
     - _NoiseScale: 0.015
     - _Opacity: 0.92
     - _PulseSpeed: 0.35
     m_Colors:
     - _FogColor: {r: 0.0588, g: 0.0902, b: 0.1647, a: 1}
+    - _FogSheetBounds: {r: 0, g: 0, b: 0, a: 0}
     - _PlayerLatLng: {r: 0, g: 0, b: 0, a: 0}
-    - _RevealMax: {r: -9999, g: -9999, b: 0, a: 0}
-    - _RevealMin: {r: 9999, g: 9999, b: 0, a: 0}
-    - _TileBounds: {r: 0, g: 0, b: 0, a: 0}
   m_BuildTextureStacks: []
   m_AllowLocking: 1

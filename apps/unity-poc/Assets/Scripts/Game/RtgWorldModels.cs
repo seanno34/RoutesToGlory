@@ -17,7 +17,7 @@ namespace RoutesToGlory.Game
         public RtgResourceNode[] resources;
     }
 
-    /// <summary>Persisted Light Road / connector segment from the routes table.</summary>
+    /// <summary>Persisted GPS path. Settlement anchors are set only when the leg touches a node geofence.</summary>
     [Serializable]
     public class RtgRoute
     {

@@ -75,13 +75,20 @@ export async function grantStartingVision(
   }
 }
 
+export type RevealTilesOptions = {
+  /** When false, only stamp explored tiles — no random resource spawns (route backfill). */
+  spawnResources?: boolean;
+};
+
 export async function revealTilesAtPoint(
   worldId: string,
   empireId: string,
   lat: number,
   lng: number,
   config: GameConfig = configStore.get(),
+  options: RevealTilesOptions = {},
 ): Promise<{ newlyRevealedTileIds: string[]; newResourceNodeIds: string[] }> {
+  const spawnResources = options.spawnResources !== false;
   const tiles = tilesInRadius(
     lat,
     lng,
@@ -103,20 +110,22 @@ export async function revealTilesAtPoint(
   }
 
   const newResourceNodeIds: string[] = [];
-  const nodesOnTile = await query<{ tile_id: string }>(
-    `SELECT tile_id FROM map_resource_nodes WHERE world_id = ?`,
-    [worldId],
-  );
-  const occupiedTiles = new Set(nodesOnTile.rows.map((r) => r.tile_id));
+  if (spawnResources) {
+    const nodesOnTile = await query<{ tile_id: string }>(
+      `SELECT tile_id FROM map_resource_nodes WHERE world_id = ?`,
+      [worldId],
+    );
+    const occupiedTiles = new Set(nodesOnTile.rows.map((r) => r.tile_id));
 
-  for (const tileId of newlyRevealedTileIds) {
-    if (occupiedTiles.has(tileId)) continue;
-    if (Math.random() >= config.fogOfWar.resourceNodeChanceOnReveal) continue;
+    for (const tileId of newlyRevealedTileIds) {
+      if (occupiedTiles.has(tileId)) continue;
+      if (Math.random() >= config.fogOfWar.resourceNodeChanceOnReveal) continue;
 
-    const nodeId = await insertRandomResourceNode(worldId, tileId, config);
-    if (nodeId) {
-      newResourceNodeIds.push(nodeId);
-      occupiedTiles.add(tileId);
+      const nodeId = await insertRandomResourceNode(worldId, tileId, config);
+      if (nodeId) {
+        newResourceNodeIds.push(nodeId);
+        occupiedTiles.add(tileId);
+      }
     }
   }
 
@@ -157,6 +166,7 @@ export async function revealTilesAlongSegment(
   from: { lat: number; lng: number } | null,
   to: { lat: number; lng: number },
   config: GameConfig = configStore.get(),
+  options: RevealTilesOptions = {},
 ): Promise<{ newlyRevealedTileIds: string[]; newResourceNodeIds: string[] }> {
   const stepM = Math.max(
     config.fogOfWar.revealRadiusM,
@@ -176,6 +186,7 @@ export async function revealTilesAlongSegment(
       sample.lat,
       sample.lng,
       config,
+      options,
     );
     allNewTiles.push(...result.newlyRevealedTileIds);
     allNewResources.push(...result.newResourceNodeIds);
@@ -237,6 +248,63 @@ export async function insertResourceNode(
   return id;
 }
 
+/** Every saved route corridor must stay explored — routes and fog are separate writes. */
+export async function revealTilesAlongRoutePath(
+  worldId: string,
+  empireId: string,
+  points: Array<{ lat: number; lng: number }>,
+  config: GameConfig = configStore.get(),
+  options: RevealTilesOptions = { spawnResources: false },
+): Promise<void> {
+  if (points.length === 0) return;
+  if (points.length === 1) {
+    await revealTilesAtPoint(
+      worldId,
+      empireId,
+      points[0]!.lat,
+      points[0]!.lng,
+      config,
+      options,
+    );
+    return;
+  }
+
+  for (let i = 1; i < points.length; i += 1) {
+    await revealTilesAlongSegment(
+      worldId,
+      empireId,
+      points[i - 1]!,
+      points[i]!,
+      config,
+      options,
+    );
+  }
+}
+
+async function ensureExplorationAlongPersistedRoutes(
+  worldId: string,
+  empireId: string,
+  config: GameConfig,
+): Promise<void> {
+  const routes = await query<{ path_json: string }>(
+    `SELECT path_json FROM routes
+     WHERE world_id = ? AND empire_id = ? AND status = 'active'`,
+    [worldId, empireId],
+  );
+
+  for (const row of routes.rows) {
+    let points: Array<{ lat: number; lng: number }>;
+    try {
+      points = JSON.parse(row.path_json) as Array<{ lat: number; lng: number }>;
+    } catch {
+      continue;
+    }
+    await revealTilesAlongRoutePath(worldId, empireId, points, config, {
+      spawnResources: false,
+    });
+  }
+}
+
 export async function getExplorationState(
   worldId: string,
   empireId: string,
@@ -246,6 +314,9 @@ export async function getExplorationState(
   mineYieldAccrued?: Record<string, number>;
   activeMineCount?: number;
 }> {
+  const config = configStore.get();
+  await ensureExplorationAlongPersistedRoutes(worldId, empireId, config);
+
   const yieldResult = await applyMineYields(worldId, empireId);
   const exploredTileIds = await getExploredTileIds(worldId, empireId);
   const explored = new Set(exploredTileIds);

@@ -8,8 +8,9 @@ Shader "RoutesToGlory/FogOfWarOverlay"
         _PulseSpeed ("Pulse Speed", Float) = 0.35
         _EdgeShimmer ("Edge Shimmer", Range(0, 1)) = 0
         _PlayerLatLng ("Player Lat Lng", Vector) = (0, 0, 0, 0)
-        _LiveRevealRadiusM ("Live Reveal Radius (m)", Float) = 35
+        _LiveRevealRadiusM ("Live Reveal Radius (m)", Float) = 60
         _FogSheetBounds ("Fog Sheet SWNE", Vector) = (0, 0, 0, 0)
+        _RevealTex ("Permanent Reveal Mask", 2D) = "black" {}
     }
 
     SubShader
@@ -26,14 +27,14 @@ Shader "RoutesToGlory/FogOfWarOverlay"
             Name "FogOfWar"
             Blend SrcAlpha OneMinusSrcAlpha
             ZWrite Off
+            ZTest LEqual
+            Offset 0, -1
             Cull Off
 
             HLSLPROGRAM
             #pragma vertex vert
             #pragma fragment frag
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
-
-            #define MAX_REVEAL_RECTS 64
 
             struct Attributes
             {
@@ -56,9 +57,10 @@ Shader "RoutesToGlory/FogOfWarOverlay"
                 float4 _PlayerLatLng;
                 float _LiveRevealRadiusM;
                 float4 _FogSheetBounds;
-                int _RevealRectCount;
-                float4 _RevealRects[MAX_REVEAL_RECTS];
             CBUFFER_END
+
+            TEXTURE2D(_RevealTex);
+            SAMPLER(sampler_RevealTex);
 
             float LatLngDistM(float2 a, float2 b)
             {
@@ -67,17 +69,6 @@ Shader "RoutesToGlory/FogOfWarOverlay"
                 float lngM = latM * cos(avgLat);
                 float2 d = float2((b.x - a.x) * latM, (b.y - a.y) * lngM);
                 return length(d);
-            }
-
-            bool InPermanentReveal(float lat, float lng)
-            {
-                for (int i = 0; i < _RevealRectCount; i++)
-                {
-                    float4 r = _RevealRects[i];
-                    if (lat >= r.x && lat <= r.z && lng >= r.y && lng <= r.w)
-                        return true;
-                }
-                return false;
             }
 
             Varyings vert(Attributes input)
@@ -94,7 +85,8 @@ Shader "RoutesToGlory/FogOfWarOverlay"
                 float fragLat = lerp(_FogSheetBounds.x, _FogSheetBounds.z, input.uv.y);
                 float fragLng = lerp(_FogSheetBounds.y, _FogSheetBounds.w, input.uv.x);
 
-                if (InPermanentReveal(fragLat, fragLng))
+                float permanentReveal = SAMPLE_TEXTURE2D(_RevealTex, sampler_RevealTex, input.uv).r;
+                if (permanentReveal > 0.5)
                     discard;
 
                 float dist = LatLngDistM(float2(fragLat, fragLng), _PlayerLatLng.xy);
