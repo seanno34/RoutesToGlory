@@ -359,17 +359,11 @@ namespace RoutesToGlory.Game
         private void AddVisual(
             Transform root, PrimitiveType shape, Color color, Vector3 scale, Quaternion localRotation)
         {
-            GameObject go = GameObject.CreatePrimitive(shape);
-            go.name = "Beacon";
-
-            // Keep the primitive collider so tap raycasts can hit markers.
-            go.transform.SetParent(root, false);
+            Mesh mesh = shape == PrimitiveType.Cube ? RtgMeshPrimitives.Cube : RtgMeshPrimitives.Sphere;
+            GameObject go = RtgMeshPrimitives.CreateMeshObject(
+                "Beacon", mesh, GetEmissiveMaterial(color), root);
             go.transform.localRotation = localRotation;
             go.transform.localScale = scale;
-
-            var renderer = go.GetComponent<MeshRenderer>();
-            renderer.sharedMaterial = GetEmissiveMaterial(color);
-            renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
         }
 
         // Outline offsets (8-way) for the faux text outline. Legacy TextMesh has no

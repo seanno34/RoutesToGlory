@@ -31,6 +31,10 @@ export async function applyMineYields(
     `SELECT resources FROM empire_stockpiles WHERE empire_id = ?`,
     [empireId],
   );
+  if (stockpileResult.rows.length === 0) {
+    return { accrued: {}, mineCount: mines.rows.length };
+  }
+
   const stockpile = JSON.parse(stockpileResult.rows[0]?.resources ?? '{}') as Record<
     string,
     number

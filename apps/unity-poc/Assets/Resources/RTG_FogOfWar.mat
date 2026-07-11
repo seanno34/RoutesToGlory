@@ -1,0 +1,41 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!21 &2100000
+Material:
+  serializedVersion: 8
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: RTG_FogOfWar
+  m_Shader: {fileID: 4800000, guid: 93aa46dbdc9dc4f2589258b8b3526b03, type: 3}
+  m_Parent: {fileID: 0}
+  m_ModifiedSerializedProperties: 0
+  m_ValidKeywords: []
+  m_InvalidKeywords: []
+  m_LightmapFlags: 4
+  m_EnableInstancingVariants: 0
+  m_DoubleSidedGI: 0
+  m_CustomRenderQueue: 3120
+  stringTagMap:
+    RenderType: Transparent
+  disabledShaderPasses: []
+  m_LockedProperties: 
+  m_SavedProperties:
+    serializedVersion: 3
+    m_TexEnvs: []
+    m_Ints: []
+    m_Floats:
+    - _EdgeShimmer: 0
+    - _LiveRevealRadiusM: 35
+    - _NoiseScale: 0.015
+    - _Opacity: 0.92
+    - _PulseSpeed: 0.35
+    m_Colors:
+    - _FogColor: {r: 0.0588, g: 0.0902, b: 0.1647, a: 1}
+    - _PlayerLatLng: {r: 0, g: 0, b: 0, a: 0}
+    - _RevealMax: {r: -9999, g: -9999, b: 0, a: 0}
+    - _RevealMin: {r: 9999, g: 9999, b: 0, a: 0}
+    - _TileBounds: {r: 0, g: 0, b: 0, a: 0}
+  m_BuildTextureStacks: []
+  m_AllowLocking: 1

@@ -21,6 +21,9 @@ namespace RoutesToGlory.Game
         [Tooltip("Pointer movement under this (px) counts as a tap, not a map pan.")]
         public float tapSlopPixels = 18f;
 
+        [Tooltip("Screen-space radius (px) for tapping a marker without physics colliders.")]
+        public float tapHitRadiusPixels = 56f;
+
         private RtgRouteSession _session;
         private RtgEchoSiteLoader _echoLoader;
         private Camera _camera;
@@ -76,10 +79,7 @@ namespace RoutesToGlory.Game
         {
             if (_camera == null || _session == null) return;
 
-            Ray ray = _camera.ScreenPointToRay(screenPos);
-            if (!Physics.Raycast(ray, out RaycastHit hit, 500_000f)) return;
-
-            RtgMapMarker marker = hit.collider.GetComponentInParent<RtgMapMarker>();
+            RtgMapMarker marker = FindMarkerNearScreenPoint(screenPos);
             if (marker == null) return;
 
             if (marker.IsConnected) return;
@@ -105,6 +105,35 @@ namespace RoutesToGlory.Game
             }
 
             StartCoroutine(_session.ClaimNearRoute(marker, null, OnClaimDone));
+        }
+
+        private RtgMapMarker FindMarkerNearScreenPoint(Vector2 screenPos)
+        {
+#if UNITY_2023_1_OR_NEWER
+            RtgMapMarker[] markers = Object.FindObjectsByType<RtgMapMarker>(FindObjectsSortMode.None);
+#else
+            RtgMapMarker[] markers = Object.FindObjectsOfType<RtgMapMarker>();
+#endif
+            RtgMapMarker best = null;
+            float bestDist = tapHitRadiusPixels;
+
+            foreach (RtgMapMarker marker in markers)
+            {
+                if (marker == null || !marker.gameObject.activeInHierarchy) continue;
+
+                Vector3 world = marker.transform.position;
+                Vector3 screen = _camera.WorldToScreenPoint(world);
+                if (screen.z <= 0f) continue;
+
+                float dist = Vector2.Distance(screenPos, new Vector2(screen.x, screen.y));
+                if (dist <= bestDist)
+                {
+                    bestDist = dist;
+                    best = marker;
+                }
+            }
+
+            return best;
         }
 
         private void SubmitGoodieChoice(string choice)

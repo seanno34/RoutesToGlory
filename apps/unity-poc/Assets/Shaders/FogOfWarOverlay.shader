@@ -7,11 +7,9 @@ Shader "RoutesToGlory/FogOfWarOverlay"
         _NoiseScale ("Noise Scale", Float) = 0.015
         _PulseSpeed ("Pulse Speed", Float) = 0.35
         _EdgeShimmer ("Edge Shimmer", Range(0, 1)) = 0
-        _PlayerLatLng ("Player LatLng", Vector) = (0, 0, 0, 0)
+        _PlayerLatLng ("Player Lat Lng", Vector) = (0, 0, 0, 0)
         _LiveRevealRadiusM ("Live Reveal Radius (m)", Float) = 35
-        _TileBounds ("Tile Bounds SWNE", Vector) = (0, 0, 0, 0)
-        _RevealMin ("Reveal Min SW", Vector) = (9999, 9999, 0, 0)
-        _RevealMax ("Reveal Max NE", Vector) = (-9999, -9999, 0, 0)
+        _FogSheetBounds ("Fog Sheet SWNE", Vector) = (0, 0, 0, 0)
     }
 
     SubShader
@@ -35,6 +33,8 @@ Shader "RoutesToGlory/FogOfWarOverlay"
             #pragma fragment frag
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
 
+            #define MAX_REVEAL_RECTS 64
+
             struct Attributes
             {
                 float4 positionOS : POSITION;
@@ -55,9 +55,9 @@ Shader "RoutesToGlory/FogOfWarOverlay"
                 float _EdgeShimmer;
                 float4 _PlayerLatLng;
                 float _LiveRevealRadiusM;
-                float4 _TileBounds;
-                float4 _RevealMin;
-                float4 _RevealMax;
+                float4 _FogSheetBounds;
+                int _RevealRectCount;
+                float4 _RevealRects[MAX_REVEAL_RECTS];
             CBUFFER_END
 
             float LatLngDistM(float2 a, float2 b)
@@ -67,6 +67,17 @@ Shader "RoutesToGlory/FogOfWarOverlay"
                 float lngM = latM * cos(avgLat);
                 float2 d = float2((b.x - a.x) * latM, (b.y - a.y) * lngM);
                 return length(d);
+            }
+
+            bool InPermanentReveal(float lat, float lng)
+            {
+                for (int i = 0; i < _RevealRectCount; i++)
+                {
+                    float4 r = _RevealRects[i];
+                    if (lat >= r.x && lat <= r.z && lng >= r.y && lng <= r.w)
+                        return true;
+                }
+                return false;
             }
 
             Varyings vert(Attributes input)
@@ -80,18 +91,13 @@ Shader "RoutesToGlory/FogOfWarOverlay"
 
             half4 frag(Varyings input) : SV_Target
             {
-                // Per-fragment lat/lng across this 400 m tile (south, west, north, east).
-                float fragLat = lerp(_TileBounds.x, _TileBounds.z, input.uv.y);
-                float fragLng = lerp(_TileBounds.y, _TileBounds.w, input.uv.x);
+                float fragLat = lerp(_FogSheetBounds.x, _FogSheetBounds.z, input.uv.y);
+                float fragLng = lerp(_FogSheetBounds.y, _FogSheetBounds.w, input.uv.x);
 
-                // Permanent reveal — areas the player has already uncovered stay clear.
-                if (fragLat >= _RevealMin.x && fragLat <= _RevealMax.x &&
-                    fragLng >= _RevealMin.y && fragLng <= _RevealMax.y)
+                if (InPermanentReveal(fragLat, fragLng))
                     discard;
 
-                // Live reveal bubble around the pin.
                 float dist = LatLngDistM(float2(fragLat, fragLng), _PlayerLatLng.xy);
-
                 float edge = max(3.0, _LiveRevealRadiusM * 0.25);
                 float clear = 1.0 - smoothstep(_LiveRevealRadiusM - edge, _LiveRevealRadiusM, dist);
                 if (clear > 0.05)

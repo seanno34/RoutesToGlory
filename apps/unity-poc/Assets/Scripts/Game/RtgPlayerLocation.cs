@@ -128,11 +128,22 @@ namespace RoutesToGlory.Game
         [Tooltip("Flip if the scroll wheel zooms the wrong way (e.g. natural scrolling).")]
         public bool invertZoom = false;
 
+        [Tooltip("How quickly pinch/button zoom catches up (higher = snappier).")]
+        public float zoomSmoothing = 10f;
+
+        [Tooltip("Scale pan speed on phones/tablets.")]
+        [Range(0.2f, 1f)]
+        public float mobilePanScale = 0.55f;
+
         private float _zoom = 1f;
+        private float _zoomTarget = 1f;
+        private CesiumGeoreference _georeference;
 
         [Header("Pan (drag the map)")]
         [Tooltip("Drag pan speed. The map moves under your finger/cursor; higher = faster.")]
         public float panSpeed = 2f;
+
+        private readonly List<Rect> _gameUiRects = new();
 
         // When the user drags, the camera's focus point stops tracking the player and a
         // "Center" button appears; tapping it snaps the focus back to the pin.
@@ -149,6 +160,7 @@ namespace RoutesToGlory.Game
         private RtgLightRoad _lightRoad;
         private bool _roadStarted;
         private RtgRouteSession _routeSession;
+        private RtgCesiumCreditsToggle _creditsToggle;
 
         private Camera _camera;
         private CesiumCameraController _cameraController;
@@ -167,7 +179,16 @@ namespace RoutesToGlory.Game
             EnsureLightRoad();
             EnsureRouteSession();
             EnsureTapToConnect();
+            EnsureCesiumCreditsToggle();
             CacheCamera();
+
+#if !UNITY_EDITOR
+            if (Application.isMobilePlatform)
+            {
+                _zoom = Mathf.Clamp(4f, minZoom, maxZoom);
+                _zoomTarget = _zoom;
+            }
+#endif
 
             // The tour route depends on the Echo Sites, which may still be loading
             // (async in Play mode for live data), so build it in a coroutine that
@@ -305,9 +326,9 @@ namespace RoutesToGlory.Game
         {
             RtgEchoSiteLoader loader =
 #if UNITY_2023_1_OR_NEWER
-                Object.FindFirstObjectByType<RtgEchoSiteLoader>();
+                UnityEngine.Object.FindFirstObjectByType<RtgEchoSiteLoader>();
 #else
-                Object.FindObjectOfType<RtgEchoSiteLoader>();
+                UnityEngine.Object.FindObjectOfType<RtgEchoSiteLoader>();
 #endif
 
             // Wait for the Echo Sites to finish loading (live data is fetched async).
@@ -474,9 +495,9 @@ namespace RoutesToGlory.Game
             RtgRouteSession session = go.AddComponent<RtgRouteSession>();
 
 #if UNITY_2023_1_OR_NEWER
-            RtgEchoSiteLoader loader = Object.FindFirstObjectByType<RtgEchoSiteLoader>();
+            RtgEchoSiteLoader loader = UnityEngine.Object.FindFirstObjectByType<RtgEchoSiteLoader>();
 #else
-            RtgEchoSiteLoader loader = Object.FindObjectOfType<RtgEchoSiteLoader>();
+            RtgEchoSiteLoader loader = UnityEngine.Object.FindObjectOfType<RtgEchoSiteLoader>();
 #endif
             if (loader != null)
             {
@@ -496,17 +517,17 @@ namespace RoutesToGlory.Game
             gameObject.AddComponent<RtgTapToConnect>();
         }
 
+        private void EnsureCesiumCreditsToggle()
+        {
+            if (!Application.isPlaying) return;
+            _creditsToggle = GetComponent<RtgCesiumCreditsToggle>();
+            if (_creditsToggle == null)
+                _creditsToggle = gameObject.AddComponent<RtgCesiumCreditsToggle>();
+        }
+
         private void BuildMarkerVisual(Transform root)
         {
             Color playerColor = new Color(1.0f, 0.92f, 0.45f); // bright gold — clearly "you"
-
-            GameObject beacon = GameObject.CreatePrimitive(PrimitiveType.Capsule);
-            beacon.name = "Beacon";
-            Collider col = beacon.GetComponent<Collider>();
-            if (col != null) DestroyImmediateSafe(col);
-
-            beacon.transform.SetParent(root, false);
-            beacon.transform.localScale = new Vector3(10f, 18f, 10f);
 
             _markerMaterial = new Material(Shader.Find("Universal Render Pipeline/Lit"))
             {
@@ -517,9 +538,43 @@ namespace RoutesToGlory.Game
             _markerMaterial.SetColor("_EmissionColor", playerColor * 2.5f);
             _markerMaterial.globalIlluminationFlags = MaterialGlobalIlluminationFlags.RealtimeEmissive;
 
-            var mr = beacon.GetComponent<MeshRenderer>();
-            mr.sharedMaterial = _markerMaterial;
-            mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            GameObject beacon = RtgMeshPrimitives.CreateMeshObject(
+                "Beacon", RtgMeshPrimitives.Sphere, _markerMaterial, root);
+            beacon.transform.localScale = new Vector3(10f, 18f, 10f);
+        }
+
+        // ------------------------------------------------------------------ //
+        // Public focus queries (fog sheet, tap-connect, etc.)
+        // ------------------------------------------------------------------ //
+
+        /// <summary>Player pin lat/lng from the globe anchor.</summary>
+        public bool TryGetPlayerLatLng(out double lat, out double lng)
+        {
+            lat = lng = 0;
+            if (_markerAnchor == null) return false;
+            lat = _markerAnchor.latitude;
+            lng = _markerAnchor.longitude;
+            return true;
+        }
+
+        /// <summary>
+        /// Camera look-at point in lat/lng. Tracks panned map focus so fog can cover
+        /// whatever is on screen, not just the area around the player pin.
+        /// </summary>
+        public bool TryGetViewCenterLatLng(out double lat, out double lng)
+        {
+            lat = lng = 0;
+            if (!TryGetPlayerLatLng(out double playerLat, out double playerLng))
+                return false;
+
+            if (_marker == null) return false;
+
+            Vector3 delta = _focus - _marker.position;
+            delta.y = 0f;
+            double lngM = 111_320.0 * System.Math.Cos(playerLat * System.Math.PI / 180.0);
+            lat = playerLat + delta.z / 111_320.0;
+            lng = playerLng + delta.x / lngM;
+            return true;
         }
 
         // ------------------------------------------------------------------ //
@@ -532,6 +587,15 @@ namespace RoutesToGlory.Game
             if (_camera == null) return;
             _cameraController = _camera.GetComponent<CesiumCameraController>();
             _cameraOriginShift = _camera.GetComponent<CesiumOriginShift>();
+            _georeference = _camera.GetComponentInParent<CesiumGeoreference>();
+            if (_georeference == null)
+            {
+#if UNITY_2023_1_OR_NEWER
+                _georeference = UnityEngine.Object.FindFirstObjectByType<CesiumGeoreference>();
+#else
+                _georeference = UnityEngine.Object.FindObjectOfType<CesiumGeoreference>();
+#endif
+            }
         }
 
         private void UpdateCameraFollow()
@@ -548,6 +612,7 @@ namespace RoutesToGlory.Game
 
             UpdateTravelHeading();
             UpdateZoom();
+            SmoothZoom();
             HandlePanInput();
 
             // Focus tracks the player unless the user has dragged the map away.
@@ -570,7 +635,19 @@ namespace RoutesToGlory.Game
 
         private void HandlePanInput()
         {
+            if (IsMultiTouchActive())
+            {
+                _wasPointerDown = false;
+                return;
+            }
+
             if (!ReadPointer(out Vector2 pos, out bool isDown))
+            {
+                _wasPointerDown = false;
+                return;
+            }
+
+            if (IsOverGameUi(pos))
             {
                 _wasPointerDown = false;
                 return;
@@ -579,23 +656,105 @@ namespace RoutesToGlory.Game
             if (isDown && _wasPointerDown)
             {
                 Vector2 delta = pos - _lastPointer;
-                if (delta.sqrMagnitude > 4f) // ignore <2px jitter / taps
+                if (delta.sqrMagnitude > 4f)
                 {
                     _panned = true;
 
-                    // Meters moved per screen pixel ≈ how tall the view is / screen height,
-                    // so the map tracks the cursor/finger consistently at any zoom.
                     float metersPerPixel =
                         (EffectiveFollowHeight() * _zoom) / Mathf.Max(1, Screen.height) * panSpeed;
+                    if (Application.isMobilePlatform)
+                        metersPerPixel *= mobilePanScale;
 
-                    // World axes near the origin: +X = east, +Z = north. Drag the map with
-                    // the cursor, so the focus moves opposite the drag direction.
                     _focusTarget += (-delta.x * Vector3.right - delta.y * Vector3.forward) * metersPerPixel;
                 }
             }
 
             _lastPointer = pos;
             _wasPointerDown = isDown;
+        }
+
+        /// <summary>
+        /// Counts pressed touches only — Touchscreen.touches.Count is the slot count (~10),
+        /// not how many fingers are down, so a naive &gt;= 2 check blocks pan forever.
+        /// </summary>
+        private static bool IsMultiTouchActive()
+        {
+#if ENABLE_INPUT_SYSTEM
+            if (Touchscreen.current == null) return false;
+            int active = 0;
+            foreach (var touch in Touchscreen.current.touches)
+            {
+                if (touch.press.isPressed)
+                    active++;
+            }
+            return active >= 2;
+#else
+            return Input.touchCount >= 2;
+#endif
+        }
+
+        private bool IsOverGameUi(Vector2 screenPos)
+        {
+            // IMGUI rects use y from top; Input System touch y is from bottom.
+            Vector2 guiPos = new Vector2(screenPos.x, Screen.height - screenPos.y);
+            foreach (Rect rect in _gameUiRects)
+            {
+                if (rect.Contains(guiPos))
+                    return true;
+            }
+            return false;
+        }
+
+        private void OnGUI()
+        {
+            if (!Application.isPlaying || !followWithCamera) return;
+
+            _gameUiRects.Clear();
+
+            // 2× size for on-device testing; stacked center-right for one-handed reach.
+            const float margin = 24f;
+            const float gap = 12f;
+            const float zoomW = 144f;
+            const float zoomH = 92f;
+            const float wideW = 280f;
+            const float wideH = 92f;
+
+            var prev = GUI.skin.button.fontSize;
+            GUI.skin.button.fontSize = 28;
+
+            float right = Screen.width - zoomW - margin;
+            float wideRight = Screen.width - wideW - margin;
+            float midY = Screen.height * 0.5f;
+
+            var zoomInRect = new Rect(right, midY - zoomH - gap * 0.5f, zoomW, zoomH);
+            var zoomOutRect = new Rect(right, midY + gap * 0.5f, zoomW, zoomH);
+            var viewRect = new Rect(wideRight, zoomInRect.yMin - gap - wideH, wideW, wideH);
+            Rect centerRect = default;
+            if (_panned)
+                centerRect = new Rect(wideRight, viewRect.yMin - gap - wideH, wideW, wideH);
+
+            if (_panned && GUI.Button(centerRect, "Center")) RecenterOnPlayer();
+
+            string viewLabel = perspective == CameraPerspective.Map ? "Route View" : "Map View";
+            if (GUI.Button(viewRect, viewLabel)) TogglePerspective();
+
+            if (GUI.Button(zoomInRect, "+")) { _zoomTarget = Mathf.Clamp(_zoomTarget / 1.35f, minZoom, maxZoom); }
+            if (GUI.Button(zoomOutRect, "−")) { _zoomTarget = Mathf.Clamp(_zoomTarget * 1.35f, minZoom, maxZoom); }
+
+            const float infoSize = 92f;
+            var infoRect = new Rect(margin, Screen.height - margin - infoSize, infoSize, infoSize);
+            if (GUI.Button(infoRect, _creditsToggle != null && _creditsToggle.IsVisible ? "×" : "i"))
+            {
+                _creditsToggle?.Toggle();
+            }
+            _gameUiRects.Add(infoRect);
+
+            if (_panned) _gameUiRects.Add(centerRect);
+            _gameUiRects.Add(viewRect);
+            _gameUiRects.Add(zoomInRect);
+            _gameUiRects.Add(zoomOutRect);
+
+            GUI.skin.button.fontSize = prev;
         }
 
         private void RecenterOnPlayer()
@@ -614,30 +773,6 @@ namespace RoutesToGlory.Game
                 _camera.transform.position = DesiredCameraPosition(_focus);
                 _camera.transform.LookAt(_focus, Vector3.up);
             }
-        }
-
-        private void OnGUI()
-        {
-            if (!Application.isPlaying || !followWithCamera) return;
-
-            const float w = 140f, h = 46f, margin = 24f, gap = 10f;
-            var prev = GUI.skin.button.fontSize;
-            GUI.skin.button.fontSize = 18;
-
-            // Bottom-right: perspective toggle (always visible while following).
-            float bottom = Screen.height - h - margin;
-            var viewRect = new Rect(Screen.width - w - margin, bottom, w, h);
-            string viewLabel = perspective == CameraPerspective.Map ? "Route View" : "Map View";
-            if (GUI.Button(viewRect, viewLabel)) TogglePerspective();
-
-            // Above it when the user has panned away: re-center on the pin.
-            if (_panned)
-            {
-                var centerRect = new Rect(Screen.width - w - margin, bottom - h - gap, w, h);
-                if (GUI.Button(centerRect, "Center")) RecenterOnPlayer();
-            }
-
-            GUI.skin.button.fontSize = prev;
         }
 
         private static bool ReadPointer(out Vector2 position, out bool isDown)
@@ -741,11 +876,28 @@ namespace RoutesToGlory.Game
         {
             float scroll = ReadScroll();
             if (Mathf.Abs(scroll) < 0.001f) return;
+            ApplyZoomStep(scroll);
+        }
 
-            // Clamp to normalize wildly different scroll magnitudes (Input System reports
-            // ~120/notch; legacy reports ~1). Positive scroll = zoom in by default.
-            float step = Mathf.Clamp(scroll, -1f, 1f) * (invertZoom ? -1f : 1f);
-            _zoom = Mathf.Clamp(_zoom * Mathf.Exp(-step * zoomSensitivity), minZoom, maxZoom);
+        private void SmoothZoom()
+        {
+            if (Mathf.Abs(_zoom - _zoomTarget) < 0.0001f)
+            {
+                _zoom = _zoomTarget;
+                return;
+            }
+
+            float t = zoomSmoothing > 0f
+                ? 1f - Mathf.Exp(-zoomSmoothing * Time.deltaTime)
+                : 1f;
+            _zoom = Mathf.Lerp(_zoom, _zoomTarget, t);
+        }
+
+        private void ApplyZoomStep(float step)
+        {
+            float clamped = Mathf.Clamp(step, -1f, 1f) * (invertZoom ? -1f : 1f);
+            _zoomTarget = Mathf.Clamp(
+                _zoomTarget * Mathf.Exp(-clamped * zoomSensitivity), minZoom, maxZoom);
         }
 
         private static float ReadScroll()
@@ -779,7 +931,7 @@ namespace RoutesToGlory.Game
             }
         }
 
-        private static void DestroyImmediateSafe(Object obj)
+        private static void DestroyImmediateSafe(UnityEngine.Object obj)
         {
             if (Application.isPlaying) Destroy(obj);
             else DestroyImmediate(obj);

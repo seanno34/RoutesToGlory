@@ -144,7 +144,7 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 265368706}
   serializedVersion: 2
-  m_LocalRotation: {x: 3.081488e-33, y: 5.0037532e-17, z: -8.324912e-19, w: 1}
+  m_LocalRotation: {x: 1.3877788e-17, y: 6.1107604e-17, z: -4.6526126e-18, w: 1}
   m_LocalPosition: {x: -2.8265934e-16, y: 15, z: -0.000011641532}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
@@ -170,7 +170,7 @@ MonoBehaviour:
     c0:
       x: 0.9641792465240623
       y: -0.2652515420733528
-      z: -0.00000000000000007354194649723361
+      z: -0.00000000000000009604880958866149
       w: 0
     c1:
       x: -0.19474955304821862
@@ -178,7 +178,7 @@ MonoBehaviour:
       z: 0.6789256241371783
       w: 0
     c2:
-      x: 0.18008606875550007
+      x: 0.1800860687555001
       y: 0.6546059967264632
       z: 0.7342070531464151
       w: 0
@@ -233,7 +233,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: a1899ab2dab1d4a5e86d93a5727be919, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::RoutesToGlory.Game.RtgPlayerLocation
-  source: 0
+  source: 1
   routeMode: 1
   simulatedSpeed: 15
   tourSpeed: 90
@@ -265,7 +265,9 @@ MonoBehaviour:
   minZoom: 0.15
   maxZoom: 12
   invertZoom: 0
-  panSpeed: 2
+  zoomSmoothing: 10
+  mobilePanScale: 0.75
+  panSpeed: 4
 --- !u!1 &377447296
 GameObject:
   m_ObjectHideFlags: 0
@@ -842,11 +844,9 @@ MonoBehaviour:
   worldId: 27159a5a-5c62-4340-8c40-4eb4c421361c
   empireId: f9efe845-bf99-4ccd-8c90-4762094c185e
   groundHeightMeters: 1476
-  fogHeightAboveGround: 12
-  playAreaCenterLat: 42.7597
-  playAreaCenterLng: -105.3819
-  playAreaRadiusM: 5500
-  liveRevealRadiusM: 200
+  fogHeightAboveGround: 1
+  fogSheetSizeM: 14000
+  liveRevealRadiusM: 100
   tileSizeM: 400
   unexploredOpacity: 0.92
   resourceShimmerDurationMs: 8000
@@ -863,6 +863,7 @@ GameObject:
   - component: {fileID: 1425919403}
   - component: {fileID: 1425919402}
   - component: {fileID: 1425919401}
+  - component: {fileID: 1425919405}
   m_Layer: 0
   m_Name: RTG Fly Camera
   m_TagString: MainCamera
@@ -878,7 +879,7 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1425919399}
   serializedVersion: 2
-  m_LocalRotation: {x: 0.3007058, y: 3.570523e-17, z: -4.059513e-18, w: 0.95371693}
+  m_LocalRotation: {x: 0.3007058, y: 3.5763875e-17, z: -4.1137412e-18, w: 0.95371693}
   m_LocalPosition: {x: 2.3280804e-10, y: 1200, z: -0.00093125924}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
@@ -1007,7 +1008,7 @@ MonoBehaviour:
     c0:
       x: 0.9641792465240623
       y: -0.2652515420733528
-      z: -0.000000000000000042321763193238126
+      z: -0.000000000000000042626472174160377
       w: 0
     c1:
       x: -0.05623637598487907
@@ -1076,6 +1077,50 @@ Camera:
   m_OcclusionCulling: 1
   m_StereoConvergence: 10
   m_StereoSeparation: 0.022
+--- !u!114 &1425919405
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1425919399}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a79441f348de89743a2939f4d699eac1, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Unity.RenderPipelines.Universal.Runtime::UnityEngine.Rendering.Universal.UniversalAdditionalCameraData
+  m_RenderShadows: 1
+  m_RequiresDepthTextureOption: 2
+  m_RequiresOpaqueTextureOption: 2
+  m_CameraType: 0
+  m_Cameras: []
+  m_RendererIndex: -1
+  m_VolumeLayerMask:
+    serializedVersion: 2
+    m_Bits: 1
+  m_VolumeTrigger: {fileID: 0}
+  m_VolumeFrameworkUpdateModeOption: 2
+  m_RenderPostProcessing: 0
+  m_Antialiasing: 0
+  m_AntialiasingQuality: 2
+  m_StopNaN: 0
+  m_Dithering: 0
+  m_ClearDepth: 1
+  m_AllowXRRendering: 1
+  m_AllowHDROutput: 1
+  m_UseScreenCoordOverride: 0
+  m_ScreenSizeOverride: {x: 0, y: 0, z: 0, w: 0}
+  m_ScreenCoordScaleBias: {x: 0, y: 0, z: 0, w: 0}
+  m_RequiresDepthTexture: 0
+  m_RequiresColorTexture: 0
+  m_TaaSettings:
+    m_Quality: 3
+    m_FrameInfluence: 0.1
+    m_JitterScale: 1
+    m_MipBias: 0
+    m_VarianceClampScale: 0.9
+    m_ContrastAdaptiveSharpening: 0
+  m_Version: 2
 --- !u!21 &2079501022
 Material:
   serializedVersion: 8
@@ -1094,8 +1139,10 @@ Material:
   m_EnableInstancingVariants: 0
   m_DoubleSidedGI: 0
   m_CustomRenderQueue: -1
-  stringTagMap: {}
-  disabledShaderPasses: []
+  stringTagMap:
+    RenderType: Opaque
+  disabledShaderPasses:
+  - MOTIONVECTORS
   m_LockedProperties: 
   m_SavedProperties:
     serializedVersion: 3
@@ -1192,7 +1239,7 @@ Material:
     - _ZWrite: 1
     m_Colors:
     - _BaseColor: {r: 1, g: 0.92, b: 0.45, a: 1}
-    - _Color: {r: 1, g: 1, b: 1, a: 1}
+    - _Color: {r: 1, g: 0.92, b: 0.45, a: 1}
     - _EmissionColor: {r: 2.5, g: 2.3, b: 1.125, a: 2.5}
     - _SpecColor: {r: 0.19999996, g: 0.19999996, b: 0.19999996, a: 1}
   m_BuildTextureStacks: []
