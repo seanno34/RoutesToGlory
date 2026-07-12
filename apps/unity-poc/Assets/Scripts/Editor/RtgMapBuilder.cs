@@ -268,8 +268,8 @@ namespace RoutesToGlory.EditorTools
             MarkDirty(georeference);
             Debug.Log(
                 "[RTG] Player (GPS) set up at the route start. Enter Play mode to watch it " +
-                "walk the simulated route. Switch Source to DeviceGps for real on-device GPS, " +
-                "or tick 'Follow With Camera' to chase it. Save with Cmd+S.");
+                "walk the simulated route. Switch Source to Auto Pilot for the auto-drive test route, " +
+                "or Manual for real on-device GPS. Tick 'Follow With Camera' to chase it. Save with Cmd+S.");
         }
 
         [MenuItem("Routes to Glory/8b. Sync Player Ship Art", priority = 29)]
@@ -291,6 +291,8 @@ namespace RoutesToGlory.EditorTools
             foreach (string srcPath in Directory.GetFiles(srcDir, "glider_*.png"))
             {
                 string fileName = Path.GetFileName(srcPath);
+                if (fileName.EndsWith("_src.png"))
+                    continue;
                 File.Copy(srcPath, Path.Combine(dstDir, fileName), overwrite: true);
                 copied++;
             }
@@ -303,6 +305,18 @@ namespace RoutesToGlory.EditorTools
             }
 
             AssetDatabase.Refresh();
+
+            string processScript = Path.GetFullPath(Path.Combine(Application.dataPath, "../../scripts/process-cockpit-transparency.py"));
+            if (File.Exists(processScript))
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "python3",
+                    Arguments = $"\"{processScript}\"",
+                    UseShellExecute = false,
+                })?.WaitForExit();
+                AssetDatabase.Refresh();
+            }
 
             Material shipMat = AssetDatabase.LoadAssetAtPath<Material>(
                 "Assets/Resources/RTG_PlayerShip/PlayerShip.mat");
@@ -320,7 +334,7 @@ namespace RoutesToGlory.EditorTools
 
             Debug.Log(
                 $"[RTG] Synced {copied} glider image(s) to Resources/RTG_PlayerShip. " +
-                "Map and Route views both use glider_01 (top-down). Re-export to Xcode after changes.");
+                "glider_01 = map pin; glider_cockpit_01 / glider_cockpit_portrait_01 = cockpit overlays. Re-export to Xcode after changes.");
         }
 
         [MenuItem("Routes to Glory/9. Reset Dev World (routes + claims)", priority = 30)]

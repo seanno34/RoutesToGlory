@@ -284,9 +284,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::RoutesToGlory.Game.RtgPlayerLocation
   markerStyle: 0
   shipTexture: {fileID: 0}
+  cockpitTexture: {fileID: 0}
+  cockpitPortraitTexture: {fileID: 0}
   shipSizeMeters: 42
   shipHeadingOffsetDegrees: 0
-  source: 0
   routeMode: 2
   simulatedSpeed: 100
   tourSpeed: 500
@@ -323,6 +324,10 @@ MonoBehaviour:
   maxZoom: 12
   invertZoom: 0
   zoomSmoothing: 10
+  cockpitEyeHeightMeters: 3.5
+  cockpitLandscapePitchDegrees: 2
+  cockpitPortraitPitchDegrees: 16
+  cockpitZoomSmoothing: 28
   mobilePanScale: 0.75
   panSpeed: 4
 --- !u!1 &377447296

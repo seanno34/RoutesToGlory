@@ -16,7 +16,13 @@ namespace RoutesToGlory.Game
     /// </summary>
     public class RtgPlayerLocation : MonoBehaviour
     {
-        public enum LocationSource { SimulatedRoute, DeviceGps }
+        // Manual = real device GPS (ship only moves when you move).
+        // AutoPilot = simulated auto-route (HomeToCasper, tour, etc.).
+        public enum LocationSource
+        {
+            Manual = 0,
+            AutoPilot = 1,
+        }
 
         // Map = overhead (Google Maps). LowAngle = ~20° behind the pin.
         public enum CameraPerspective { Map, LowAngle }
@@ -37,6 +43,12 @@ namespace RoutesToGlory.Game
         [Tooltip("Optional override. If unset, loads Resources/RTG_PlayerShip/glider_01.")]
         public Texture2D shipTexture;
 
+        [Tooltip("Optional cockpit frame overlay (Resources/RTG_PlayerShip/glider_cockpit_01).")]
+        public Texture2D cockpitTexture;
+
+        [Tooltip("Optional portrait cockpit overlay (Resources/RTG_PlayerShip/glider_cockpit_portrait_01).")]
+        public Texture2D cockpitPortraitTexture;
+
         [Tooltip("Wingspan of the top-down ship sprite in meters.")]
         public float shipSizeMeters = 24f;
 
@@ -44,7 +56,8 @@ namespace RoutesToGlory.Game
         public float shipHeadingOffsetDegrees = 0f;
 
         [Header("Source")]
-        public LocationSource source = LocationSource.SimulatedRoute;
+        [Tooltip("Manual = real GPS (stationary until you move). Auto Pilot = simulated auto-route.")]
+        private LocationSource _activeSource = LocationSource.Manual;
 
         [Tooltip("FixedLoop = small rectangle. TourNearbySites = auto loop past every nearby Echo Site + resource node.")]
         public RouteMode routeMode = RouteMode.TourNearbySites;
@@ -164,6 +177,28 @@ namespace RoutesToGlory.Game
         [Tooltip("How quickly pinch/button zoom catches up (higher = snappier).")]
         public float zoomSmoothing = 10f;
 
+        [Header("Cockpit view")]
+        [Tooltip("Eye height (m) above the player anchor in cockpit mode.")]
+        public float cockpitEyeHeightMeters = 3.5f;
+
+        [Tooltip("Pitch (degrees) in landscape cockpit. Positive = look down toward the map.")]
+        public float cockpitLandscapePitchDegrees = 2f;
+
+        [Tooltip("Pitch (degrees) in portrait cockpit. Raise if the windshield still shows too much sky.")]
+        public float cockpitPortraitPitchDegrees = 22f;
+
+        [Tooltip("Runtime pitch slider range (degrees).")]
+        public float cockpitPitchMinDegrees = 0f;
+
+        public float cockpitPitchMaxDegrees = 40f;
+
+        [Tooltip("Zoom smoothing while the cockpit button animates to max zoom-in.")]
+        public float cockpitZoomSmoothing = 28f;
+
+        private RtgCockpitView _cockpitView;
+        private bool _cockpitEntryPending;
+        private bool _cockpitFastZoom;
+
         [Tooltip("Scale pan speed on phones/tablets.")]
         [Range(0.2f, 1f)]
         public float mobilePanScale = 0.55f;
@@ -210,6 +245,16 @@ namespace RoutesToGlory.Game
         private bool _hasHeadingSample;
         private Vector3 _lastHeadingSamplePos;
 
+        private void Awake()
+        {
+            _activeSource = LocationSource.Manual;
+        }
+
+        private void Reset()
+        {
+            _activeSource = LocationSource.Manual;
+        }
+
         private void Start()
         {
             ClampSpeedThrottle();
@@ -220,6 +265,7 @@ namespace RoutesToGlory.Game
             EnsureRouteSession();
             EnsureTapToConnect();
             EnsureCesiumCreditsToggle();
+            EnsureCockpitView();
             CacheCamera();
 
 #if !UNITY_EDITOR
@@ -233,6 +279,7 @@ namespace RoutesToGlory.Game
             // The tour route depends on the Echo Sites, which may still be loading
             // (async in Play mode for live data), so build it in a coroutine that
             // waits for them. Everything else starts a provider immediately.
+            Debug.Log($"[RTG] Location source at launch: {LocationSourceLabel(_activeSource)}");
             BeginLocationProvider();
         }
 
@@ -317,7 +364,7 @@ namespace RoutesToGlory.Game
 
         private IRtgLocationProvider CreateProvider()
         {
-            if (source == LocationSource.DeviceGps)
+            if (_activeSource == LocationSource.Manual)
                 return new RtgDeviceLocationProvider();
 
             if (routeMode == RouteMode.HomeToCasper)
@@ -379,7 +426,7 @@ namespace RoutesToGlory.Game
 
         private void BeginLocationProvider()
         {
-            if (source == LocationSource.SimulatedRoute && routeMode == RouteMode.TourNearbySites
+            if (_activeSource == LocationSource.AutoPilot && routeMode == RouteMode.TourNearbySites
                 && (_cachedSimulatedWaypoints == null || _cachedSimulatedWaypoints.Length < 2))
             {
                 if (_tourCoroutine != null)
@@ -391,7 +438,7 @@ namespace RoutesToGlory.Game
             _provider = CreateProvider();
             _provider.Begin();
 
-            if (source == LocationSource.SimulatedRoute && routeMode == RouteMode.HomeToCasper)
+            if (_activeSource == LocationSource.AutoPilot && routeMode == RouteMode.HomeToCasper)
             {
                 Debug.Log(
                     $"[RTG] Home ↔ Casper test drive at {FormatSpeedLabel()} " +
@@ -401,15 +448,15 @@ namespace RoutesToGlory.Game
 
         private void ToggleLocationSource()
         {
-            LocationSource next = source == LocationSource.DeviceGps
-                ? LocationSource.SimulatedRoute
-                : LocationSource.DeviceGps;
+            LocationSource next = _activeSource == LocationSource.AutoPilot
+                ? LocationSource.Manual
+                : LocationSource.AutoPilot;
             SetLocationSource(next);
         }
 
         private void SetLocationSource(LocationSource newSource)
         {
-            if (source == newSource && _provider != null) return;
+            if (_activeSource == newSource && _provider != null) return;
 
             if (_tourCoroutine != null)
             {
@@ -419,7 +466,7 @@ namespace RoutesToGlory.Game
 
             _provider?.End();
             _provider = null;
-            source = newSource;
+            _activeSource = newSource;
 
             if (_lightRoad != null)
             {
@@ -431,7 +478,17 @@ namespace RoutesToGlory.Game
             _panned = false;
 
             BeginLocationProvider();
-            Debug.Log($"[RTG] Location source → {(newSource == LocationSource.DeviceGps ? "GPS" : "Plan Route")}.");
+            Debug.Log($"[RTG] Location source → {LocationSourceLabel(newSource)}.");
+        }
+
+        private static string LocationSourceLabel(LocationSource src)
+        {
+            return src == LocationSource.AutoPilot ? "Auto Pilot" : "Manual";
+        }
+
+        private static string ActiveModeButtonLabel(LocationSource src)
+        {
+            return src == LocationSource.AutoPilot ? "Mode: Auto Pilot" : "Mode: Manual";
         }
 
         private RtgWaypoint[] ResolveRoute()
@@ -721,6 +778,18 @@ namespace RoutesToGlory.Game
             gameObject.AddComponent<RtgTapToConnect>();
         }
 
+        private void EnsureCockpitView()
+        {
+            if (!Application.isPlaying) return;
+            _cockpitView = GetComponent<RtgCockpitView>();
+            if (_cockpitView == null)
+                _cockpitView = gameObject.AddComponent<RtgCockpitView>();
+            if (cockpitTexture != null)
+                _cockpitView.cockpitTexture = cockpitTexture;
+            if (cockpitPortraitTexture != null)
+                _cockpitView.cockpitPortraitTexture = cockpitPortraitTexture;
+        }
+
         private void EnsureCesiumCreditsToggle()
         {
             if (!Application.isPlaying) return;
@@ -869,9 +938,18 @@ namespace RoutesToGlory.Game
 
             if (!_followActive) SetFollowActive(true);
 
+            bool cockpitActive = _cockpitView != null && _cockpitView.IsActive;
+
             UpdateZoom();
             SmoothZoom();
+            TryCompleteCockpitEntry();
             HandlePanInput();
+
+            if (cockpitActive)
+            {
+                ApplyCockpitCamera();
+                return;
+            }
 
             // Focus tracks the player unless the user has dragged the map away.
             if (!_panned) _focusTarget = _marker.position;
@@ -893,6 +971,12 @@ namespace RoutesToGlory.Game
 
         private void HandlePanInput()
         {
+            if (_cockpitView != null && _cockpitView.IsActive)
+            {
+                _wasPointerDown = false;
+                return;
+            }
+
             if (IsMultiTouchActive())
             {
                 _wasPointerDown = false;
@@ -994,6 +1078,67 @@ namespace RoutesToGlory.Game
             return false;
         }
 
+        private readonly struct RightButtonLayout
+        {
+            public readonly Rect ZoomIn;
+            public readonly Rect ZoomOut;
+            public readonly Rect View;
+            public readonly Rect Cockpit;
+            public readonly Rect Center;
+            public readonly bool HasCenter;
+
+            public RightButtonLayout(Rect zoomIn, Rect zoomOut, Rect view, Rect cockpit, Rect center, bool hasCenter)
+            {
+                ZoomIn = zoomIn;
+                ZoomOut = zoomOut;
+                View = view;
+                Cockpit = cockpit;
+                Center = center;
+                HasCenter = hasCenter;
+            }
+        }
+
+        private RightButtonLayout LayoutRightButtons(
+            float margin, float gap, float zoomW, float zoomH, float wideW, float wideH)
+        {
+            float right = Screen.width - zoomW - margin;
+            float wideRight = Screen.width - wideW - margin;
+            bool hasCenter = _panned;
+            int wideCount = 2 + (hasCenter ? 1 : 0);
+            int itemCount = wideCount + 2;
+            float stackH = wideCount * wideH + zoomH * 2f + (itemCount - 1) * gap;
+
+            float stackTop;
+            if (Screen.width > Screen.height)
+            {
+                stackTop = (Screen.height - stackH) * 0.5f;
+                stackTop = Mathf.Clamp(stackTop, margin, Mathf.Max(margin, Screen.height - stackH - margin));
+            }
+            else
+            {
+                float midY = Screen.height * 0.5f;
+                stackTop = midY - zoomH - gap * 0.5f - wideCount * (wideH + gap);
+            }
+
+            float y = stackTop;
+            Rect center = default;
+            if (hasCenter)
+            {
+                center = new Rect(wideRight, y, wideW, wideH);
+                y += wideH + gap;
+            }
+
+            var cockpit = new Rect(wideRight, y, wideW, wideH);
+            y += wideH + gap;
+            var view = new Rect(wideRight, y, wideW, wideH);
+            y += wideH + gap;
+            var zoomIn = new Rect(right, y, zoomW, zoomH);
+            y += zoomH + gap;
+            var zoomOut = new Rect(right, y, zoomW, zoomH);
+
+            return new RightButtonLayout(zoomIn, zoomOut, view, cockpit, center, hasCenter);
+        }
+
         private void OnGUI()
         {
             if (!Application.isPlaying) return;
@@ -1007,54 +1152,44 @@ namespace RoutesToGlory.Game
             const float wideW = 280f;
             const float wideH = 92f;
 
+            float right = Screen.width - zoomW - margin;
+            float midY = Screen.height * 0.5f;
+            RightButtonLayout rightButtons = LayoutRightButtons(margin, gap, zoomW, zoomH, wideW, wideH);
+
+            _cockpitView?.DrawOverlay();
+
             DrawMovementControls();
 
-            if (source == LocationSource.SimulatedRoute && routeMode == RouteMode.HomeToCasper)
+            if (_activeSource == LocationSource.AutoPilot && routeMode == RouteMode.HomeToCasper)
                 DrawRestartRouteButton();
 
             var prev = GUI.skin.button.fontSize;
             GUI.skin.button.fontSize = 28;
 
-            float right = Screen.width - zoomW - margin;
-            float wideRight = Screen.width - wideW - margin;
-            float midY = Screen.height * 0.5f;
-
-            var zoomInRect = new Rect(right, midY - zoomH - gap * 0.5f, zoomW, zoomH);
-            var zoomOutRect = new Rect(right, midY + gap * 0.5f, zoomW, zoomH);
-
             if (followWithCamera)
             {
-                var viewRect = new Rect(wideRight, zoomInRect.yMin - gap - wideH, wideW, wideH);
-                Rect centerRect = default;
-                if (_panned)
-                    centerRect = new Rect(wideRight, viewRect.yMin - gap - wideH, wideW, wideH);
-
-                if (_panned && GUI.Button(centerRect, "Center")) RecenterOnPlayer();
+                if (rightButtons.HasCenter && GUI.Button(rightButtons.Center, "Center"))
+                    RecenterOnPlayer();
 
                 string viewLabel = perspective == CameraPerspective.Map ? "Route View" : "Map View";
-                if (GUI.Button(viewRect, viewLabel)) TogglePerspective();
+                if (GUI.Button(rightButtons.View, viewLabel))
+                    TogglePerspective();
 
-                if (GUI.Button(zoomInRect, "+"))
-                    _zoomTarget = Mathf.Clamp(_zoomTarget / 1.35f, minZoom, maxZoom);
-                if (GUI.Button(zoomOutRect, "−"))
-                    _zoomTarget = Mathf.Clamp(_zoomTarget * 1.35f, minZoom, maxZoom);
+                bool inCockpit = _cockpitView != null && _cockpitView.IsActive;
+                string cockpitLabel = inCockpit ? "Exit Cockpit" : "Cockpit";
+                if (GUI.Button(rightButtons.Cockpit, cockpitLabel))
+                    RequestCockpit(fastZoom: true);
 
-                if (_panned) _gameUiRects.Add(centerRect);
-                _gameUiRects.Add(viewRect);
-            }
+                if (GUI.Button(rightButtons.ZoomIn, "+"))
+                    ApplyZoomInButton();
+                if (GUI.Button(rightButtons.ZoomOut, "−"))
+                    ApplyZoomOutButton();
 
-            if (source == LocationSource.SimulatedRoute)
-            {
-                float throttleTop = followWithCamera
-                    ? zoomOutRect.yMax + gap
-                    : midY + zoomH + gap;
-                DrawThrottleLever(right, throttleTop, zoomW);
-            }
-
-            if (followWithCamera)
-            {
-                _gameUiRects.Add(zoomInRect);
-                _gameUiRects.Add(zoomOutRect);
+                if (rightButtons.HasCenter) _gameUiRects.Add(rightButtons.Center);
+                _gameUiRects.Add(rightButtons.View);
+                _gameUiRects.Add(rightButtons.Cockpit);
+                _gameUiRects.Add(rightButtons.ZoomIn);
+                _gameUiRects.Add(rightButtons.ZoomOut);
             }
 
             const float infoSize = 92f;
@@ -1064,6 +1199,31 @@ namespace RoutesToGlory.Game
             _gameUiRects.Add(infoRect);
 
             GUI.skin.button.fontSize = prev;
+
+            if (_activeSource == LocationSource.AutoPilot)
+            {
+                bool inCockpit = _cockpitView != null && _cockpitView.IsActive;
+                if (inCockpit
+                    && _cockpitView.TryMapAnchorToScreen(
+                        RtgCockpitView.JoystickAnchor(Screen.height > Screen.width),
+                        out Rect joystickRect))
+                {
+                    DrawThrottleLever(joystickRect, cockpitAnchored: true);
+                }
+                else
+                {
+                    float throttleTop = followWithCamera
+                        ? rightButtons.ZoomOut.yMax + gap
+                        : midY + zoomH + gap;
+                    DrawThrottleLever(new Rect(right, throttleTop, zoomW, 0f), cockpitAnchored: false);
+                }
+            }
+
+            if (_cockpitView != null && _cockpitView.IsActive)
+            {
+                float pitchTop = midY - 200f;
+                DrawPitchLever(margin, pitchTop, zoomW);
+            }
         }
 
         private void DrawMovementControls()
@@ -1079,7 +1239,7 @@ namespace RoutesToGlory.Game
             var prevFont = GUI.skin.button.fontSize;
             GUI.skin.button.fontSize = 28;
 
-            string sourceLabel = source == LocationSource.DeviceGps ? "GPS" : "Plan Route";
+            string sourceLabel = ActiveModeButtonLabel(_activeSource);
             var sourceRect = new Rect(margin, sourceY, wideW, btnH);
             if (GUI.Button(sourceRect, sourceLabel))
                 ToggleLocationSource();
@@ -1104,73 +1264,153 @@ namespace RoutesToGlory.Game
             };
         }
 
-        private void DrawThrottleLever(float panelX, float panelY, float panelW)
+        private static void DrawOutlinedLabel(Rect rect, string text, GUIStyle style, Color fill, Color outline)
+        {
+            var outlineStyle = new GUIStyle(style) { normal = { textColor = outline } };
+            const int spread = 2;
+            for (int ox = -spread; ox <= spread; ox++)
+            {
+                for (int oy = -spread; oy <= spread; oy++)
+                {
+                    if (ox == 0 && oy == 0) continue;
+                    GUI.Label(new Rect(rect.x + ox, rect.y + oy, rect.width, rect.height), text, outlineStyle);
+                }
+            }
+
+            var fillStyle = new GUIStyle(style) { normal = { textColor = fill } };
+            GUI.Label(rect, text, fillStyle);
+        }
+
+        private void DrawThrottleLever(Rect anchorRect, bool cockpitAnchored)
         {
             float minThrottle = Mathf.Max(0.01f, minSpeedThrottle);
             float maxThrottle = Mathf.Max(minThrottle + 0.01f, maxSpeedThrottle);
             const float desiredPanelH = 520f;
             const float margin = 24f;
 
-            float width = Mathf.Max(panelW, 168f);
-            float availableH = Screen.height - margin - panelY;
-            float panelH = Mathf.Min(desiredPanelH, availableH);
-            const float headerH = 80f;
-            float footerH = Mathf.Max(96f, panelH * 0.22f);
-            var panelRect = new Rect(panelX - (width - panelW), panelY, width, panelH);
+            Rect panelRect;
+            if (cockpitAnchored)
+            {
+                float width = Mathf.Clamp(anchorRect.width, 96f, 220f);
+                float height = Mathf.Clamp(anchorRect.height, 160f, Screen.height * 0.55f);
+                panelRect = new Rect(
+                    anchorRect.x + (anchorRect.width - width) * 0.5f,
+                    anchorRect.y + (anchorRect.height - height) * 0.5f,
+                    width,
+                    height);
+            }
+            else
+            {
+                float panelW = anchorRect.width;
+                float width = Mathf.Max(panelW, 168f);
+                float availableH = Screen.height - margin - anchorRect.y;
+                float panelH = Mathf.Min(desiredPanelH, availableH);
+                panelRect = new Rect(anchorRect.x - (width - panelW), anchorRect.y, width, panelH);
+            }
+
             _gameUiRects.Add(panelRect);
+
+            float currentMph = EffectiveSimulatedSpeedMph();
+            float baseMph = BaseSimulatedSpeedMph();
+            float minMph = baseMph * minThrottle;
+            float maxMph = baseMph * maxThrottle;
+
+            float speedometerH = cockpitAnchored ? panelRect.height / 3f : 0f;
+            float leverTop = cockpitAnchored ? panelRect.y + speedometerH : panelRect.y;
+            float leverH = cockpitAnchored ? panelRect.height - speedometerH : panelRect.height;
+
+            float headerH = cockpitAnchored ? 0f : 80f;
+            float footerH = cockpitAnchored
+                ? Mathf.Clamp(leverH * 0.14f, 24f, 36f)
+                : Mathf.Max(96f, panelRect.height * 0.22f);
 
             Color prevColor = GUI.color;
             var prevLabel = GUI.skin.label.fontSize;
 
-            GUI.color = new Color(0.06f, 0.09f, 0.18f, 0.94f);
+            float bgAlpha = cockpitAnchored ? 0.42f : 0.94f;
+            GUI.color = new Color(0.06f, 0.09f, 0.18f, bgAlpha);
             GUI.Box(panelRect, GUIContent.none);
 
             Color titleColor = new Color(0.97f, 0.99f, 1f);
             Color subColor = new Color(0.93f, 0.97f, 1f);
             Color tierColor = Color.Lerp(new Color(0.98f, 0.99f, 1f), ThrottleGlowColor(speedThrottle), 0.4f);
-            Color mphColor = new Color(0.98f, 1f, 1f);
+            Color mphColor = new Color(1f, 1f, 1f);
+            Color mphOutline = new Color(0.02f, 0.06f, 0.14f, 0.95f);
 
-            var titleStyle = BrightLabel(20, titleColor, FontStyle.Bold);
-            var tierStyle = BrightLabel(22, tierColor, FontStyle.Bold);
-            var speedStyle = BrightLabel(28, mphColor, FontStyle.Bold);
-            var mphRangeStyle = BrightLabel(16, subColor);
-            var cruiseStyle = BrightLabel(17, subColor);
+            int titleSize = cockpitAnchored ? 14 : 20;
+            int tierSize = cockpitAnchored ? 15 : 22;
+            int speedSize = cockpitAnchored ? 18 : 28;
+            int mphRangeSize = cockpitAnchored ? 12 : 16;
+            int cruiseSize = cockpitAnchored ? 12 : 17;
 
-            float baseMph = BaseSimulatedSpeedMph();
-            float minMph = baseMph * minThrottle;
-            float maxMph = baseMph * maxThrottle;
-            float currentMph = EffectiveSimulatedSpeedMph();
+            var titleStyle = BrightLabel(titleSize, titleColor, FontStyle.Bold);
+            var tierStyle = BrightLabel(tierSize, tierColor, FontStyle.Bold);
+            var speedStyle = BrightLabel(speedSize, mphColor, FontStyle.Bold);
+            var mphRangeStyle = BrightLabel(mphRangeSize, subColor);
+            var cruiseStyle = BrightLabel(cruiseSize, subColor);
+
             float footerTop = panelRect.yMax - footerH;
 
-            GUI.Label(new Rect(panelRect.x, panelRect.y + 6f, panelRect.width, 22f), "THROTTLE", titleStyle);
-            GUI.Label(
-                new Rect(panelRect.x, panelRect.y + 26f, panelRect.width, 34f),
-                $"{currentMph:0} MPH",
-                speedStyle);
+            if (cockpitAnchored)
+            {
+                var speedZone = new Rect(panelRect.x + 4f, panelRect.y + 4f, panelRect.width - 8f, speedometerH - 8f);
+                GUI.color = new Color(0.02f, 0.05f, 0.12f, 0.82f);
+                GUI.Box(speedZone, GUIContent.none);
 
+                int speedFont = Mathf.RoundToInt(Mathf.Clamp(speedZone.height * 0.52f, 28f, 52f));
+                int mphFont = Mathf.RoundToInt(Mathf.Clamp(speedFont * 0.34f, 16f, 24f));
+                var speedometerStyle = BrightLabel(speedFont, mphColor, FontStyle.Bold);
+                var mphUnitStyle = BrightLabel(mphFont, new Color(0.88f, 0.96f, 1f), FontStyle.Bold);
+
+                float numberH = speedZone.height * 0.62f;
+                var numberRect = new Rect(speedZone.x, speedZone.y + 2f, speedZone.width, numberH);
+                DrawOutlinedLabel(numberRect, $"{currentMph:0}", speedometerStyle, mphColor, mphOutline);
+
+                var mphRect = new Rect(speedZone.x, speedZone.yMax - speedZone.height * 0.34f, speedZone.width, speedZone.height * 0.3f);
+                DrawOutlinedLabel(mphRect, "MPH", mphUnitStyle, new Color(0.92f, 0.98f, 1f), mphOutline);
+            }
+            else
+            {
+                GUI.Label(new Rect(panelRect.x, panelRect.y + 4f, panelRect.width, 18f), "THROTTLE", titleStyle);
+                GUI.Label(
+                    new Rect(panelRect.x, panelRect.y + 26f, panelRect.width, 34f),
+                    $"{currentMph:0} MPH",
+                    speedStyle);
+            }
+
+            float trackW = cockpitAnchored ? Mathf.Clamp(panelRect.width * 0.34f, 36f, 52f) : 48f;
+            float trackX = cockpitAnchored
+                ? panelRect.x + (panelRect.width - trackW) * 0.5f
+                : panelRect.x + 28f;
+            float trackTop = cockpitAnchored ? leverTop + 4f : panelRect.y + headerH;
+            float trackBottom = cockpitAnchored ? panelRect.yMax - footerH - 4f : footerTop;
             var trackRect = new Rect(
-                panelRect.x + 28f,
-                panelRect.y + headerH,
-                48f,
-                panelRect.height - headerH - footerH);
-            GUI.Label(
-                new Rect(panelRect.x + 82f, trackRect.y - 2f, 56f, 24f),
-                $"{maxMph:0}",
-                mphRangeStyle);
-            GUI.Label(
-                new Rect(panelRect.x + 82f, trackRect.yMax - 22f, 56f, 24f),
-                $"{minMph:0}",
-                mphRangeStyle);
+                trackX,
+                trackTop,
+                trackW,
+                Mathf.Max(48f, trackBottom - trackTop));
+
+            if (!cockpitAnchored)
+            {
+                GUI.Label(
+                    new Rect(panelRect.x + 82f, trackRect.y - 2f, 56f, 24f),
+                    $"{maxMph:0}",
+                    mphRangeStyle);
+                GUI.Label(
+                    new Rect(panelRect.x + 82f, trackRect.yMax - 22f, 56f, 24f),
+                    $"{minMph:0}",
+                    mphRangeStyle);
+            }
+
             float fillT = Mathf.InverseLerp(minThrottle, maxThrottle, speedThrottle);
             float fillH = trackRect.height * fillT;
             var fillRect = new Rect(trackRect.x + 4f, trackRect.yMax - fillH - 4f, trackRect.width - 8f, fillH);
 
-            GUI.color = new Color(0.12f, 0.18f, 0.28f, 1f);
+            GUI.color = new Color(0.12f, 0.18f, 0.28f, cockpitAnchored ? 0.72f : 1f);
             GUI.Box(trackRect, GUIContent.none);
             GUI.color = ThrottleGlowColor(speedThrottle);
             GUI.Box(fillRect, GUIContent.none);
 
-            // Bright cap at current power level
             if (fillH > 6f)
             {
                 GUI.color = Color.Lerp(ThrottleGlowColor(speedThrottle), Color.white, 0.45f);
@@ -1186,13 +1426,78 @@ namespace RoutesToGlory.Game
             }
 
             GUI.Label(
-                new Rect(panelRect.x, footerTop + 8f, panelRect.width, 28f),
+                new Rect(panelRect.x, footerTop + 4f, panelRect.width, 22f),
                 ThrottleTierLabel(speedThrottle),
                 tierStyle);
+            if (!cockpitAnchored)
+            {
+                GUI.Label(
+                    new Rect(panelRect.x, footerTop + 38f, panelRect.width, 24f),
+                    $"cruise {baseMph:0} · {speedThrottle:0.0}×",
+                    cruiseStyle);
+            }
+
+            GUI.color = prevColor;
+            GUI.skin.label.fontSize = prevLabel;
+        }
+
+        private void DrawPitchLever(float panelX, float panelY, float panelW)
+        {
+            float minPitch = cockpitPitchMinDegrees;
+            float maxPitch = Mathf.Max(minPitch + 1f, cockpitPitchMaxDegrees);
+            const float desiredPanelH = 320f;
+            const float margin = 24f;
+
+            float width = Mathf.Max(panelW, 140f);
+            float availableH = Screen.height - margin - panelY;
+            float panelH = Mathf.Min(desiredPanelH, availableH);
+            const float headerH = 64f;
+            var panelRect = new Rect(panelX, panelY, width, panelH);
+            _gameUiRects.Add(panelRect);
+
+            bool portrait = Screen.height > Screen.width;
+            float pitch = portrait ? cockpitPortraitPitchDegrees : cockpitLandscapePitchDegrees;
+
+            Color prevColor = GUI.color;
+            var prevLabel = GUI.skin.label.fontSize;
+
+            GUI.color = new Color(0.06f, 0.09f, 0.18f, 0.94f);
+            GUI.Box(panelRect, GUIContent.none);
+
+            var labelStyle = BrightLabel(18, new Color(0.97f, 0.99f, 1f), FontStyle.Bold);
+            var valueStyle = BrightLabel(24, new Color(0.98f, 1f, 1f), FontStyle.Bold);
+
+            GUI.Label(new Rect(panelRect.x, panelRect.y + 8f, panelRect.width, 22f), "Pitch", labelStyle);
             GUI.Label(
-                new Rect(panelRect.x, footerTop + 38f, panelRect.width, 24f),
-                $"cruise {baseMph:0} · {speedThrottle:0.0}×",
-                cruiseStyle);
+                new Rect(panelRect.x, panelRect.y + 30f, panelRect.width, 30f),
+                $"{pitch:0.#}°",
+                valueStyle);
+
+            var trackRect = new Rect(
+                panelRect.x + 28f,
+                panelRect.y + headerH,
+                48f,
+                panelRect.height - headerH - 16f);
+
+            float fillT = Mathf.InverseLerp(minPitch, maxPitch, pitch);
+            float fillH = trackRect.height * fillT;
+            var fillRect = new Rect(trackRect.x + 4f, trackRect.yMax - fillH - 4f, trackRect.width - 8f, fillH);
+
+            GUI.color = new Color(0.12f, 0.18f, 0.28f, 1f);
+            GUI.Box(trackRect, GUIContent.none);
+            GUI.color = new Color(0.35f, 0.75f, 0.95f, 1f);
+            GUI.Box(fillRect, GUIContent.none);
+
+            GUI.color = Color.white;
+            float newPitch = GUI.VerticalSlider(trackRect, pitch, maxPitch, minPitch);
+            if (!Mathf.Approximately(newPitch, pitch))
+            {
+                newPitch = Mathf.Clamp(newPitch, minPitch, maxPitch);
+                if (portrait)
+                    cockpitPortraitPitchDegrees = newPitch;
+                else
+                    cockpitLandscapePitchDegrees = newPitch;
+            }
 
             GUI.color = prevColor;
             GUI.skin.label.fontSize = prevLabel;
@@ -1216,8 +1521,8 @@ namespace RoutesToGlory.Game
 
         private string FormatSpeedLabel()
         {
-            if (source == LocationSource.DeviceGps)
-                return _provider != null ? _provider.Status : "GPS";
+            if (_activeSource == LocationSource.Manual)
+                return _provider != null ? _provider.Status : "Manual";
 
             return $"{EffectiveSimulatedSpeedMph():0} MPH";
         }
@@ -1229,6 +1534,8 @@ namespace RoutesToGlory.Game
 
         private void TogglePerspective()
         {
+            ExitCockpit(immediate: true);
+
             perspective = perspective == CameraPerspective.Map
                 ? CameraPerspective.LowAngle
                 : CameraPerspective.Map;
@@ -1238,6 +1545,110 @@ namespace RoutesToGlory.Game
                 _camera.transform.position = DesiredCameraPosition(_focus);
                 _camera.transform.LookAt(_focus, Vector3.up);
             }
+        }
+
+        private void RequestCockpit(bool fastZoom)
+        {
+            if (_cockpitView == null) return;
+
+            if (_cockpitView.IsActive)
+            {
+                ExitCockpit();
+                return;
+            }
+
+            _panned = false;
+            _cockpitEntryPending = true;
+            _cockpitFastZoom = fastZoom;
+            _zoomTarget = minZoom;
+        }
+
+        private void EnterCockpit()
+        {
+            if (_cockpitView == null) return;
+
+            _cockpitEntryPending = false;
+            _cockpitFastZoom = false;
+            _zoom = minZoom;
+            _zoomTarget = minZoom;
+            _cockpitView.SetActive(true, immediate: false);
+            SetShipVisible(false);
+            ApplyCockpitCamera();
+        }
+
+        private void ExitCockpit(bool immediate = false)
+        {
+            if (_cockpitView == null) return;
+
+            _cockpitEntryPending = false;
+            _cockpitFastZoom = false;
+            _cockpitView.SetActive(false, immediate);
+            SetShipVisible(true);
+
+            if (!immediate)
+                _zoomTarget = Mathf.Clamp(minZoom * 1.75f, minZoom, maxZoom);
+        }
+
+        private void SetShipVisible(bool visible)
+        {
+            if (_shipVisual != null)
+                _shipVisual.gameObject.SetActive(visible);
+            Transform beacon = _marker != null ? _marker.Find("Beacon") : null;
+            if (beacon != null)
+                beacon.gameObject.SetActive(visible);
+        }
+
+        private void ApplyCockpitCamera()
+        {
+            if (_camera == null || _marker == null) return;
+
+            Vector3 eye = _marker.position + Vector3.up * cockpitEyeHeightMeters;
+            Vector3 forward = TravelDirectionXZ();
+            if (forward.sqrMagnitude < 1e-6f)
+                forward = _camera.transform.forward;
+
+            bool portrait = Screen.height > Screen.width;
+            float pitch = portrait ? cockpitPortraitPitchDegrees : cockpitLandscapePitchDegrees;
+
+            // Portrait windshield sits high on screen; pitch down so the glass shows terrain ahead, not sky.
+            Quaternion yaw = Quaternion.LookRotation(forward, Vector3.up);
+            _camera.transform.position = eye;
+            _camera.transform.rotation = yaw * Quaternion.Euler(pitch, 0f, 0f);
+        }
+
+        private void TryCompleteCockpitEntry()
+        {
+            if (!_cockpitEntryPending || _cockpitView == null) return;
+            if (_zoom > minZoom * 1.08f) return;
+            EnterCockpit();
+        }
+
+        private void ApplyZoomInButton()
+        {
+            if (_cockpitView != null && _cockpitView.IsActive) return;
+
+            if (_zoomTarget <= minZoom * 1.02f)
+            {
+                RequestCockpit(fastZoom: false);
+                return;
+            }
+
+            _zoomTarget = Mathf.Clamp(_zoomTarget / 1.35f, minZoom, maxZoom);
+            if (_zoomTarget <= minZoom * 1.02f)
+                _cockpitEntryPending = true;
+        }
+
+        private void ApplyZoomOutButton()
+        {
+            if (_cockpitView != null && _cockpitView.IsActive)
+            {
+                ExitCockpit();
+                return;
+            }
+
+            _cockpitEntryPending = false;
+            _cockpitFastZoom = false;
+            _zoomTarget = Mathf.Clamp(_zoomTarget * 1.35f, minZoom, maxZoom);
         }
 
         private static bool ReadPointer(out Vector2 position, out bool isDown)
@@ -1352,17 +1763,39 @@ namespace RoutesToGlory.Game
                 return;
             }
 
-            float t = zoomSmoothing > 0f
-                ? 1f - Mathf.Exp(-zoomSmoothing * Time.deltaTime)
+            float smoothing = _cockpitFastZoom ? cockpitZoomSmoothing : zoomSmoothing;
+            float t = smoothing > 0f
+                ? 1f - Mathf.Exp(-smoothing * Time.deltaTime)
                 : 1f;
             _zoom = Mathf.Lerp(_zoom, _zoomTarget, t);
+
+            if (_cockpitFastZoom && Mathf.Abs(_zoom - _zoomTarget) < 0.01f)
+                _cockpitFastZoom = false;
         }
 
         private void ApplyZoomStep(float step)
         {
+            if (_cockpitView != null && _cockpitView.IsActive)
+            {
+                if (step > 0f)
+                    ExitCockpit();
+                return;
+            }
+
             float clamped = Mathf.Clamp(step, -1f, 1f) * (invertZoom ? -1f : 1f);
+
+            // Zooming in at max zoom enters the cockpit.
+            if (clamped < 0f && _zoomTarget <= minZoom * 1.02f)
+            {
+                RequestCockpit(fastZoom: false);
+                return;
+            }
+
             _zoomTarget = Mathf.Clamp(
                 _zoomTarget * Mathf.Exp(-clamped * zoomSensitivity), minZoom, maxZoom);
+
+            if (clamped < 0f && _zoomTarget <= minZoom * 1.02f)
+                _cockpitEntryPending = true;
         }
 
         private static float ReadScroll()

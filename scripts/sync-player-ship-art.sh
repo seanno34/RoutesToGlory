@@ -17,4 +17,11 @@ for f in glider_01.png glider_02.png glider_03.png glider_04.png; do
   fi
 done
 
-echo "Done. glider_01 is the player ship in Map and Route views. Re-export Unity to Xcode after art changes."
+if command -v python3 >/dev/null 2>&1; then
+  python3 "$ROOT/scripts/process-cockpit-transparency.py"
+else
+  echo "python3 not found — cockpit windshield keying skipped"
+fi
+
+echo "Done. glider_01 = map pin; glider_cockpit_01 / glider_cockpit_portrait_01 = cockpit overlays."
+echo "Re-export Unity to Xcode after art changes."
