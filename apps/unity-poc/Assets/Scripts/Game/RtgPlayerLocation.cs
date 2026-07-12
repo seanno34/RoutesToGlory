@@ -177,6 +177,16 @@ namespace RoutesToGlory.Game
         [Tooltip("How quickly pinch/button zoom catches up (higher = snappier).")]
         public float zoomSmoothing = 10f;
 
+        [Header("GPS smoothing (Manual mode)")]
+        [Tooltip("How quickly the glider catches up to GPS fixes. Higher = snappier; lower = smoother.")]
+        public float gpsSmoothing = 10f;
+
+        [Tooltip("Request a new GPS fix after this many meters of movement.")]
+        public float gpsUpdateDistanceMeters = 1f;
+
+        [Tooltip("Snap instead of smoothing if a fix jumps farther than this (GPS re-acquire).")]
+        public float gpsMaxSnapMeters = 120f;
+
         [Header("Cockpit view")]
         [Tooltip("Eye height (m) above the player anchor in cockpit mode.")]
         public float cockpitEyeHeightMeters = 3.5f;
@@ -212,6 +222,14 @@ namespace RoutesToGlory.Game
         public float panSpeed = 2f;
 
         private readonly List<Rect> _gameUiRects = new();
+        private bool _settingsOpen;
+        private static Texture2D _settingsGearIcon;
+        private static Texture2D _leverKnobGlowTexture;
+        private static Texture2D _leverKnobCoreTexture;
+        private static readonly int ThrottleLeverHint = "RtgThrottleLever".GetHashCode();
+        private static readonly int PitchLeverHint = "RtgPitchLever".GetHashCode();
+        private int _activeLeverHint = -1;
+        private Rect _activeLeverTrack;
 
         // When the user drags, the camera's focus point stops tracking the player and a
         // "Center" button appears; tapping it snaps the focus back to the pin.
@@ -362,10 +380,20 @@ namespace RoutesToGlory.Game
         // Provider / route
         // ------------------------------------------------------------------ //
 
+        private void ApplyGpsSmoothingToProvider()
+        {
+            if (_provider is RtgDeviceLocationProvider gps)
+                gps.Configure(gpsSmoothing, gpsUpdateDistanceMeters, gpsMaxSnapMeters);
+        }
+
         private IRtgLocationProvider CreateProvider()
         {
             if (_activeSource == LocationSource.Manual)
-                return new RtgDeviceLocationProvider();
+            {
+                var gps = new RtgDeviceLocationProvider();
+                gps.Configure(gpsSmoothing, gpsUpdateDistanceMeters, gpsMaxSnapMeters);
+                return gps;
+            }
 
             if (routeMode == RouteMode.HomeToCasper)
                 return new RtgSimulatedLocationProvider(HomeToCasperRoute(), EffectiveSimulatedSpeed());
@@ -1200,6 +1228,8 @@ namespace RoutesToGlory.Game
 
             GUI.skin.button.fontSize = prev;
 
+            DrawSettingsGearAndPanel(margin, midY);
+
             if (_activeSource == LocationSource.AutoPilot)
             {
                 bool inCockpit = _cockpitView != null && _cockpitView.IsActive;
@@ -1218,12 +1248,405 @@ namespace RoutesToGlory.Game
                     DrawThrottleLever(new Rect(right, throttleTop, zoomW, 0f), cockpitAnchored: false);
                 }
             }
+        }
 
-            if (_cockpitView != null && _cockpitView.IsActive)
+        private void DrawSettingsGearAndPanel(float margin, float midY)
+        {
+            const float scale = 2f;
+            const float gearSize = 72f * scale;
+            var gearRect = new Rect(margin, midY - gearSize * 0.5f, gearSize, gearSize);
+
+            var prevFont = GUI.skin.button.fontSize;
+            GUI.skin.button.fontSize = Mathf.RoundToInt(34f * scale);
+            if (GUI.Button(gearRect, GUIContent.none))
+                _settingsOpen = !_settingsOpen;
+            _gameUiRects.Add(gearRect);
+
+            if (_settingsOpen)
+                DrawCloseGlyph(gearRect);
+            else
+                DrawGearGlyph(gearRect);
+
+            GUI.skin.button.fontSize = prevFont;
+
+            if (!_settingsOpen)
+                return;
+
+            bool inCockpit = _cockpitView != null && _cockpitView.IsActive;
+            bool showPitch = inCockpit;
+            const bool showGps = true;
+
+            const float panelWidthDesired = 300f * scale;
+            const float rowH = 56f * scale;
+            const float pitchH = 240f * scale;
+            const float headerH = 34f * scale;
+            const float pad = 12f * scale;
+
+            float panelH = headerH + pad;
+            if (showPitch) panelH += pitchH + pad;
+            if (showGps) panelH += rowH * 3f + pad;
+            panelH = Mathf.Min(panelH, Screen.height - margin * 2f);
+
+            float panelX = gearRect.xMax + 8f * scale;
+            float panelWidth = Mathf.Min(panelWidthDesired, Screen.width - panelX - margin);
+            if (panelX + panelWidth > Screen.width - margin)
+                panelX = Mathf.Max(margin, Screen.width - margin - panelWidth);
+            float panelY = Mathf.Clamp(midY - panelH * 0.5f, margin, Screen.height - margin - panelH);
+            var panelRect = new Rect(panelX, panelY, panelWidth, panelH);
+            _gameUiRects.Add(panelRect);
+
+            Color prevColor = GUI.color;
+            GUI.color = new Color(0.06f, 0.09f, 0.18f, 0.92f);
+            GUI.Box(panelRect, GUIContent.none);
+            GUI.color = prevColor;
+
+            var titleStyle = BrightLabel(Mathf.RoundToInt(16f * scale), new Color(0.97f, 0.99f, 1f), FontStyle.Bold);
+            GUI.Label(
+                new Rect(panelRect.x + pad, panelRect.y + 8f * scale, panelRect.width - pad * 2f, 22f * scale),
+                "Settings",
+                titleStyle);
+
+            float y = panelRect.y + headerH;
+            if (showPitch)
             {
-                float pitchTop = midY - 200f;
-                DrawPitchLever(margin, pitchTop, zoomW);
+                DrawPitchLever(panelRect.x + pad, y, panelRect.width - pad * 2f, pitchH, scale);
+                y += pitchH;
             }
+
+            if (showGps)
+            {
+                y += pad * 0.5f;
+                float newSmoothing = DrawSettingSlider(
+                    new Rect(panelRect.x + pad, y, panelRect.width - pad * 2f, rowH),
+                    "GPS smooth",
+                    gpsSmoothing,
+                    2f,
+                    24f,
+                    scale: scale);
+                y += rowH;
+                float newUpdateDistance = DrawSettingSlider(
+                    new Rect(panelRect.x + pad, y, panelRect.width - pad * 2f, rowH),
+                    "GPS update (m)",
+                    gpsUpdateDistanceMeters,
+                    0.5f,
+                    10f,
+                    scale: scale);
+                y += rowH;
+                float newMaxSnap = DrawSettingSlider(
+                    new Rect(panelRect.x + pad, y, panelRect.width - pad * 2f, rowH),
+                    "GPS max snap (m)",
+                    gpsMaxSnapMeters,
+                    30f,
+                    300f,
+                    "0",
+                    scale: scale);
+
+                if (!Mathf.Approximately(newSmoothing, gpsSmoothing)
+                    || !Mathf.Approximately(newUpdateDistance, gpsUpdateDistanceMeters)
+                    || !Mathf.Approximately(newMaxSnap, gpsMaxSnapMeters))
+                {
+                    gpsSmoothing = newSmoothing;
+                    gpsUpdateDistanceMeters = newUpdateDistance;
+                    gpsMaxSnapMeters = newMaxSnap;
+                    ApplyGpsSmoothingToProvider();
+                }
+            }
+        }
+
+        private static Texture2D GetSettingsGearIcon()
+        {
+            if (_settingsGearIcon != null)
+                return _settingsGearIcon;
+
+            const int size = 128;
+            const int teeth = 10;
+            const float outerR = 0.94f;
+            const float innerR = 0.72f;
+            const float holeR = 0.26f;
+            var fill = new Color(0.95f, 0.98f, 1f, 1f);
+
+            var tex = new Texture2D(size, size, TextureFormat.RGBA32, false)
+            {
+                filterMode = FilterMode.Bilinear,
+                wrapMode = TextureWrapMode.Clamp,
+            };
+
+            float center = (size - 1) * 0.5f;
+            float radiusScale = size * 0.5f;
+
+            for (int y = 0; y < size; y++)
+            {
+                for (int x = 0; x < size; x++)
+                {
+                    float nx = (x - center) / radiusScale;
+                    float ny = (y - center) / radiusScale;
+                    float r = Mathf.Sqrt(nx * nx + ny * ny);
+                    float angle = Mathf.Atan2(ny, nx);
+                    float profileR = innerR + (outerR - innerR) * 0.5f * (1f + Mathf.Cos(teeth * angle));
+                    bool inside = r <= profileR && r >= holeR;
+                    tex.SetPixel(x, y, inside ? fill : Color.clear);
+                }
+            }
+
+            tex.Apply();
+            _settingsGearIcon = tex;
+            return _settingsGearIcon;
+        }
+
+        private static void DrawGearGlyph(Rect rect)
+        {
+            Texture2D tex = GetSettingsGearIcon();
+            Color prev = GUI.color;
+            GUI.color = Color.white;
+            float inset = rect.width * 0.16f;
+            var iconRect = new Rect(
+                rect.x + inset,
+                rect.y + inset,
+                rect.width - inset * 2f,
+                rect.height - inset * 2f);
+            GUI.DrawTexture(iconRect, tex, ScaleMode.ScaleToFit, true);
+            GUI.color = prev;
+        }
+
+        private static void DrawCloseGlyph(Rect rect)
+        {
+            var style = BrightLabel(Mathf.RoundToInt(rect.height * 0.42f), new Color(0.95f, 0.98f, 1f), FontStyle.Bold);
+            GUI.Label(rect, "X", style);
+        }
+
+        private static Texture2D GetLeverKnobGlowTexture()
+        {
+            if (_leverKnobGlowTexture != null)
+                return _leverKnobGlowTexture;
+
+            const int size = 96;
+            var tex = new Texture2D(size, size, TextureFormat.RGBA32, false)
+            {
+                filterMode = FilterMode.Bilinear,
+                wrapMode = TextureWrapMode.Clamp,
+            };
+
+            float center = (size - 1) * 0.5f;
+            float radius = size * 0.5f;
+            for (int y = 0; y < size; y++)
+            {
+                for (int x = 0; x < size; x++)
+                {
+                    float nx = (x - center) / radius;
+                    float ny = (y - center) / radius;
+                    float r = Mathf.Sqrt(nx * nx + ny * ny);
+                    float alpha = Mathf.Clamp01(1f - r);
+                    alpha = alpha * alpha * alpha;
+                    tex.SetPixel(x, y, new Color(1f, 1f, 1f, alpha * 0.9f));
+                }
+            }
+
+            tex.Apply();
+            _leverKnobGlowTexture = tex;
+            return _leverKnobGlowTexture;
+        }
+
+        private static Texture2D GetLeverKnobCoreTexture()
+        {
+            if (_leverKnobCoreTexture != null)
+                return _leverKnobCoreTexture;
+
+            const int size = 64;
+            var tex = new Texture2D(size, size, TextureFormat.RGBA32, false)
+            {
+                filterMode = FilterMode.Bilinear,
+                wrapMode = TextureWrapMode.Clamp,
+            };
+
+            float center = (size - 1) * 0.5f;
+            float radius = size * 0.5f;
+            for (int y = 0; y < size; y++)
+            {
+                for (int x = 0; x < size; x++)
+                {
+                    float nx = (x - center) / radius;
+                    float ny = (y - center) / radius;
+                    float r = Mathf.Sqrt(nx * nx + ny * ny);
+                    float alpha = r <= 0.34f
+                        ? 1f
+                        : Mathf.Clamp01(1f - (r - 0.34f) / 0.22f);
+                    tex.SetPixel(x, y, new Color(1f, 1f, 1f, alpha));
+                }
+            }
+
+            tex.Apply();
+            _leverKnobCoreTexture = tex;
+            return _leverKnobCoreTexture;
+        }
+
+        private static void DrawFillGlow(Rect fillRect, Color glowColor)
+        {
+            if (fillRect.height <= 1f)
+                return;
+
+            Color prev = GUI.color;
+            for (int i = 3; i >= 1; i--)
+            {
+                float expand = i * 4f;
+                float alpha = 0.1f + 0.08f * (4 - i);
+                GUI.color = new Color(glowColor.r, glowColor.g, glowColor.b, alpha);
+                GUI.Box(
+                    new Rect(
+                        fillRect.x - expand,
+                        fillRect.y - expand * 0.5f,
+                        fillRect.width + expand * 2f,
+                        fillRect.height + expand),
+                    GUIContent.none);
+            }
+
+            GUI.color = prev;
+        }
+
+        private static void DrawLeverKnob(Rect trackRect, float normalized, Color glowColor, float knobScale = 1.6f)
+        {
+            float thumbY = Mathf.Lerp(trackRect.yMax, trackRect.y, normalized);
+            float knobSize = Mathf.Max(trackRect.width * knobScale, 52f);
+            float glowSize = knobSize * 1.85f;
+            float cx = trackRect.x + trackRect.width * 0.5f;
+
+            var glowRect = new Rect(cx - glowSize * 0.5f, thumbY - glowSize * 0.5f, glowSize, glowSize);
+            var coreRect = new Rect(cx - knobSize * 0.5f, thumbY - knobSize * 0.5f, knobSize, knobSize);
+
+            Color prev = GUI.color;
+            GUI.color = new Color(glowColor.r, glowColor.g, glowColor.b, 0.72f);
+            GUI.DrawTexture(glowRect, GetLeverKnobGlowTexture(), ScaleMode.ScaleToFit, true);
+
+            GUI.color = Color.Lerp(glowColor, Color.white, 0.62f);
+            GUI.DrawTexture(coreRect, GetLeverKnobCoreTexture(), ScaleMode.ScaleToFit, true);
+
+            float capW = knobSize * 0.34f;
+            float capH = knobSize * 0.16f;
+            GUI.color = new Color(0.95f, 0.18f, 0.2f, 0.95f);
+            GUI.Box(
+                new Rect(cx - capW * 0.5f, thumbY - knobSize * 0.34f, capW, capH),
+                GUIContent.none);
+
+            GUI.color = prev;
+        }
+
+        private static Rect UnionRects(Rect a, Rect b)
+        {
+            float xMin = Mathf.Min(a.xMin, b.xMin);
+            float yMin = Mathf.Min(a.yMin, b.yMin);
+            float xMax = Mathf.Max(a.xMax, b.xMax);
+            float yMax = Mathf.Max(a.yMax, b.yMax);
+            return Rect.MinMaxRect(xMin, yMin, xMax, yMax);
+        }
+
+        private static Rect BuildVerticalLeverHitRect(Rect trackRect, float normalized, float knobScale)
+        {
+            float thumbY = Mathf.Lerp(trackRect.yMax, trackRect.y, normalized);
+            float glowSize = Mathf.Max(trackRect.width * knobScale, 52f) * 1.85f;
+            float cx = trackRect.x + trackRect.width * 0.5f;
+            var knobRect = new Rect(cx - glowSize * 0.5f, thumbY - glowSize * 0.5f, glowSize, glowSize);
+
+            const float pad = 16f;
+            var paddedTrack = new Rect(
+                trackRect.x - pad,
+                trackRect.y - pad,
+                trackRect.width + pad * 2f,
+                trackRect.height + pad * 2f);
+
+            return UnionRects(paddedTrack, knobRect);
+        }
+
+        private float VerticalLeverInput(
+            Rect trackRect,
+            float normalized,
+            float value,
+            float min,
+            float max,
+            int controlHint,
+            float knobScale = 1.6f)
+        {
+            int id = GUIUtility.GetControlID(controlHint, FocusType.Passive);
+            Event e = Event.current;
+            Rect hitRect = BuildVerticalLeverHitRect(trackRect, normalized, knobScale);
+            _gameUiRects.Add(hitRect);
+
+            switch (e.type)
+            {
+                case EventType.MouseDown:
+                    if (e.button != 0)
+                        break;
+
+                    if (hitRect.Contains(e.mousePosition))
+                    {
+                        GUIUtility.hotControl = id;
+                        _activeLeverHint = controlHint;
+                        _activeLeverTrack = trackRect;
+                        value = ValueFromVerticalTrack(e.mousePosition.y, trackRect, min, max);
+                        e.Use();
+                    }
+
+                    break;
+                case EventType.MouseDrag:
+                    if (_activeLeverHint == controlHint)
+                    {
+                        GUIUtility.hotControl = id;
+                        value = ValueFromVerticalTrack(e.mousePosition.y, _activeLeverTrack, min, max);
+                        e.Use();
+                    }
+
+                    break;
+                case EventType.MouseUp:
+                    if (_activeLeverHint == controlHint && e.button == 0)
+                    {
+                        _activeLeverHint = -1;
+                        if (GUIUtility.hotControl == id)
+                            GUIUtility.hotControl = 0;
+                        e.Use();
+                    }
+
+                    break;
+            }
+
+            return Mathf.Clamp(value, min, max);
+        }
+
+        private static float ValueFromVerticalTrack(float mouseY, Rect trackRect, float min, float max)
+        {
+            float t = Mathf.InverseLerp(trackRect.yMax, trackRect.y, mouseY);
+            return Mathf.Lerp(min, max, t);
+        }
+
+        private float DrawSettingSlider(
+            Rect rect,
+            string label,
+            float value,
+            float min,
+            float max,
+            string format = "0.0",
+            float scale = 1f)
+        {
+            _gameUiRects.Add(rect);
+
+            int fontSize = Mathf.RoundToInt(14f * scale);
+            var labelStyle = BrightLabel(fontSize, new Color(0.93f, 0.97f, 1f), FontStyle.Bold);
+            var valueStyle = BrightLabel(fontSize, new Color(0.98f, 1f, 1f), FontStyle.Bold);
+
+            GUI.Label(new Rect(rect.x, rect.y, rect.width, 20f * scale), label, labelStyle);
+
+            var sliderRect = new Rect(
+                rect.x,
+                rect.y + 24f * scale,
+                rect.width - 58f * scale,
+                22f * scale);
+            var valueRect = new Rect(
+                rect.xMax - 54f * scale,
+                rect.y + 22f * scale,
+                54f * scale,
+                22f * scale);
+            _gameUiRects.Add(sliderRect);
+
+            float newValue = GUI.HorizontalSlider(sliderRect, value, min, max);
+            GUI.Label(valueRect, newValue.ToString(format), valueStyle);
+            return newValue;
         }
 
         private void DrawMovementControls()
@@ -1405,23 +1828,34 @@ namespace RoutesToGlory.Game
             float fillT = Mathf.InverseLerp(minThrottle, maxThrottle, speedThrottle);
             float fillH = trackRect.height * fillT;
             var fillRect = new Rect(trackRect.x + 4f, trackRect.yMax - fillH - 4f, trackRect.width - 8f, fillH);
+            Color glowColor = ThrottleGlowColor(speedThrottle);
 
             GUI.color = new Color(0.12f, 0.18f, 0.28f, cockpitAnchored ? 0.72f : 1f);
             GUI.Box(trackRect, GUIContent.none);
-            GUI.color = ThrottleGlowColor(speedThrottle);
+            GUI.color = glowColor;
             GUI.Box(fillRect, GUIContent.none);
+            DrawFillGlow(fillRect, glowColor);
 
             if (fillH > 6f)
             {
-                GUI.color = Color.Lerp(ThrottleGlowColor(speedThrottle), Color.white, 0.45f);
-                GUI.Box(new Rect(fillRect.x, fillRect.y - 3f, fillRect.width, 6f), GUIContent.none);
+                GUI.color = Color.Lerp(glowColor, Color.white, 0.55f);
+                GUI.Box(new Rect(fillRect.x, fillRect.y - 4f, fillRect.width, 8f), GUIContent.none);
             }
 
-            GUI.color = Color.white;
-            float newThrottle = GUI.VerticalSlider(trackRect, speedThrottle, minThrottle, maxThrottle);
+            DrawLeverKnob(trackRect, fillT, glowColor, cockpitAnchored ? 1.75f : 1.55f);
+
+            float knobScale = cockpitAnchored ? 1.75f : 1.55f;
+            float newThrottle = VerticalLeverInput(
+                trackRect,
+                fillT,
+                speedThrottle,
+                minThrottle,
+                maxThrottle,
+                ThrottleLeverHint,
+                knobScale);
             if (!Mathf.Approximately(newThrottle, speedThrottle))
             {
-                speedThrottle = Mathf.Clamp(newThrottle, minThrottle, maxThrottle);
+                speedThrottle = newThrottle;
                 ApplyThrottleToProvider();
             }
 
@@ -1441,17 +1875,20 @@ namespace RoutesToGlory.Game
             GUI.skin.label.fontSize = prevLabel;
         }
 
-        private void DrawPitchLever(float panelX, float panelY, float panelW)
+        private void DrawPitchLever(
+            float panelX,
+            float panelY,
+            float panelW,
+            float? panelHeightOverride = null,
+            float uiScale = 1f)
         {
             float minPitch = cockpitPitchMinDegrees;
             float maxPitch = Mathf.Max(minPitch + 1f, cockpitPitchMaxDegrees);
-            const float desiredPanelH = 320f;
             const float margin = 24f;
 
-            float width = Mathf.Max(panelW, 140f);
-            float availableH = Screen.height - margin - panelY;
-            float panelH = Mathf.Min(desiredPanelH, availableH);
-            const float headerH = 64f;
+            float width = Mathf.Max(panelW, 140f * uiScale);
+            float panelH = panelHeightOverride ?? Mathf.Min(320f * uiScale, Screen.height - margin - panelY);
+            float headerH = 64f * uiScale;
             var panelRect = new Rect(panelX, panelY, width, panelH);
             _gameUiRects.Add(panelRect);
 
@@ -1461,35 +1898,45 @@ namespace RoutesToGlory.Game
             Color prevColor = GUI.color;
             var prevLabel = GUI.skin.label.fontSize;
 
-            GUI.color = new Color(0.06f, 0.09f, 0.18f, 0.94f);
+            GUI.color = new Color(0.06f, 0.09f, 0.18f, panelHeightOverride.HasValue ? 0.72f : 0.94f);
             GUI.Box(panelRect, GUIContent.none);
 
-            var labelStyle = BrightLabel(18, new Color(0.97f, 0.99f, 1f), FontStyle.Bold);
-            var valueStyle = BrightLabel(24, new Color(0.98f, 1f, 1f), FontStyle.Bold);
+            var labelStyle = BrightLabel(Mathf.RoundToInt(18f * uiScale), new Color(0.97f, 0.99f, 1f), FontStyle.Bold);
+            var valueStyle = BrightLabel(Mathf.RoundToInt(24f * uiScale), new Color(0.98f, 1f, 1f), FontStyle.Bold);
 
-            GUI.Label(new Rect(panelRect.x, panelRect.y + 8f, panelRect.width, 22f), "Pitch", labelStyle);
+            GUI.Label(new Rect(panelRect.x, panelRect.y + 8f * uiScale, panelRect.width, 22f * uiScale), "Pitch", labelStyle);
             GUI.Label(
-                new Rect(panelRect.x, panelRect.y + 30f, panelRect.width, 30f),
+                new Rect(panelRect.x, panelRect.y + 30f * uiScale, panelRect.width, 30f * uiScale),
                 $"{pitch:0.#}°",
                 valueStyle);
 
+            float trackW = 48f * uiScale;
             var trackRect = new Rect(
-                panelRect.x + 28f,
+                panelRect.x + 28f * uiScale,
                 panelRect.y + headerH,
-                48f,
-                panelRect.height - headerH - 16f);
+                trackW,
+                panelRect.height - headerH - 16f * uiScale);
 
             float fillT = Mathf.InverseLerp(minPitch, maxPitch, pitch);
             float fillH = trackRect.height * fillT;
             var fillRect = new Rect(trackRect.x + 4f, trackRect.yMax - fillH - 4f, trackRect.width - 8f, fillH);
+            Color pitchGlow = new Color(0.35f, 0.75f, 0.95f, 1f);
 
             GUI.color = new Color(0.12f, 0.18f, 0.28f, 1f);
             GUI.Box(trackRect, GUIContent.none);
-            GUI.color = new Color(0.35f, 0.75f, 0.95f, 1f);
+            GUI.color = pitchGlow;
             GUI.Box(fillRect, GUIContent.none);
+            DrawFillGlow(fillRect, pitchGlow);
+            DrawLeverKnob(trackRect, fillT, pitchGlow, 1.35f);
 
-            GUI.color = Color.white;
-            float newPitch = GUI.VerticalSlider(trackRect, pitch, maxPitch, minPitch);
+            float newPitch = VerticalLeverInput(
+                trackRect,
+                fillT,
+                pitch,
+                minPitch,
+                maxPitch,
+                PitchLeverHint,
+                1.35f);
             if (!Mathf.Approximately(newPitch, pitch))
             {
                 newPitch = Mathf.Clamp(newPitch, minPitch, maxPitch);

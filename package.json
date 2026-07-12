@@ -3,6 +3,8 @@
   "private": true,
   "scripts": {
     "dev": "pnpm --filter @empire/api dev",
+    "dev:field": "bash scripts/field-test-server.sh",
+    "dev:field:all": "bash scripts/field-test-server.sh all",
     "dev:web": "pnpm --filter @empire/web dev",
     "dev:all": "pnpm -r --parallel dev",
     "build": "pnpm -r build",
