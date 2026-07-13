@@ -97,7 +97,7 @@ Documented during POC; acceptable for field testing, **not** for massive route n
 | Item | Status | Production note |
 |---|---|---|
 | Route cleanup & snap | Done | Keep RDP + snap semantics; add spatial index + cache |
-| Alien terrain dressing | Pending | Prototype scatter approach; production uses asset pipeline + LOD budget |
+| Alien terrain dressing | Done (POC) | `RtgTerrainScatter` + proximity-triggered `RtgPathfinderBeam`; cleared tiles persist; forward terrain clearance for hills |
 | Ground-anchored resource markers | Pending | Establish scale + glow readability gates before art spend |
 | Glider afterburner / depth | Pending | Throttle-linked VFX carries to production |
 | Cockpit look-around & rear view | Pending | Tap-drag yaw/pitch in cockpit; side-window sightlines; rear-camera inset — reference `RtgCockpitView` |

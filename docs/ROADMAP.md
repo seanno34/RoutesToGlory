@@ -156,13 +156,13 @@ Prototype is "done" when we can make a confident go/no-go decision against **bot
 #### Phase 2 — World feel, routes & combat (in progress)
 
 - [x] **Route cleanup & snap-to-corridor** — Snap glider onto nearby owned routes while moving; Douglas-Peucker simplify on save; one-time server cleanup for existing routes (`POST /worlds/:id/routes/cleanup`)
-- [ ] **Alien terrain dressing** — Improve the look of alien-world tiles beyond flat overlay. Scatter procedural or authored terrain objects (alien trees, brush, rocks, etc.) so the Survey World reads as a place, not a shader on a globe.
+- [x] **Alien terrain dressing** — Procedural scatter (`RtgTerrainScatter`) dresses revealed fog tiles; **Pathfinder beam** (`RtgPathfinderBeam`) activates on proximity and vaporizes props; terrain clearance glides over hills
 - [ ] **Ground-anchored resource markers** — Replace hovering orbs (resources, goodie huts, Echo Sites where applicable) with ground-anchored custom tiles/sprites that show each resource type naturally, with a subtle alien glow so they remain easy to spot through fog.
 - [ ] **Glider combat vehicle presentation** — Move beyond the flat/1D glider read. Add depth (sprite layering, tilt, or simple mesh) and a glowing **afterburner** tied to throttle/speed.
 - [ ] **Cockpit look-around & rear view** — In cockpit mode, **tap-and-drag** to look around (yaw/pitch within limits) so the player can see out the **side windows**, not only the forward windshield. Include a small **rear backup camera** inset showing the terrain/route behind the ship (like a reversing camera).
 - [ ] **Hostile ordnance** — When the glider detects hostile objects within a configurable range, allow firing ordnance (client VFX + targeting in POC; server combat resolver can stay lightweight/async).
 
-**Status (2026-07-12):** Phase 1 complete. Phase 2 open — finish these in `apps/unity-poc` before writing the go TDD and starting `apps/game`.
+**Status (2026-07-12):** Phase 1 complete. Phase 2 in progress (2/6 done: route snap, terrain dressing) — finish remaining items in `apps/unity-poc` before writing the go TDD and starting `apps/game`.
 
 On **go** (both phases): finalize [POC_TO_PRODUCTION.md](POC_TO_PRODUCTION.md) and start `apps/game` on production-quality foundations.
 
@@ -279,4 +279,4 @@ apps/api/src/routes/game.ts              # HTTP routes
 | 2026-07-12 | POC Phase 1 exit criteria met (GPS, fog/claims, core loop, perf, Cesium cost, backend integration) |
 | 2026-07-12 | POC Phase 2 criteria added: route cleanup/snap, terrain dressing, resource tiles, glider VFX, cockpit look-around/rear view, hostile ordnance |
 | 2026-07-12 | POC Phase 2 route cleanup/snap: corridor snap, RDP simplify on save, server cleanup endpoint |
-| 2026-07-12 | Added POC_TO_PRODUCTION.md — living learnings doc for apps/game kickoff |
+| 2026-07-12 | POC Phase 2 alien terrain dressing: RtgTerrainScatter procedural props on revealed fog tiles |

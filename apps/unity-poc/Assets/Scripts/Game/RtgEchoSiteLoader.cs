@@ -217,6 +217,14 @@ namespace RoutesToGlory.Game
             RtgMapMarkerRegistry.Refresh();
             RtgMapConnections.Apply(map, empireId);
             SetupFogOfWar(container, map?.routes);
+            SetupTerrainScatter();
+        }
+
+        private void SetupTerrainScatter()
+        {
+            if (!Application.isPlaying) return;
+            RtgTerrainScatter scatter = RtgTerrainScatter.Ensure(this);
+            scatter?.OnMapSpawned();
         }
 
         private void SetupFogOfWar(Transform markersContainer, RtgRoute[] routes = null)

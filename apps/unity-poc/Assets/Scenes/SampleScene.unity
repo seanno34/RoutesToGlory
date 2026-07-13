@@ -247,6 +247,7 @@ GameObject:
   m_Component:
   - component: {fileID: 271572208}
   - component: {fileID: 271572209}
+  - component: {fileID: 271572210}
   m_Layer: 0
   m_Name: RTG Player
   m_TagString: Untagged
@@ -310,6 +311,8 @@ MonoBehaviour:
   roadPointSpacing: 12
   roadColor: {r: 0.45, g: 0.95, b: 1, a: 1}
   recordRouteSessions: 1
+  autopilotRealDriveParity: 1
+  autopilotDestinationCity: Casper, WY
   followWithCamera: 1
   followHeightMeters: 300
   followDistanceMeters: 120
@@ -324,12 +327,56 @@ MonoBehaviour:
   maxZoom: 12
   invertZoom: 0
   zoomSmoothing: 10
+  gpsSmoothing: 10
+  gpsUpdateDistanceMeters: 1
+  gpsMaxSnapMeters: 120
   cockpitEyeHeightMeters: 3.5
   cockpitLandscapePitchDegrees: 2
   cockpitPortraitPitchDegrees: 16
+  cockpitPitchMinDegrees: 0
+  cockpitPitchMaxDegrees: 40
   cockpitZoomSmoothing: 28
+  cockpitLookYawMaxDegrees: 85
+  cockpitLookPitchMinDegrees: -12
+  cockpitLookPitchMaxDegrees: 28
+  cockpitLookYawSensitivity: 0.16
+  cockpitLookPitchSensitivity: 0.12
+  cockpitLookSmoothing: 16
+  pathfinderDetectionRangeM: 115
+  pathfinderMapBeamWidthM: 22
+  pathfinderUseCockpitBeam: 1
+  pathfinderCockpitBeamWidthM: 5
+  pathfinderCockpitBeamLengthM: 50
+  pathfinderCockpitGlowMultiplier: 1.6
   mobilePanScale: 0.75
   panSpeed: 4
+--- !u!114 &271572210
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 271572207}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e1d84c0ec9b4745229c9046d564a2dbb, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::RoutesToGlory.Game.RtgPathfinderBeam
+  detectionRangeM: 115
+  vaporizeRangeM: 80
+  corridorHalfWidthNearM: 9
+  corridorHalfWidthFarM: 24
+  scanHz: 8
+  beamOriginHeightM: 2.5
+  beamFadeSpeed: 14
+  beamColor: {r: 0.35, g: 0.95, b: 1, a: 1}
+  beamWidthStartM: 22
+  beamWidthEndRatio: 0.55
+  beamGlowWidthMultiplier: 2.6
+  useCockpitBeam: 1
+  cockpitBeamWidthStartM: 5
+  cockpitBeamLengthM: 50
+  cockpitBeamGlowMultiplier: 1.6
 --- !u!1 &377447296
 GameObject:
   m_ObjectHideFlags: 0
@@ -422,6 +469,13 @@ MonoBehaviour:
   markerOffsetMeters: 15
   resampleMoveMeters: 8
   heightSmoothing: 10
+  forwardClearanceMarginM: 6
+  forwardSampleHz: 3
+  forwardSampleDistancesM:
+  - 30
+  - 80
+  - 150
+  - 300
 --- !u!1 &410087039
 GameObject:
   m_ObjectHideFlags: 0

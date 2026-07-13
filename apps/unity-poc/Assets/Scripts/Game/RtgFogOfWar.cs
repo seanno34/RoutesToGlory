@@ -307,6 +307,12 @@ namespace RoutesToGlory.Game
             {
                 foreach (string tileId in newlyRevealedTileIds)
                     RevealEntireTile(tileId);
+
+                if (newlyRevealedTileIds.Length > 0)
+                {
+                    RtgTerrainScatter scatter = RtgTerrainScatter.Find();
+                    scatter?.NotifyExplorationChanged();
+                }
             }
 
             if (!_ready) return;
@@ -316,6 +322,19 @@ namespace RoutesToGlory.Game
                 foreach (string nodeId in newResourceNodeIds)
                     ShimmerResourceById(nodeId);
             }
+        }
+
+        /// <summary>
+        /// True when terrain scatter may dress this fog tile (permanently revealed or near the pin).
+        /// </summary>
+        public bool IsTileDressable(string tileId)
+        {
+            if (string.IsNullOrEmpty(tileId)) return false;
+            if (_permanentReveal.ContainsKey(tileId)) return true;
+            if (!_hasFocus) return false;
+
+            RtgFogTileMath.TileIdToCenter(tileId, tileSizeM, out double cLat, out double cLng);
+            return DistanceMeters(cLat, cLng, _focusLat, _focusLng) <= liveRevealRadiusM * 2.5f;
         }
 
         private void RevealEntireTile(string tileId)

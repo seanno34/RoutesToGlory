@@ -31,8 +31,22 @@ namespace RoutesToGlory.Game
         [Tooltip("How quickly sampled height catches up (higher = snappier).")]
         public float heightSmoothing = 10f;
 
+        [Header("Forward clearance (hills / mountains)")]
+        [Tooltip("Extra meters above the forward terrain peak.")]
+        public float forwardClearanceMarginM = 6f;
+
+        [Tooltip("How often to batch-sample terrain ahead (Hz).")]
+        public float forwardSampleHz = 3f;
+
+        [Tooltip("Meters ahead to sample along travel heading.")]
+        public float[] forwardSampleDistancesM = { 30f, 80f, 150f, 300f };
+
         private double _displayTerrainH;
         private double _targetTerrainH;
+        private double _forwardMaxTerrainH;
+        private bool _hasForwardSample;
+        private float _lastForwardSampleTime;
+        private bool _forwardSampling;
         private bool _hasSample;
         private double _lastSampleLat;
         private double _lastSampleLng;
@@ -85,6 +99,20 @@ namespace RoutesToGlory.Game
         public double GetPlacementHeight(double lat, double lng) =>
             GetGroundHeight(lat, lng) + markerOffsetMeters;
 
+        /// <summary>
+        /// Placement height using the max of local ground and forward terrain samples
+        /// (glide over hills — geological substrate is not vaporized).
+        /// </summary>
+        public double GetClearancePlacementHeight(double lat, double lng, float headingRad)
+        {
+            QueueForwardSamplesIfNeeded(lat, lng, headingRad);
+            double localGround = GetGroundHeight(lat, lng);
+            double peak = _hasForwardSample
+                ? Math.Max(localGround, _forwardMaxTerrainH)
+                : localGround;
+            return peak + markerOffsetMeters + forwardClearanceMarginM;
+        }
+
         /// <summary>Sampled terrain height (m above ellipsoid), without marker offset.</summary>
         public double GetGroundHeight(double lat, double lng)
         {
@@ -108,6 +136,56 @@ namespace RoutesToGlory.Game
                 if (!_sampling)
                     StartCoroutine(SampleLoop());
             }
+        }
+
+        public void QueueForwardSamplesIfNeeded(double lat, double lng, float headingRad)
+        {
+            if (terrainTileset == null || forwardSampleDistancesM == null || forwardSampleDistancesM.Length == 0)
+                return;
+
+            float interval = forwardSampleHz > 0.01f ? 1f / forwardSampleHz : 0.35f;
+            if (Time.time - _lastForwardSampleTime < interval)
+                return;
+
+            _lastForwardSampleTime = Time.time;
+            if (!_forwardSampling)
+                StartCoroutine(ForwardSampleRoutine(lat, lng, headingRad));
+        }
+
+        private IEnumerator ForwardSampleRoutine(double lat, double lng, float headingRad)
+        {
+            _forwardSampling = true;
+
+            float[] distances = forwardSampleDistancesM;
+            var positions = new double3[distances.Length];
+            for (int i = 0; i < distances.Length; i++)
+            {
+                RtgForwardCorridor.OffsetMeters(
+                    lat, lng, headingRad, distances[i], 0f,
+                    out double sLat, out double sLng);
+                positions[i] = new double3(sLng, sLat, 0.0);
+            }
+
+            Task<CesiumSampleHeightResult> task =
+                terrainTileset.SampleHeightMostDetailed(positions);
+
+            while (!task.IsCompleted)
+                yield return null;
+
+            if (!task.IsFaulted && !task.IsCanceled && task.Result.longitudeLatitudeHeightPositions != null)
+            {
+                double maxH = _hasSample ? _displayTerrainH : fallbackHeightMeters;
+                foreach (double3 pos in task.Result.longitudeLatitudeHeightPositions)
+                {
+                    if (!double.IsNaN(pos.z) && !double.IsInfinity(pos.z))
+                        maxH = Math.Max(maxH, pos.z);
+                }
+
+                _forwardMaxTerrainH = maxH;
+                _hasForwardSample = true;
+            }
+
+            _forwardSampling = false;
         }
 
         private void Update()

@@ -231,6 +231,25 @@ namespace RoutesToGlory.Game
         [Tooltip("How quickly drag-look catches up (higher = snappier).")]
         public float cockpitLookSmoothing = 16f;
 
+        [Header("Pathfinder beam")]
+        [Tooltip("Beam arms when scatter props enter this distance (m).")]
+        public float pathfinderDetectionRangeM = 115f;
+
+        [Tooltip("Map/route view beam width at the glider (m).")]
+        public float pathfinderMapBeamWidthM = 22f;
+
+        [Tooltip("Use a narrow camera-aligned beam in cockpit view.")]
+        public bool pathfinderUseCockpitBeam = true;
+
+        [Tooltip("Cockpit beam width (m).")]
+        public float pathfinderCockpitBeamWidthM = 5f;
+
+        [Tooltip("Cockpit beam reach (m).")]
+        public float pathfinderCockpitBeamLengthM = 50f;
+
+        [Tooltip("Cockpit beam glow multiplier.")]
+        public float pathfinderCockpitGlowMultiplier = 1.6f;
+
         private RtgCockpitView _cockpitView;
         private RtgCockpitRearCamera _cockpitRearCamera;
         private bool _cockpitEntryPending;
@@ -287,6 +306,7 @@ namespace RoutesToGlory.Game
         private RtgRouteSession _routeSession;
         private RtgCesiumCreditsToggle _creditsToggle;
         private RtgTerrainHeight _terrainHeight;
+        private RtgPathfinderBeam _pathfinderBeam;
         private RtgPlayerShipVisual _shipVisual;
 
         private Camera _camera;
@@ -314,6 +334,15 @@ namespace RoutesToGlory.Game
             _activeSource = LocationSource.Manual;
         }
 
+        private void OnValidate()
+        {
+            if (maxSpeedThrottle < minSpeedThrottle + 0.01f)
+                maxSpeedThrottle = minSpeedThrottle + 0.01f;
+            speedThrottle = Mathf.Clamp(speedThrottle, minSpeedThrottle, maxSpeedThrottle);
+            ClampSpeedThrottle();
+            SyncPathfinderBeamSettings();
+        }
+
         private void Start()
         {
             ClampSpeedThrottle();
@@ -327,6 +356,7 @@ namespace RoutesToGlory.Game
             EnsureCesiumCreditsToggle();
             EnsureCockpitView();
             EnsureCockpitRearCamera();
+            EnsurePathfinderBeam();
             CacheCamera();
 
             _destinationDraft = autopilotDestinationCity;
@@ -373,9 +403,18 @@ namespace RoutesToGlory.Game
 
                 ApplySmoothedDisplayPosition(targetLat, targetLng, out double displayLat, out double displayLng);
 
-                double heightM = _terrainHeight != null
-                    ? _terrainHeight.GetPlacementHeight(displayLat, displayLng)
-                    : groundHeightMeters + markerHeight;
+                double heightM;
+                if (_terrainHeight != null)
+                {
+                    _terrainHeight.QueueForwardSamplesIfNeeded(
+                        displayLat, displayLng, _travelHeadingRad);
+                    heightM = _terrainHeight.GetClearancePlacementHeight(
+                        displayLat, displayLng, _travelHeadingRad);
+                }
+                else
+                {
+                    heightM = groundHeightMeters + markerHeight;
+                }
 
                 _markerAnchor.SetPositionLongitudeLatitudeHeight(displayLng, displayLat, heightM);
 
@@ -432,6 +471,57 @@ namespace RoutesToGlory.Game
             }
 
             UpdateCameraFollow();
+
+            if (_marker != null)
+                TickPathfinderBeam();
+        }
+
+        private void TickPathfinderBeam()
+        {
+            if (_pathfinderBeam == null || _marker == null) return;
+            if (!TryGetPlayerLatLng(out double lat, out double lng)) return;
+
+            Transform beamAnchor = _shipVisual != null && _shipVisual.IsReady
+                ? _shipVisual.transform
+                : _marker;
+
+            bool cockpit = _cockpitView != null && _cockpitView.IsActive;
+            _pathfinderBeam.Tick(
+                lat,
+                lng,
+                _travelHeadingRad,
+                beamAnchor,
+                _terrainHeight,
+                cockpit,
+                _camera);
+        }
+
+        private void EnsurePathfinderBeam()
+        {
+            _pathfinderBeam = GetComponent<RtgPathfinderBeam>();
+            if (_pathfinderBeam == null)
+                _pathfinderBeam = RtgPathfinderBeam.Ensure(this);
+            SyncPathfinderBeamSettings();
+        }
+
+        /// <summary>Editor/menu: ensure beam component exists and push proxy settings.</summary>
+        public void EditorApplyPathfinderBeamSettings()
+        {
+            EnsurePathfinderBeam();
+        }
+
+        private void SyncPathfinderBeamSettings()
+        {
+            if (_pathfinderBeam == null)
+                _pathfinderBeam = GetComponent<RtgPathfinderBeam>();
+            if (_pathfinderBeam == null) return;
+
+            _pathfinderBeam.detectionRangeM = pathfinderDetectionRangeM;
+            _pathfinderBeam.beamWidthStartM = pathfinderMapBeamWidthM;
+            _pathfinderBeam.useCockpitBeam = pathfinderUseCockpitBeam;
+            _pathfinderBeam.cockpitBeamWidthStartM = pathfinderCockpitBeamWidthM;
+            _pathfinderBeam.cockpitBeamLengthM = pathfinderCockpitBeamLengthM;
+            _pathfinderBeam.cockpitBeamGlowMultiplier = pathfinderCockpitGlowMultiplier;
         }
 
         // ------------------------------------------------------------------ //
@@ -526,13 +616,6 @@ namespace RoutesToGlory.Game
                 RouteMode.TourNearbySites => MpsToMph(tourSpeed),
                 _ => MpsToMph(simulatedSpeed),
             };
-        }
-
-        private void OnValidate()
-        {
-            if (maxSpeedThrottle < minSpeedThrottle + 0.01f)
-                maxSpeedThrottle = minSpeedThrottle + 0.01f;
-            speedThrottle = Mathf.Clamp(speedThrottle, minSpeedThrottle, maxSpeedThrottle);
         }
 
         private void ClampSpeedThrottle()

@@ -39,6 +39,7 @@ namespace RoutesToGlory.EditorTools
         private const string TerrainName = "RTG Terrain";
         private const string CameraName = "RTG Fly Camera";
         private const string EchoSitesName = "RTG Echo Sites";
+        private const string TerrainScatterName = "RTG Terrain Scatter";
         private const string PlayerName = "RTG Player";
         private const string AlienMaterialPath = "Assets/Materials/RTG_AlienTerrain.mat";
         private const string AlienSkyboxPath = "Assets/Materials/RTG_AlienSky.mat";
@@ -256,6 +257,49 @@ namespace RoutesToGlory.EditorTools
                 "from the API and renders shader fog over hidden areas. Run '6b' first for live data. Save with Cmd+S.");
         }
 
+        [MenuItem("Routes to Glory/7b. Setup Terrain Scatter", priority = 28)]
+        public static void SetupTerrainScatter()
+        {
+            CesiumGeoreference georeference = RequireGeoreference();
+            if (georeference == null) return;
+
+            RtgEchoSiteLoader loader = FindByName<RtgEchoSiteLoader>(EchoSitesName);
+            RtgTerrainScatter scatter = RtgTerrainScatter.Ensure(loader);
+            if (scatter == null)
+            {
+                Debug.LogError("[RTG] Could not create terrain scatter — georeference missing?");
+                return;
+            }
+
+            Selection.activeGameObject = scatter.gameObject;
+            MarkDirty(georeference);
+            Debug.Log(
+                "[RTG] Terrain scatter added. In Play mode it dresses revealed tiles around " +
+                "the player with procedural alien trees, rocks, and brush. Save with Cmd+S.");
+        }
+
+        [MenuItem("Routes to Glory/7c. Setup Pathfinder Beam", priority = 28)]
+        public static void SetupPathfinderBeam()
+        {
+            CesiumGeoreference georeference = RequireGeoreference();
+            if (georeference == null) return;
+
+            RtgPlayerLocation player = GetOrCreatePlayer(georeference);
+            RtgPathfinderBeam beam = RtgPathfinderBeam.Ensure(player);
+            if (beam == null)
+            {
+                Debug.LogError("[RTG] Could not create Pathfinder beam — player missing?");
+                return;
+            }
+
+            player.EditorApplyPathfinderBeamSettings();
+            Selection.activeGameObject = player.gameObject;
+            MarkDirty(georeference);
+            Debug.Log(
+                "[RTG] Pathfinder beam added to the player. The corridor lance activates " +
+                "when scatter props enter detection range (~115 m). Save with Cmd+S.");
+        }
+
         [MenuItem("Routes to Glory/8. Setup Player (GPS)", priority = 29)]
         public static void SetupPlayer()
         {
@@ -263,6 +307,7 @@ namespace RoutesToGlory.EditorTools
             if (georeference == null) return;
 
             RtgPlayerLocation player = GetOrCreatePlayer(georeference);
+            player.EditorApplyPathfinderBeamSettings();
             player.EditorPlaceAtStart();
             Selection.activeGameObject = player.gameObject;
             MarkDirty(georeference);

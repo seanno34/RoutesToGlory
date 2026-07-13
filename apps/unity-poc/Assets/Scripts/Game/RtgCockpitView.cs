@@ -90,6 +90,16 @@ namespace RoutesToGlory.Game
         }
 
         /// <summary>
+        /// Backup-camera screen on the cockpit dashboard (measured from glider_cockpit_* PNGs).
+        /// </summary>
+        public static CockpitTextureAnchor RearCameraAnchor(bool portrait)
+        {
+            return portrait
+                ? new CockpitTextureAnchor(0.5f, 0.78f, 0.34f, 0.14f)
+                : new CockpitTextureAnchor(0.5f, 0.88f, 0.24f, 0.13f);
+        }
+
+        /// <summary>
         /// Maps a normalized cockpit-art anchor to screen pixels using the same
         /// ScaleAndCrop math as <see cref="DrawOverlay"/>.
         /// </summary>
