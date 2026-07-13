@@ -23,6 +23,8 @@ export type BeginRouteSession = z.infer<typeof BeginRouteSessionSchema>;
 
 export const AppendRoutePointsSchema = z.object({
   points: z.array(GpsPointInputSchema).min(1).max(20),
+  /** When true, server records points/fog but does not auto-connect settlements (autopilot testing). */
+  skipGeofenceConnect: z.boolean().optional(),
 });
 
 export type AppendRoutePoints = z.infer<typeof AppendRoutePointsSchema>;

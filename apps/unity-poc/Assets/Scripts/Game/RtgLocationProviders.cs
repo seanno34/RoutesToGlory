@@ -44,6 +44,7 @@ namespace RoutesToGlory.Game
         private const double MetersPerDegreeLat = 111320.0;
 
         private readonly RtgWaypoint[] _route;
+        private readonly bool _loopRoute;
         private float _speedMetersPerSecond;
 
         private int _segment;
@@ -51,9 +52,10 @@ namespace RoutesToGlory.Game
         private bool _hasFix;
         private double _lat, _lng;
 
-        public RtgSimulatedLocationProvider(RtgWaypoint[] route, float speedMetersPerSecond)
+        public RtgSimulatedLocationProvider(RtgWaypoint[] route, float speedMetersPerSecond, bool loopRoute = true)
         {
             _route = route;
+            _loopRoute = loopRoute;
             _speedMetersPerSecond = Mathf.Max(0f, speedMetersPerSecond);
         }
 
@@ -69,15 +71,57 @@ namespace RoutesToGlory.Game
 
         public void Restart()
         {
+            if (_route != null && _route.Length > 0)
+                BeginAt(_route[0].lat, _route[0].lng);
+            else
+            {
+                _segment = 0;
+                _distanceIntoSegment = 0.0;
+                _hasFix = false;
+            }
+        }
+
+        /// <summary>
+        /// Start (or resume) walking the route from the nearest point to the given fix.
+        /// Keeps the pin at its current location instead of jumping to route[0].
+        /// </summary>
+        public void BeginAt(double lat, double lng)
+        {
             _segment = 0;
             _distanceIntoSegment = 0.0;
-            if (_route != null && _route.Length > 0)
+
+            if (_route == null || _route.Length == 0)
+            {
+                _hasFix = false;
+                return;
+            }
+
+            if (_route.Length == 1)
             {
                 _lat = _route[0].lat;
                 _lng = _route[0].lng;
                 _hasFix = true;
+                return;
             }
+
+            if (!TryProjectOntoRoute(lat, lng, out int seg, out double intoSeg, out double projLat, out double projLng))
+            {
+                _lat = _route[0].lat;
+                _lng = _route[0].lng;
+                _segment = 0;
+                _distanceIntoSegment = 0.0;
+                _hasFix = true;
+                return;
+            }
+
+            _segment = seg;
+            _distanceIntoSegment = intoSeg;
+            _lat = projLat;
+            _lng = projLng;
+            _hasFix = true;
         }
+
+        public void RestartAt(double lat, double lng) => BeginAt(lat, lng);
 
         public void Tick(float deltaTime)
         {
@@ -85,18 +129,35 @@ namespace RoutesToGlory.Game
 
             _distanceIntoSegment += _speedMetersPerSecond * deltaTime;
 
+            int segmentCount = _loopRoute ? _route.Length : _route.Length - 1;
+            if (segmentCount <= 0) return;
+
             // Walk forward across as many segments as this frame's distance covers.
-            for (int guard = 0; guard < _route.Length + 1; guard++)
+            for (int guard = 0; guard < segmentCount + 1; guard++)
             {
                 RtgWaypoint a = _route[_segment];
-                RtgWaypoint b = _route[(_segment + 1) % _route.Length];
+                int nextIndex = _loopRoute ? (_segment + 1) % _route.Length : _segment + 1;
+                if (nextIndex >= _route.Length)
+                {
+                    _lat = a.lat;
+                    _lng = a.lng;
+                    _hasFix = true;
+                    return;
+                }
+
+                RtgWaypoint b = _route[nextIndex];
                 double segLength = SegmentLengthMeters(a, b);
 
                 // Skip duplicate consecutive waypoints (e.g. loop start/end both "home").
                 if (segLength < 0.5)
                 {
                     _distanceIntoSegment = 0.0;
-                    _segment = (_segment + 1) % _route.Length;
+                    if (_loopRoute)
+                        _segment = (_segment + 1) % _route.Length;
+                    else if (_segment + 1 < _route.Length - 1)
+                        _segment++;
+                    else
+                        return;
                     continue;
                 }
 
@@ -110,7 +171,17 @@ namespace RoutesToGlory.Game
                 }
 
                 _distanceIntoSegment -= segLength;
-                _segment = (_segment + 1) % _route.Length;
+                if (_loopRoute)
+                    _segment = (_segment + 1) % _route.Length;
+                else if (_segment + 1 < _route.Length - 1)
+                    _segment++;
+                else
+                {
+                    _lat = b.lat;
+                    _lng = b.lng;
+                    _hasFix = true;
+                    return;
+                }
             }
         }
 
@@ -129,6 +200,85 @@ namespace RoutesToGlory.Game
             double metersPerDegLng = MetersPerDegreeLat * Math.Cos(avgLatRad);
             double dLat = (b.lat - a.lat) * MetersPerDegreeLat;
             double dLng = (b.lng - a.lng) * metersPerDegLng;
+            return Math.Sqrt(dLat * dLat + dLng * dLng);
+        }
+
+        private bool TryProjectOntoRoute(
+            double lat,
+            double lng,
+            out int segment,
+            out double distanceIntoSegment,
+            out double projLat,
+            out double projLng)
+        {
+            segment = 0;
+            distanceIntoSegment = 0.0;
+            projLat = lat;
+            projLng = lng;
+
+            if (_route == null || _route.Length < 2)
+                return false;
+
+            int segmentCount = _loopRoute ? _route.Length : _route.Length - 1;
+            double bestDist = double.MaxValue;
+            int bestSeg = 0;
+            double bestInto = 0.0;
+            double bestLat = lat;
+            double bestLng = lng;
+
+            for (int i = 0; i < segmentCount; i++)
+            {
+                RtgWaypoint a = _route[i];
+                int j = _loopRoute ? (i + 1) % _route.Length : i + 1;
+                RtgWaypoint b = _route[j];
+                double segLen = SegmentLengthMeters(a, b);
+                if (segLen < 0.5) continue;
+
+                double t = ProjectParameter(lat, lng, a, b);
+                double pLat = a.lat + (b.lat - a.lat) * t;
+                double pLng = a.lng + (b.lng - a.lng) * t;
+                double dist = DistanceMeters(lat, lng, pLat, pLng);
+                if (dist < bestDist)
+                {
+                    bestDist = dist;
+                    bestSeg = i;
+                    bestInto = t * segLen;
+                    bestLat = pLat;
+                    bestLng = pLng;
+                }
+            }
+
+            segment = bestSeg;
+            distanceIntoSegment = bestInto;
+            projLat = bestLat;
+            projLng = bestLng;
+            return true;
+        }
+
+        private static double ProjectParameter(double lat, double lng, RtgWaypoint a, RtgWaypoint b)
+        {
+            double avgLatRad = (a.lat + b.lat) * 0.5 * Mathf.Deg2Rad;
+            double metersPerDegLng = MetersPerDegreeLat * Math.Cos(avgLatRad);
+            double ax = a.lng * metersPerDegLng;
+            double ay = a.lat * MetersPerDegreeLat;
+            double bx = b.lng * metersPerDegLng;
+            double by = b.lat * MetersPerDegreeLat;
+            double px = lng * metersPerDegLng;
+            double py = lat * MetersPerDegreeLat;
+            double dx = bx - ax;
+            double dy = by - ay;
+            double lenSq = dx * dx + dy * dy;
+            if (lenSq < 1e-8) return 0.0;
+            double t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
+            return Math.Max(0.0, Math.Min(1.0, t));
+        }
+
+        private static double DistanceMeters(double lat1, double lng1, double lat2, double lng2)
+        {
+            double avgLatRad = (lat1 + lat2) * 0.5 * Mathf.Deg2Rad;
+            double metersPerDegLng = MetersPerDegreeLat * Math.Cos(avgLatRad);
+            double dLat = (lat2 - lat1) * MetersPerDegreeLat;
+            double dLng = (lng2 - lng1) * metersPerDegLng;
             return Math.Sqrt(dLat * dLat + dLng * dLng);
         }
     }

@@ -34,6 +34,17 @@ namespace RoutesToGlory.Game
             return _probe.transform.position;
         }
 
+        /// <summary>
+        /// Ellipsoid height for georeferenced lines — avoids using the player's
+        /// single cached terrain sample for every vertex on distant routes.
+        /// </summary>
+        public Vector3 WorldFromLatLngEllipsoid(double lng, double lat, float heightAboveEllipsoidM)
+        {
+            EnsureProbe();
+            _anchor.SetPositionLongitudeLatitudeHeight(lng, lat, _fallbackHeightMeters + heightAboveEllipsoidM);
+            return _probe.transform.position;
+        }
+
         public void FillWorldPositions(
             RtgPathPoint[] path,
             float heightAboveTerrainM,

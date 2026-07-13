@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { GoodieHutChoiceSchema } from '@empire/shared';
 import { isDatabaseEnabled } from '../db/client.js';
 import { claimNearRoute } from '../services/route-claim.js';
+import { cleanupEmpireRoutes } from '../services/route-session.js';
 
 const ClaimNearRouteSchema = z
   .object({
@@ -47,5 +48,27 @@ export const claimRoutes: FastifyPluginAsync = async (app) => {
       targetId: body.targetId,
       goodieChoice: body.goodieChoice,
     });
+  });
+
+  app.post('/worlds/:worldId/routes/cleanup', async (request, reply) => {
+    if (!isDatabaseEnabled()) {
+      return reply.status(503).send({ error: 'Database required' });
+    }
+
+    const { worldId } = request.params as { worldId: string };
+    const body = z
+      .object({
+        empireId: z.string().uuid(),
+        toleranceM: z.number().min(2).max(80).optional(),
+      })
+      .parse(request.body);
+
+    const result = await cleanupEmpireRoutes(
+      worldId,
+      body.empireId,
+      body.toleranceM ?? 12,
+    );
+
+    return { ok: true, ...result };
   });
 };

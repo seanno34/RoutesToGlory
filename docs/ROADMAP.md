@@ -3,7 +3,7 @@
 Source of truth for **what v1 includes**, **what’s left to build**, and **ideas parked for later**.  
 Use this file when starting a **new Cursor agent/thread** so you don’t need to re-read the full design chat.
 
-**Also read:** [README.md](../README.md) · Config: `packages/shared/src/config/defaults.ts` · Schema: `packages/shared/src/config/schema.ts`
+**Also read:** [README.md](../README.md) · [POC_TO_PRODUCTION.md](POC_TO_PRODUCTION.md) · Config: `packages/shared/src/config/defaults.ts` · Schema: `packages/shared/src/config/schema.ts`
 
 ---
 
@@ -142,16 +142,29 @@ The Unity build is a **throwaway proof of concept**, not the production codebase
 
 ### POC exit criteria (go / no-go)
 
-Prototype is "done" when we can make a confident go/no-go decision against:
+Prototype is "done" when we can make a confident go/no-go decision against **both** phases below.
 
-- [ ] GPS accuracy/stability acceptable on a real mid-range device
-- [ ] Alien-overlay map + shader-based fog + Echo Site claims render correctly and read well
-- [ ] Core loop (real-world movement → Light Road → Echo Site growth) feels good
-- [ ] Performance acceptable on a mid-range phone (FPS, memory, thermal)
-- [ ] Cesium 3D-tile cost tolerable at expected usage
-- [ ] Backend integration proven with **zero server changes**
+#### Phase 1 — Core technical validation (done)
 
-On **go**: write a short technical design doc capturing prototype learnings (what to keep, what to rebuild), then start `apps/game` on production-quality foundations.
+- [x] GPS accuracy/stability acceptable on a real mid-range device — smoothing + live in-game tuners; validated in field driving
+- [x] Alien-overlay map + shader-based fog + Echo Site claims render correctly and read well — fog shader + claims proven; high-speed polish deferred to production
+- [x] Core loop (real-world movement → Light Road → Echo Site growth) feels good — movement → Light Road → tap-to-connect validated on device
+- [x] Performance acceptable on a mid-range phone (FPS, memory, thermal)
+- [x] Cesium 3D-tile cost tolerable at expected usage
+- [x] Backend integration proven with **zero server changes**
+
+#### Phase 2 — World feel, routes & combat (in progress)
+
+- [x] **Route cleanup & snap-to-corridor** — Snap glider onto nearby owned routes while moving; Douglas-Peucker simplify on save; one-time server cleanup for existing routes (`POST /worlds/:id/routes/cleanup`)
+- [ ] **Alien terrain dressing** — Improve the look of alien-world tiles beyond flat overlay. Scatter procedural or authored terrain objects (alien trees, brush, rocks, etc.) so the Survey World reads as a place, not a shader on a globe.
+- [ ] **Ground-anchored resource markers** — Replace hovering orbs (resources, goodie huts, Echo Sites where applicable) with ground-anchored custom tiles/sprites that show each resource type naturally, with a subtle alien glow so they remain easy to spot through fog.
+- [ ] **Glider combat vehicle presentation** — Move beyond the flat/1D glider read. Add depth (sprite layering, tilt, or simple mesh) and a glowing **afterburner** tied to throttle/speed.
+- [ ] **Cockpit look-around & rear view** — In cockpit mode, **tap-and-drag** to look around (yaw/pitch within limits) so the player can see out the **side windows**, not only the forward windshield. Include a small **rear backup camera** inset showing the terrain/route behind the ship (like a reversing camera).
+- [ ] **Hostile ordnance** — When the glider detects hostile objects within a configurable range, allow firing ordnance (client VFX + targeting in POC; server combat resolver can stay lightweight/async).
+
+**Status (2026-07-12):** Phase 1 complete. Phase 2 open — finish these in `apps/unity-poc` before writing the go TDD and starting `apps/game`.
+
+On **go** (both phases): finalize [POC_TO_PRODUCTION.md](POC_TO_PRODUCTION.md) and start `apps/game` on production-quality foundations.
 
 ### Art & assets staging
 
@@ -159,7 +172,7 @@ The Unity POC uses **graybox placeholders** (spheres, cubes, capsules, lines) on
 
 | Phase | Art work | Where |
 |---|---|---|
-| **Prototype (now)** | Keep graybox placeholders. At most a cheap, throwaway **art-style test** (one hero mockup / kitbash) to de-risk "renders + reads well." | `apps/unity-poc` |
+| **Prototype (now)** | Graybox placeholders + **Phase 2 art tests**: terrain scatter props, ground-anchored resource tiles with alien glow, glider afterburner VFX, ordnance VFX. Prove each reads on-device before `apps/game`. | `apps/unity-poc` |
 | **Vertical slice** (post go/no-go) | First **production-quality** assets for a small representative set: 1 player ship, 1–2 Echo Site tiers, 2–3 resources, 1 goodie hut, Light Road as real VFX/Shader Graph. Lock the **asset pipeline** (import settings, LODs, atlases, Addressables, naming). Prove perf on-device. | `apps/game` |
 | **Production** | Full library: all settlement tiers, all 10 resources, alignment variants, animations, VFX, environment/skybox polish, UI. | `apps/game` |
 
@@ -263,3 +276,7 @@ apps/api/src/routes/game.ts              # HTTP routes
 | 2026-07-07 | Added POC → Production strategy: Unity POC is throwaway; keep single repo; production as `apps/game`; backend continuous; go/no-go exit criteria |
 | 2026-07-09 | Added Art & assets staging (placeholders → vertical-slice → production; art gates; build-vs-buy) |
 | 2026-07-09 | Route capture is now **always-on** (no manual Begin/End); adopted from v2. Route reinforcement/extension parked in v2. |
+| 2026-07-12 | POC Phase 1 exit criteria met (GPS, fog/claims, core loop, perf, Cesium cost, backend integration) |
+| 2026-07-12 | POC Phase 2 criteria added: route cleanup/snap, terrain dressing, resource tiles, glider VFX, cockpit look-around/rear view, hostile ordnance |
+| 2026-07-12 | POC Phase 2 route cleanup/snap: corridor snap, RDP simplify on save, server cleanup endpoint |
+| 2026-07-12 | Added POC_TO_PRODUCTION.md — living learnings doc for apps/game kickoff |

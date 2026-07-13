@@ -132,6 +132,13 @@ namespace RoutesToGlory.Game
         [Tooltip("Stream movement to the route-session API so a Light Road persists as a real route (needs live world via '6b').")]
         public bool recordRouteSessions = true;
 
+        [Header("Auto Pilot (home testing)")]
+        [Tooltip("When on, Auto Pilot uses the same route snap, geofence auto-connect, and checkpoint saves as Manual — full feature parity for home dev testing.")]
+        public bool autopilotRealDriveParity = true;
+
+        [Tooltip("Drive-to-city destination (HomeToCasper route mode). City + state works, e.g. Casper, WY. Full street address is optional and more precise.")]
+        public string autopilotDestinationCity = "Casper, WY";
+
         [Header("Camera follow")]
         [Tooltip("If enabled, the camera stays overhead and auto-tracks the player (Google-Maps style). Untick for free-fly.")]
         public bool followWithCamera = true;
@@ -177,14 +184,14 @@ namespace RoutesToGlory.Game
         [Tooltip("How quickly pinch/button zoom catches up (higher = snappier).")]
         public float zoomSmoothing = 10f;
 
-        [Header("GPS smoothing (Manual mode)")]
-        [Tooltip("How quickly the glider catches up to GPS fixes. Higher = snappier; lower = smoother.")]
+        [Header("Position smoothing (map pin)")]
+        [Tooltip("How quickly the glider catches up to the target position (GPS or simulated). Higher = snappier; lower = smoother. Applies in Manual and Auto Pilot.")]
         public float gpsSmoothing = 10f;
 
-        [Tooltip("Request a new GPS fix after this many meters of movement.")]
+        [Tooltip("Manual GPS only: request a new hardware fix after this many meters of movement.")]
         public float gpsUpdateDistanceMeters = 1f;
 
-        [Tooltip("Snap instead of smoothing if a fix jumps farther than this (GPS re-acquire).")]
+        [Tooltip("Manual GPS only: snap instead of smoothing if a fix jumps farther than this (GPS re-acquire).")]
         public float gpsMaxSnapMeters = 120f;
 
         [Header("Cockpit view")]
@@ -205,9 +212,35 @@ namespace RoutesToGlory.Game
         [Tooltip("Zoom smoothing while the cockpit button animates to max zoom-in.")]
         public float cockpitZoomSmoothing = 28f;
 
+        [Header("Cockpit look-around")]
+        [Tooltip("Max yaw (degrees) left/right from the travel heading while drag-looking.")]
+        public float cockpitLookYawMaxDegrees = 85f;
+
+        [Tooltip("Extra pitch down (degrees) when drag-looking.")]
+        public float cockpitLookPitchMinDegrees = -12f;
+
+        [Tooltip("Extra pitch up (degrees) when drag-looking.")]
+        public float cockpitLookPitchMaxDegrees = 28f;
+
+        [Tooltip("Yaw degrees per screen pixel while drag-looking.")]
+        public float cockpitLookYawSensitivity = 0.16f;
+
+        [Tooltip("Pitch degrees per screen pixel while drag-looking.")]
+        public float cockpitLookPitchSensitivity = 0.12f;
+
+        [Tooltip("How quickly drag-look catches up (higher = snappier).")]
+        public float cockpitLookSmoothing = 16f;
+
         private RtgCockpitView _cockpitView;
+        private RtgCockpitRearCamera _cockpitRearCamera;
         private bool _cockpitEntryPending;
         private bool _cockpitFastZoom;
+        private float _cockpitLookYawDeg;
+        private float _cockpitLookPitchDeg;
+        private float _cockpitLookYawTargetDeg;
+        private float _cockpitLookPitchTargetDeg;
+        private bool _cockpitLookPointerDown;
+        private Vector2 _cockpitLookLastPointer;
 
         [Tooltip("Scale pan speed on phones/tablets.")]
         [Range(0.2f, 1f)]
@@ -230,6 +263,10 @@ namespace RoutesToGlory.Game
         private static readonly int PitchLeverHint = "RtgPitchLever".GetHashCode();
         private int _activeLeverHint = -1;
         private Rect _activeLeverTrack;
+        private float _clearRoutesConfirmUntil;
+        private string _destinationDraft;
+        private Coroutine _routeBuildCoroutine;
+        private RtgWaypoint[] _cachedDriveRoute;
 
         // When the user drags, the camera's focus point stops tracking the player and a
         // "Center" button appears; tapping it snaps the focus back to the pin.
@@ -263,6 +300,10 @@ namespace RoutesToGlory.Game
         private bool _hasHeadingSample;
         private Vector3 _lastHeadingSamplePos;
 
+        private double _smoothDisplayLat;
+        private double _smoothDisplayLng;
+        private bool _hasSmoothDisplay;
+
         private void Awake()
         {
             _activeSource = LocationSource.Manual;
@@ -281,10 +322,14 @@ namespace RoutesToGlory.Game
             EnsureTerrainHeight();
             EnsureLightRoad();
             EnsureRouteSession();
+            SyncRouteSessionSnapMode();
             EnsureTapToConnect();
             EnsureCesiumCreditsToggle();
             EnsureCockpitView();
+            EnsureCockpitRearCamera();
             CacheCamera();
+
+            _destinationDraft = autopilotDestinationCity;
 
 #if !UNITY_EDITOR
             if (Application.isMobilePlatform)
@@ -316,13 +361,23 @@ namespace RoutesToGlory.Game
             if (_provider == null) return;
 
             _provider.Tick(Time.deltaTime);
+            if (_routeSession != null && _activeSource == LocationSource.AutoPilot)
+                _routeSession.SetFabricatedGpsSpeedMps(EffectiveSimulatedSpeed());
+
             if (_provider.TryGetLatLng(out double lat, out double lng))
             {
+                double targetLat = lat;
+                double targetLng = lng;
+                if (_routeSession != null)
+                    _routeSession.TryBlendSnapForMovement(ref targetLat, ref targetLng, Time.deltaTime);
+
+                ApplySmoothedDisplayPosition(targetLat, targetLng, out double displayLat, out double displayLng);
+
                 double heightM = _terrainHeight != null
-                    ? _terrainHeight.GetPlacementHeight(lat, lng)
+                    ? _terrainHeight.GetPlacementHeight(displayLat, displayLng)
                     : groundHeightMeters + markerHeight;
 
-                _markerAnchor.SetPositionLongitudeLatitudeHeight(lng, lat, heightM);
+                _markerAnchor.SetPositionLongitudeLatitudeHeight(displayLng, displayLat, heightM);
 
                 // First real fix — begin tracing the Light Road (avoids a stray
                 // segment from wherever the marker sat before we had a position).
@@ -332,10 +387,40 @@ namespace RoutesToGlory.Game
                     _roadStarted = true;
                 }
 
-                // Feed the position to the route session (it only streams while a
-                // route is actively being recorded via the Begin Route button).
-                if (_routeSession != null) _routeSession.NotifyPosition(lat, lng);
+                // Record the same smoothed position shown on the map so the trail
+                // and camera do not diverge from the persisted route geometry.
+                if (_routeSession != null) _routeSession.NotifyPosition(displayLat, displayLng);
             }
+        }
+
+        private void ResetDisplayPositionSmoothing()
+        {
+            _hasSmoothDisplay = false;
+        }
+
+        private void ApplySmoothedDisplayPosition(
+            double targetLat,
+            double targetLng,
+            out double displayLat,
+            out double displayLng)
+        {
+            if (!_hasSmoothDisplay)
+            {
+                _smoothDisplayLat = targetLat;
+                _smoothDisplayLng = targetLng;
+                _hasSmoothDisplay = true;
+            }
+            else
+            {
+                float t = gpsSmoothing > 0f
+                    ? 1f - Mathf.Exp(-gpsSmoothing * Time.deltaTime)
+                    : 1f;
+                _smoothDisplayLat += (targetLat - _smoothDisplayLat) * t;
+                _smoothDisplayLng += (targetLng - _smoothDisplayLng) * t;
+            }
+
+            displayLat = _smoothDisplayLat;
+            displayLng = _smoothDisplayLng;
         }
 
         private void LateUpdate()
@@ -396,7 +481,12 @@ namespace RoutesToGlory.Game
             }
 
             if (routeMode == RouteMode.HomeToCasper)
-                return new RtgSimulatedLocationProvider(HomeToCasperRoute(), EffectiveSimulatedSpeed());
+            {
+                RtgWaypoint[] route = _cachedDriveRoute != null && _cachedDriveRoute.Length >= 2
+                    ? _cachedDriveRoute
+                    : HomeToCasperRoute();
+                return new RtgSimulatedLocationProvider(route, EffectiveSimulatedSpeed());
+            }
 
             if (routeMode == RouteMode.TourNearbySites
                 && _cachedSimulatedWaypoints != null
@@ -406,6 +496,21 @@ namespace RoutesToGlory.Game
             }
 
             return new RtgSimulatedLocationProvider(ResolveRoute(), EffectiveSimulatedSpeed());
+        }
+
+        private void BeginSimulatedProviderAtPin(IRtgLocationProvider provider)
+        {
+            if (provider is RtgSimulatedLocationProvider sim)
+            {
+                if (TryGetPlayerLatLng(out double lat, out double lng))
+                    sim.BeginAt(lat, lng);
+                else
+                    sim.Begin();
+            }
+            else
+            {
+                provider.Begin();
+            }
         }
 
         private float EffectiveSimulatedSpeed()
@@ -454,6 +559,14 @@ namespace RoutesToGlory.Game
 
         private void BeginLocationProvider()
         {
+            if (_activeSource == LocationSource.AutoPilot && routeMode == RouteMode.HomeToCasper)
+            {
+                if (_routeBuildCoroutine != null)
+                    StopCoroutine(_routeBuildCoroutine);
+                _routeBuildCoroutine = StartCoroutine(BeginDriveRouteWhenReady());
+                return;
+            }
+
             if (_activeSource == LocationSource.AutoPilot && routeMode == RouteMode.TourNearbySites
                 && (_cachedSimulatedWaypoints == null || _cachedSimulatedWaypoints.Length < 2))
             {
@@ -464,14 +577,61 @@ namespace RoutesToGlory.Game
             }
 
             _provider = CreateProvider();
-            _provider.Begin();
+            BeginSimulatedProviderAtPin(_provider);
+        }
 
-            if (_activeSource == LocationSource.AutoPilot && routeMode == RouteMode.HomeToCasper)
+        private IEnumerator BeginDriveRouteWhenReady()
+        {
+            double startLat = tourCenterLatitude;
+            double startLng = tourCenterLongitude;
+            if (TryGetPlayerLatLng(out double pinLat, out double pinLng))
             {
-                Debug.Log(
-                    $"[RTG] Home ↔ Casper test drive at {FormatSpeedLabel()} " +
-                    $"({EffectiveSimulatedSpeed():0.#} m/s), {HomeToCasperRoute().Length} OSRM road points.");
+                startLat = pinLat;
+                startLng = pinLng;
             }
+
+            string error = null;
+            RtgWaypoint[] route = null;
+            yield return RtgAutopilotRouting.BuildDriveLoop(
+                startLat,
+                startLng,
+                autopilotDestinationCity,
+                built => route = built,
+                err => error = err);
+
+            if (route == null || route.Length < 2)
+            {
+                Debug.LogWarning(
+                    $"[RTG] Drive route to \"{autopilotDestinationCity}\" failed ({error}) — " +
+                    "falling back to baked Casper loop.");
+                route = HomeToCasperRoute();
+            }
+
+            _cachedDriveRoute = route;
+            _provider = new RtgSimulatedLocationProvider(route, EffectiveSimulatedSpeed());
+            BeginSimulatedProviderAtPin(_provider);
+            _routeBuildCoroutine = null;
+
+            Debug.Log(
+                $"[RTG] Auto Pilot drive to \"{autopilotDestinationCity}\" at {FormatSpeedLabel()} " +
+                $"({EffectiveSimulatedSpeed():0.#} m/s), {route.Length} road points from current pin.");
+        }
+
+        private void ApplyAutopilotDestination()
+        {
+            autopilotDestinationCity = (_destinationDraft ?? string.Empty).Trim();
+            _destinationDraft = autopilotDestinationCity;
+
+            if (_activeSource != LocationSource.AutoPilot || routeMode != RouteMode.HomeToCasper)
+                return;
+
+            _cachedDriveRoute = null;
+            _provider?.End();
+            _provider = null;
+
+            if (_routeBuildCoroutine != null)
+                StopCoroutine(_routeBuildCoroutine);
+            _routeBuildCoroutine = StartCoroutine(BeginDriveRouteWhenReady());
         }
 
         private void ToggleLocationSource()
@@ -492,9 +652,18 @@ namespace RoutesToGlory.Game
                 _tourCoroutine = null;
             }
 
+            if (_routeBuildCoroutine != null)
+            {
+                StopCoroutine(_routeBuildCoroutine);
+                _routeBuildCoroutine = null;
+            }
+
             _provider?.End();
             _provider = null;
             _activeSource = newSource;
+
+            _routeSession?.OnLocationSourceChanged();
+            SyncRouteSessionSnapMode();
 
             if (_lightRoad != null)
             {
@@ -504,6 +673,7 @@ namespace RoutesToGlory.Game
 
             _hasHeadingSample = false;
             _panned = false;
+            ResetDisplayPositionSmoothing();
 
             BeginLocationProvider();
             Debug.Log($"[RTG] Location source → {LocationSourceLabel(newSource)}.");
@@ -612,7 +782,7 @@ namespace RoutesToGlory.Game
 
             _cachedSimulatedWaypoints = tour;
             _provider = new RtgSimulatedLocationProvider(tour, EffectiveSimulatedSpeed());
-            _provider.Begin();
+            BeginSimulatedProviderAtPin(_provider);
             _tourCoroutine = null;
         }
 
@@ -799,6 +969,18 @@ namespace RoutesToGlory.Game
             _routeSession = session;
         }
 
+        private void SyncRouteSessionSnapMode()
+        {
+            if (_routeSession == null) return;
+            bool manual = _activeSource == LocationSource.Manual;
+            bool realDrive = manual || autopilotRealDriveParity;
+            _routeSession.SetMovementSnapEnabled(realDrive);
+            _routeSession.SetSkipGeofenceConnect(!realDrive);
+            _routeSession.SetAutopilotTestMode(!manual && !autopilotRealDriveParity);
+            _routeSession.SetFabricatedGpsSpeedMps(
+                manual ? 12f : EffectiveSimulatedSpeed());
+        }
+
         private void EnsureTapToConnect()
         {
             if (!Application.isPlaying) return;
@@ -816,6 +998,15 @@ namespace RoutesToGlory.Game
                 _cockpitView.cockpitTexture = cockpitTexture;
             if (cockpitPortraitTexture != null)
                 _cockpitView.cockpitPortraitTexture = cockpitPortraitTexture;
+        }
+
+        private void EnsureCockpitRearCamera()
+        {
+            if (!Application.isPlaying) return;
+            _cockpitRearCamera = GetComponent<RtgCockpitRearCamera>();
+            if (_cockpitRearCamera == null)
+                _cockpitRearCamera = gameObject.AddComponent<RtgCockpitRearCamera>();
+            _cockpitRearCamera.eyeHeightMeters = cockpitEyeHeightMeters;
         }
 
         private void EnsureCesiumCreditsToggle()
@@ -911,6 +1102,20 @@ namespace RoutesToGlory.Game
             lat = _markerAnchor.latitude;
             lng = _markerAnchor.longitude;
             return true;
+        }
+
+        public bool IsAutoPilotActive => _activeSource == LocationSource.AutoPilot;
+
+        /// <summary>True when screenPos (bottom-left origin) is over an in-game IMGUI control.</summary>
+        public bool IsScreenPointOverGameUi(Vector2 screenPos)
+        {
+            Vector2 guiPos = new Vector2(screenPos.x, Screen.height - screenPos.y);
+            foreach (Rect rect in _gameUiRects)
+            {
+                if (rect.Contains(guiPos))
+                    return true;
+            }
+            return false;
         }
 
         /// <summary>
@@ -1188,8 +1393,8 @@ namespace RoutesToGlory.Game
 
             DrawMovementControls();
 
-            if (_activeSource == LocationSource.AutoPilot && routeMode == RouteMode.HomeToCasper)
-                DrawRestartRouteButton();
+            if (_activeSource == LocationSource.AutoPilot)
+                DrawAutopilotTestControls();
 
             var prev = GUI.skin.button.fontSize;
             GUI.skin.button.fontSize = 28;
@@ -1275,16 +1480,20 @@ namespace RoutesToGlory.Game
             bool inCockpit = _cockpitView != null && _cockpitView.IsActive;
             bool showPitch = inCockpit;
             const bool showGps = true;
+            bool showAutopilotParity = _activeSource == LocationSource.AutoPilot;
+            bool showDeviceGpsTuning = _activeSource == LocationSource.Manual;
 
             const float panelWidthDesired = 300f * scale;
             const float rowH = 56f * scale;
             const float pitchH = 240f * scale;
             const float headerH = 34f * scale;
             const float pad = 12f * scale;
+            const float destFieldH = 44f * scale;
 
             float panelH = headerH + pad;
             if (showPitch) panelH += pitchH + pad;
-            if (showGps) panelH += rowH * 3f + pad;
+            if (showAutopilotParity) panelH += rowH * 2f + destFieldH + rowH + pad;
+            if (showGps) panelH += rowH * (showDeviceGpsTuning ? 3f : 1f) + pad;
             panelH = Mathf.Min(panelH, Screen.height - margin * 2f);
 
             float panelX = gearRect.xMax + 8f * scale;
@@ -1313,42 +1522,90 @@ namespace RoutesToGlory.Game
                 y += pitchH;
             }
 
+            if (showAutopilotParity)
+            {
+                y += pad * 0.5f;
+                bool newParity = DrawSettingToggle(
+                    new Rect(panelRect.x + pad, y, panelRect.width - pad * 2f, rowH),
+                    "Real drive parity",
+                    autopilotRealDriveParity,
+                    scale);
+                y += rowH;
+                if (newParity != autopilotRealDriveParity)
+                {
+                    autopilotRealDriveParity = newParity;
+                    SyncRouteSessionSnapMode();
+                    Debug.Log($"[RTG] Auto Pilot real drive parity → {(newParity ? "ON" : "OFF")}");
+                }
+
+                _destinationDraft = DrawSettingTextField(
+                    new Rect(panelRect.x + pad, y, panelRect.width - pad * 2f, destFieldH),
+                    "Destination (City, ST)",
+                    _destinationDraft ?? autopilotDestinationCity,
+                    scale);
+                y += destFieldH;
+
+                float applyW = 132f * scale;
+                var applyRect = new Rect(panelRect.x + pad, y, applyW, rowH - 8f * scale);
+                var hintRect = new Rect(applyRect.xMax + 8f * scale, y, panelRect.width - pad * 2f - applyW - 8f * scale, rowH - 8f * scale);
+                _gameUiRects.Add(applyRect);
+                _gameUiRects.Add(hintRect);
+
+                var prevBtn = GUI.skin.button.fontSize;
+                GUI.skin.button.fontSize = Mathf.RoundToInt(14f * scale);
+                if (GUI.Button(applyRect, "Apply route"))
+                    ApplyAutopilotDestination();
+                GUI.skin.button.fontSize = prevBtn;
+
+                var hintStyle = BrightLabel(Mathf.RoundToInt(12f * scale), new Color(0.82f, 0.9f, 0.98f));
+                GUI.Label(hintRect, "HomeToCasper mode · city+state OK", hintStyle);
+                y += rowH;
+            }
+
             if (showGps)
             {
                 y += pad * 0.5f;
                 float newSmoothing = DrawSettingSlider(
                     new Rect(panelRect.x + pad, y, panelRect.width - pad * 2f, rowH),
-                    "GPS smooth",
+                    "Position smooth",
                     gpsSmoothing,
                     2f,
                     24f,
                     scale: scale);
                 y += rowH;
-                float newUpdateDistance = DrawSettingSlider(
-                    new Rect(panelRect.x + pad, y, panelRect.width - pad * 2f, rowH),
-                    "GPS update (m)",
-                    gpsUpdateDistanceMeters,
-                    0.5f,
-                    10f,
-                    scale: scale);
-                y += rowH;
-                float newMaxSnap = DrawSettingSlider(
-                    new Rect(panelRect.x + pad, y, panelRect.width - pad * 2f, rowH),
-                    "GPS max snap (m)",
-                    gpsMaxSnapMeters,
-                    30f,
-                    300f,
-                    "0",
-                    scale: scale);
 
-                if (!Mathf.Approximately(newSmoothing, gpsSmoothing)
-                    || !Mathf.Approximately(newUpdateDistance, gpsUpdateDistanceMeters)
-                    || !Mathf.Approximately(newMaxSnap, gpsMaxSnapMeters))
+                if (showDeviceGpsTuning)
+                {
+                    float newUpdateDistance = DrawSettingSlider(
+                        new Rect(panelRect.x + pad, y, panelRect.width - pad * 2f, rowH),
+                        "GPS update (m)",
+                        gpsUpdateDistanceMeters,
+                        0.5f,
+                        10f,
+                        scale: scale);
+                    y += rowH;
+                    float newMaxSnap = DrawSettingSlider(
+                        new Rect(panelRect.x + pad, y, panelRect.width - pad * 2f, rowH),
+                        "GPS max snap (m)",
+                        gpsMaxSnapMeters,
+                        30f,
+                        300f,
+                        "0",
+                        scale: scale);
+
+                    if (!Mathf.Approximately(newSmoothing, gpsSmoothing)
+                        || !Mathf.Approximately(newUpdateDistance, gpsUpdateDistanceMeters)
+                        || !Mathf.Approximately(newMaxSnap, gpsMaxSnapMeters))
+                    {
+                        gpsSmoothing = newSmoothing;
+                        gpsUpdateDistanceMeters = newUpdateDistance;
+                        gpsMaxSnapMeters = newMaxSnap;
+                        ApplyGpsSmoothingToProvider();
+                    }
+                }
+                else if (!Mathf.Approximately(newSmoothing, gpsSmoothing))
                 {
                     gpsSmoothing = newSmoothing;
-                    gpsUpdateDistanceMeters = newUpdateDistance;
-                    gpsMaxSnapMeters = newMaxSnap;
-                    ApplyGpsSmoothingToProvider();
                 }
             }
         }
@@ -1647,6 +1904,51 @@ namespace RoutesToGlory.Game
             float newValue = GUI.HorizontalSlider(sliderRect, value, min, max);
             GUI.Label(valueRect, newValue.ToString(format), valueStyle);
             return newValue;
+        }
+
+        private bool DrawSettingToggle(Rect rect, string label, bool value, float scale = 1f)
+        {
+            _gameUiRects.Add(rect);
+
+            int fontSize = Mathf.RoundToInt(14f * scale);
+            var labelStyle = BrightLabel(fontSize, new Color(0.93f, 0.97f, 1f), FontStyle.Bold);
+
+            float toggleW = 84f * scale;
+            float toggleH = 34f * scale;
+            var labelRect = new Rect(rect.x, rect.y, rect.width - toggleW - 8f * scale, rect.height);
+            var toggleRect = new Rect(
+                rect.xMax - toggleW,
+                rect.y + (rect.height - toggleH) * 0.5f,
+                toggleW,
+                toggleH);
+            _gameUiRects.Add(toggleRect);
+
+            GUI.Label(labelRect, label, labelStyle);
+
+            var prevFont = GUI.skin.button.fontSize;
+            GUI.skin.button.fontSize = Mathf.RoundToInt(14f * scale);
+            if (GUI.Button(toggleRect, value ? "ON" : "OFF"))
+                value = !value;
+            GUI.skin.button.fontSize = prevFont;
+            return value;
+        }
+
+        private string DrawSettingTextField(Rect rect, string label, string value, float scale = 1f)
+        {
+            _gameUiRects.Add(rect);
+
+            int fontSize = Mathf.RoundToInt(13f * scale);
+            var labelStyle = BrightLabel(fontSize, new Color(0.93f, 0.97f, 1f), FontStyle.Bold);
+            var fieldRect = new Rect(rect.x, rect.y + 18f * scale, rect.width, rect.height - 18f * scale);
+            _gameUiRects.Add(fieldRect);
+
+            GUI.Label(new Rect(rect.x, rect.y, rect.width, 16f * scale), label, labelStyle);
+
+            var prevFont = GUI.skin.textField.fontSize;
+            GUI.skin.textField.fontSize = Mathf.RoundToInt(15f * scale);
+            string next = GUI.TextField(fieldRect, value ?? string.Empty);
+            GUI.skin.textField.fontSize = prevFont;
+            return next;
         }
 
         private void DrawMovementControls()
@@ -2282,44 +2584,118 @@ namespace RoutesToGlory.Game
             else DestroyImmediate(obj);
         }
 
-        /// <summary>Dev helper: jump back to route start and clear the live Light Road.</summary>
-        public void RestartSimulatedRoute()
+        /// <summary>
+        /// Home testing: abandon the open leg, clear the live trail, and restart the
+        /// simulated route from its first waypoint without switching Manual/Auto Pilot.
+        /// </summary>
+        public void ResetAutopilotTestDrive()
         {
+            _routeSession?.AbandonActiveLeg("test reset");
+
             if (_lightRoad != null)
             {
                 _lightRoad.ClearRoad();
                 _roadStarted = false;
             }
 
+            if (_activeSource == LocationSource.AutoPilot && routeMode == RouteMode.HomeToCasper)
+            {
+                _cachedDriveRoute = null;
+                _provider?.End();
+                _provider = null;
+                if (_routeBuildCoroutine != null)
+                    StopCoroutine(_routeBuildCoroutine);
+                _routeBuildCoroutine = StartCoroutine(BeginDriveRouteWhenReady());
+                _panned = false;
+                _hasHeadingSample = false;
+                ResetDisplayPositionSmoothing();
+                return;
+            }
+
+            ClearLightRoadAndRestartSim();
+        }
+
+        /// <summary>Dev helper: jump back to route start and clear the live Light Road.</summary>
+        public void RestartSimulatedRoute()
+        {
+            ResetAutopilotTestDrive();
+        }
+
+        private void ClearLightRoadAndRestartSim()
+        {
             if (_provider is RtgSimulatedLocationProvider sim)
-                sim.Restart();
+            {
+                if (TryGetPlayerLatLng(out double lat, out double lng))
+                    sim.RestartAt(lat, lng);
+                else
+                    sim.Restart();
+            }
 
             _panned = false;
             _hasHeadingSample = false;
+            ResetDisplayPositionSmoothing();
             if (_marker != null)
             {
                 _focusTarget = _marker.position;
                 _focus = _focusTarget;
             }
 
-            Debug.Log("[RTG] Simulated route restarted from home.");
+            Debug.Log("[RTG] Auto Pilot test drive reset — continuing from current pin.");
         }
 
-        private void DrawRestartRouteButton()
+        private void DrawAutopilotTestControls()
         {
             const float margin = 24f;
+            const float gap = 12f;
             const float wideW = 280f;
             const float wideH = 92f;
             float wideRight = Screen.width - wideW - margin;
-            float y = Screen.height - margin - wideH;
+            float resetY = Screen.height - margin - wideH;
+            float clearY = resetY - wideH - gap;
 
             var prev = GUI.skin.button.fontSize;
             GUI.skin.button.fontSize = 28;
-            var restartRect = new Rect(wideRight, y, wideW, wideH);
-            if (GUI.Button(restartRect, "Restart Route"))
-                RestartSimulatedRoute();
-            _gameUiRects.Add(restartRect);
+
+            bool confirmClear = Time.time < _clearRoutesConfirmUntil;
+            string clearLabel = confirmClear ? "Confirm Clear?" : "Clear Routes";
+            var clearRect = new Rect(wideRight, clearY, wideW, wideH);
+            if (GUI.Button(clearRect, clearLabel))
+            {
+                if (confirmClear)
+                    RequestClearWorldRoutes();
+                else
+                    _clearRoutesConfirmUntil = Time.time + 5f;
+            }
+            _gameUiRects.Add(clearRect);
+
+            var resetRect = new Rect(wideRight, resetY, wideW, wideH);
+            if (GUI.Button(resetRect, "Reset Drive"))
+                ResetAutopilotTestDrive();
+            _gameUiRects.Add(resetRect);
+
             GUI.skin.button.fontSize = prev;
+        }
+
+        private void RequestClearWorldRoutes()
+        {
+            _clearRoutesConfirmUntil = 0f;
+            if (_routeSession == null) return;
+
+            _routeSession.ResetWorldProgress((ok, message) =>
+            {
+                if (ok)
+                {
+                    if (_lightRoad != null)
+                    {
+                        _lightRoad.ClearRoad();
+                        _roadStarted = false;
+                    }
+                }
+
+                Debug.Log(ok
+                    ? $"[RTG] {message}"
+                    : $"[RTG] World route clear failed: {message}");
+            });
         }
     }
 }

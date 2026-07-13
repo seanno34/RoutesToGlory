@@ -2,6 +2,7 @@ import type { GameConfig, GpsPointInput } from '@empire/shared';
 import { query, newId } from '../db/client.js';
 import { revealTilesAlongRoutePath } from '../db/exploration-repo.js';
 import { configStore } from '../services/config-store.js';
+import { cleanupPathForPersist } from './route-geometry.js';
 
 export interface ValidatedPoint {
   accepted: boolean;
@@ -234,7 +235,8 @@ async function insertPersistedRoute(params: {
   eventPayload: Record<string, unknown>;
 }): Promise<string> {
   const routeId = newId();
-  const distanceM = pathDistanceM(params.points);
+  const cleanedPoints = cleanupPathForPersist(params.points, 12);
+  const distanceM = pathDistanceM(cleanedPoints);
 
   await query(
     `INSERT INTO routes (
@@ -248,7 +250,7 @@ async function insertPersistedRoute(params: {
       params.sessionId,
       params.fromSettlementId,
       params.toSettlementId,
-      JSON.stringify(params.points),
+      JSON.stringify(cleanedPoints),
       distanceM,
     ],
   );
@@ -274,7 +276,7 @@ async function insertPersistedRoute(params: {
   await revealTilesAlongRoutePath(
     params.worldId,
     params.empireId,
-    params.points,
+    cleanedPoints,
     config,
     { spawnResources: false },
   );
@@ -403,4 +405,40 @@ export async function completeRouteSession(
   });
 
   return { routeId };
+}
+
+/** Simplify existing persisted travel routes for an empire (POC route cleanup). */
+export async function cleanupEmpireRoutes(
+  worldId: string,
+  empireId: string,
+  toleranceM = 12,
+): Promise<{ updated: number; total: number }> {
+  const routesResult = await query<{ id: string; path_json: string }>(
+    `SELECT id, path_json FROM routes
+     WHERE world_id = ? AND empire_id = ? AND status = 'active'`,
+    [worldId, empireId],
+  );
+
+  let updated = 0;
+  for (const route of routesResult.rows) {
+    let path: Array<{ lat: number; lng: number }>;
+    try {
+      path = JSON.parse(route.path_json) as Array<{ lat: number; lng: number }>;
+    } catch {
+      continue;
+    }
+
+    if (path.length < 3) continue;
+
+    const cleaned = cleanupPathForPersist(path, toleranceM);
+    if (cleaned.length >= 2 && cleaned.length < path.length) {
+      await query(
+        `UPDATE routes SET path_json = ?, distance_m = ? WHERE id = ?`,
+        [JSON.stringify(cleaned), pathDistanceM(cleaned), route.id],
+      );
+      updated += 1;
+    }
+  }
+
+  return { updated, total: routesResult.rows.length };
 }

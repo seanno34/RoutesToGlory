@@ -39,6 +39,28 @@ namespace RoutesToGlory.Game
         [Tooltip("Auto-save the current leg and start a fresh session after this many meters of travel (keeps long drives durable even without closing the app). 0 = only save on shutdown or node connect.")]
         public float legCheckpointMeters = 1500f;
 
+        [Tooltip("During Auto Pilot home testing: auto-save legs every N meters. 0 = only save when the app backgrounds (keeps repeated test loops from fragmenting the DB).")]
+        public float autopilotCheckpointMeters = 0f;
+
+        [Tooltip("Do not persist legs shorter than this (filters mode-switch spurs and bad samples).")]
+        public float minLegLengthMeters = 120f;
+
+        [Header("Route snap & cleanup")]
+        [Tooltip("When near an existing owned route, snap movement and new points onto that corridor.")]
+        public bool snapToRoutes = true;
+
+        [Tooltip("Snap when within this many meters of an existing route line. Keep tight (~25 m) so parallel roads are not pulled together.")]
+        public float snapProximityMeters = 25f;
+
+        [Tooltip("How quickly the glider eases onto a nearby route corridor (higher = snappier).")]
+        public float snapBlendSmoothing = 14f;
+
+        [Tooltip("Douglas-Peucker tolerance when saving a route leg (meters).")]
+        public float simplifyToleranceMeters = 12f;
+
+        [Tooltip("Run one-time server cleanup for messy saved routes after the map loads.")]
+        public bool cleanupRoutesOnMapLoad = false;
+
         private const int MaxBatch = 20;
 
         public bool IsActive => _state == State.Active;
@@ -51,7 +73,9 @@ namespace RoutesToGlory.Game
         private double _cumulativeDistanceM;
 
         private double _lastLat, _lastLng;
+        private double _lastRawLat, _lastRawLng;
         private bool _hasLast;
+        private bool _hasLastRaw;
         private double _curLat, _curLng;
         private bool _hasCur;
 
@@ -65,15 +89,208 @@ namespace RoutesToGlory.Game
         private bool _hasResumeGate;
         private bool _checkpointSaving;
         private bool _shutdownSaveStarted;
+        private bool _routeCleanupRequested;
+        private RtgEchoSiteLoader _echoLoader;
+        private bool _movementSnapEnabled = true;
+        private bool _skipGeofenceConnect;
+        private bool _autopilotTestMode;
+        private float _autoBeginBlockedUntil;
+        private RtgRoute[] _cachedSnapRoutes;
+        private List<IReadOnlyList<RtgRouteGeometry.LatLng>> _cachedSnapPaths;
+        private bool _corridorSnapEngaged;
+        private Coroutine _debouncedRouteRefresh;
 
         // ------------------------------------------------------------------ //
         // Public API (called by the player each frame + by the on-screen buttons)
         // ------------------------------------------------------------------ //
 
-        public void NotifyPosition(double lat, double lng)
+        private void Start()
         {
-            _curLat = lat;
-            _curLng = lng;
+#if UNITY_2023_1_OR_NEWER
+            _echoLoader = UnityEngine.Object.FindFirstObjectByType<RtgEchoSiteLoader>();
+#else
+            _echoLoader = UnityEngine.Object.FindObjectOfType<RtgEchoSiteLoader>();
+#endif
+        }
+
+        /// <summary>When enabled, blend the map pin toward nearby persisted route corridors.</summary>
+        public void SetMovementSnapEnabled(bool enabled)
+        {
+            _movementSnapEnabled = enabled;
+            if (!enabled)
+                _corridorSnapEngaged = false;
+        }
+
+        /// <summary>
+        /// Speed used to fabricate point timestamps (m/s). Match simulated autopilot
+        /// speed so the server speed gate accepts flushed points.
+        /// </summary>
+        public void SetFabricatedGpsSpeedMps(float mps)
+        {
+            gpsSpeedMps = Mathf.Max(0.5f, mps);
+        }
+
+        /// <summary>
+        /// Autopilot: skip server geofence auto-connect so legs are not cut short near Echo Sites.
+        /// Manual: allow geofence connect for real drives.
+        /// </summary>
+        public void SetSkipGeofenceConnect(bool skip)
+        {
+            _skipGeofenceConnect = skip;
+        }
+
+        /// <summary>
+        /// Home testing: when enabled, disables mid-drive checkpoint saves and uses
+        /// autopilotCheckpointMeters instead of legCheckpointMeters. Off when real
+        /// drive parity is on (Auto Pilot behaves like Manual).
+        /// </summary>
+        public void SetAutopilotTestMode(bool enabled)
+        {
+            _autopilotTestMode = enabled;
+        }
+
+        /// <summary>
+        /// Called when Manual ↔ Auto Pilot teleports the pin — abandon the open leg
+        /// so we never save perpendicular spur routes at the route origin.
+        /// </summary>
+        public void OnLocationSourceChanged()
+        {
+            AbandonActiveLeg("mode change");
+        }
+
+        /// <summary>
+        /// Drop the in-progress leg without persisting (mode switch, test reset, world wipe).
+        /// </summary>
+        public void AbandonActiveLeg(string reason)
+        {
+            _autoBeginBlockedUntil = Time.time + 2f;
+            _hasResumeGate = false;
+
+            if (_flushLoop != null)
+            {
+                StopCoroutine(_flushLoop);
+                _flushLoop = null;
+            }
+
+            _queue.Clear();
+            _fullPath.Clear();
+            _state = State.Idle;
+            _sessionId = null;
+            _hasLast = false;
+            _hasLastRaw = false;
+            _cumulativeDistanceM = 0;
+            _checkpointSaving = false;
+            StatusText = $"Route: idle ({reason})";
+            Debug.Log($"[RTG] Route leg abandoned — {reason}.");
+        }
+
+        /// <summary>
+        /// Dev helper: wipe saved routes/sessions for this empire via reset-progress API.
+        /// </summary>
+        public void ResetWorldProgress(Action<bool, string> done = null)
+        {
+            if (string.IsNullOrWhiteSpace(worldId) || string.IsNullOrWhiteSpace(empireId))
+            {
+                done?.Invoke(false, "Needs live world (run '6b. Connect Echo Sites to Live API')");
+                return;
+            }
+
+            StartCoroutine(ResetWorldProgressRoutine(done));
+        }
+
+        /// <summary>Drop cached corridor paths after the world map reloads.</summary>
+        public void InvalidateSnapCache()
+        {
+            _cachedSnapRoutes = null;
+            _cachedSnapPaths = null;
+            _corridorSnapEngaged = false;
+        }
+
+        /// <summary>
+        /// One-shot snap for route begin (instant placement on corridor).
+        /// </summary>
+        public bool TrySnapForMovement(ref double lat, ref double lng)
+        {
+            if (!_movementSnapEnabled || !snapToRoutes || snapProximityMeters <= 0f)
+                return false;
+
+            List<IReadOnlyList<RtgRouteGeometry.LatLng>> candidates = EnsureSnapPathCache();
+            if (candidates == null || candidates.Count == 0)
+                return false;
+
+            double distanceM = RtgRoutePathUtil.MinDistanceToPaths(lat, lng, candidates);
+            if (distanceM > snapProximityMeters)
+                return false;
+
+            RtgRouteGeometry.LatLng foot = RtgRouteGeometry.NearestPointOnAnyPath(lat, lng, candidates);
+            lat = foot.lat;
+            lng = foot.lng;
+            return true;
+        }
+
+        /// <summary>
+        /// When near a persisted route corridor, ease the glider onto that line.
+        /// Blends every frame with hysteresis so the pin does not jerk sideways.
+        /// </summary>
+        public bool TryBlendSnapForMovement(ref double lat, ref double lng, float deltaTime)
+        {
+            if (!_movementSnapEnabled || !snapToRoutes || snapProximityMeters <= 0f)
+            {
+                _corridorSnapEngaged = false;
+                return false;
+            }
+
+            List<IReadOnlyList<RtgRouteGeometry.LatLng>> candidates = EnsureSnapPathCache();
+            if (candidates == null || candidates.Count == 0)
+            {
+                _corridorSnapEngaged = false;
+                return false;
+            }
+
+            double distanceM = RtgRoutePathUtil.MinDistanceToPaths(lat, lng, candidates);
+            float enterM = snapProximityMeters;
+            float exitM = snapProximityMeters * 1.35f;
+
+            if (_corridorSnapEngaged)
+            {
+                if (distanceM > exitM)
+                    _corridorSnapEngaged = false;
+            }
+            else if (distanceM <= enterM)
+            {
+                _corridorSnapEngaged = true;
+            }
+
+            if (!_corridorSnapEngaged)
+                return false;
+
+            RtgRouteGeometry.LatLng foot = RtgRouteGeometry.NearestPointOnAnyPath(lat, lng, candidates);
+            float speed = Mathf.Max(0.5f, snapBlendSmoothing);
+            float t = 1f - Mathf.Exp(-speed * deltaTime);
+            lat += (foot.lat - lat) * t;
+            lng += (foot.lng - lng) * t;
+            return true;
+        }
+
+        private List<IReadOnlyList<RtgRouteGeometry.LatLng>> EnsureSnapPathCache()
+        {
+            RtgRoute[] persisted = _echoLoader != null ? _echoLoader.LastMap?.routes : null;
+            if (persisted == _cachedSnapRoutes && _cachedSnapPaths != null)
+                return _cachedSnapPaths;
+
+            _cachedSnapRoutes = persisted;
+            _cachedSnapPaths = RtgRoutePathUtil.CollectNetworkPaths(
+                null,
+                persisted,
+                empireId,
+                RtgRoutePathUtil.MaxSnapCheckPoints);
+            return _cachedSnapPaths;
+        }
+
+        public void NotifyPosition(double rawLat, double rawLng)
+        {
+            _curLat = rawLat;
+            _curLng = rawLng;
             _hasCur = true;
 
             // Always-on capture: begin (or resume) a route automatically as the
@@ -82,28 +299,33 @@ namespace RoutesToGlory.Game
 
             if (_state != State.Active) return;
 
-            if (!_hasLast)
+            if (!_hasLastRaw)
             {
-                _lastLat = lat;
-                _lastLng = lng;
+                _lastRawLat = rawLat;
+                _lastRawLng = rawLng;
+                _hasLastRaw = true;
+                _lastLat = rawLat;
+                _lastLng = rawLng;
                 _hasLast = true;
                 return;
             }
 
-            double moved = Haversine(_lastLat, _lastLng, lat, lng);
+            double moved = Haversine(_lastRawLat, _lastRawLng, rawLat, rawLng);
             if (moved < sampleSpacingMeters) return;
 
             _cumulativeDistanceM += moved;
             _queue.Add(new GpsPoint
             {
-                lat = lat,
-                lng = lng,
+                lat = rawLat,
+                lng = rawLng,
                 accuracyM = 8,
                 recordedAt = Iso(_startUtc.AddSeconds(_cumulativeDistanceM / Mathf.Max(0.1f, gpsSpeedMps))),
             });
-            _fullPath.Add(new PathPoint { lat = lat, lng = lng });
-            _lastLat = lat;
-            _lastLng = lng;
+            _fullPath.Add(new PathPoint { lat = rawLat, lng = rawLng });
+            _lastRawLat = rawLat;
+            _lastRawLng = rawLng;
+            _lastLat = rawLat;
+            _lastLng = rawLng;
             MaybeCheckpointLeg();
         }
 
@@ -115,6 +337,7 @@ namespace RoutesToGlory.Game
 
         private void TryAutoBegin()
         {
+            if (Time.time < _autoBeginBlockedUntil) return;
             if (!_hasCur) return;
             if (string.IsNullOrWhiteSpace(worldId) || string.IsNullOrWhiteSpace(empireId))
             {
@@ -139,7 +362,13 @@ namespace RoutesToGlory.Game
                 StatusText = "Route: needs live world (run '6b. Connect Echo Sites to Live API')";
                 return;
             }
-            StartCoroutine(BeginRoutine(_curLat, _curLng));
+
+            double startLat = _curLat;
+            double startLng = _curLng;
+            if (_movementSnapEnabled && snapToRoutes)
+                TrySnapForMovement(ref startLat, ref startLng);
+
+            StartCoroutine(BeginRoutine(startLat, startLng));
         }
 
         public void End()
@@ -297,6 +526,7 @@ namespace RoutesToGlory.Game
             StatusText = "Route: starting…";
             _cumulativeDistanceM = 0;
             _hasLast = false;
+            _hasLastRaw = false;
             _queue.Clear();
             _fullPath.Clear();
             _startUtc = DateTime.UtcNow;
@@ -314,6 +544,9 @@ namespace RoutesToGlory.Game
                     _lastLat = lat;
                     _lastLng = lng;
                     _hasLast = true;
+                    _lastRawLat = _curLat;
+                    _lastRawLng = _curLng;
+                    _hasLastRaw = true;
                     _fullPath.Add(new PathPoint { lat = lat, lng = lng });
                     _hasResumeGate = false;
                     StatusText = "Route: recording";
@@ -353,7 +586,10 @@ namespace RoutesToGlory.Game
                 if (i > 0) sb.Append(',');
                 sb.Append($"{{\"lat\":{D(p.lat)},\"lng\":{D(p.lng)},\"accuracyM\":{D(p.accuracyM)},\"recordedAt\":\"{p.recordedAt}\"}}");
             }
-            sb.Append("]}");
+            sb.Append(']');
+            if (_skipGeofenceConnect)
+                sb.Append(",\"skipGeofenceConnect\":true");
+            sb.Append('}');
 
             yield return Post($"/sessions/{_sessionId}/points", sb.ToString(), (code, text, ok) =>
             {
@@ -397,10 +633,37 @@ namespace RoutesToGlory.Game
             if (_state != State.Active)
                 yield break; // a geofence connect already completed the session
 
-            var sb = new StringBuilder("{\"path\":[");
-            for (int i = 0; i < _fullPath.Count; i++)
+            List<RtgRouteGeometry.LatLng> rawPath = new List<RtgRouteGeometry.LatLng>(_fullPath.Count);
+            foreach (PathPoint p in _fullPath)
+                rawPath.Add(new RtgRouteGeometry.LatLng(p.lat, p.lng));
+
+            List<RtgRouteGeometry.LatLng> cleaned = RtgRoutePathUtil.CleanupForPersist(
+                rawPath,
+                simplifyToleranceMeters);
+            if (cleaned.Count < 2 && rawPath.Count >= 2)
+                cleaned = rawPath;
+
+            if (cleaned.Count < 2)
             {
-                PathPoint p = _fullPath[i];
+                _state = State.Idle;
+                StatusText = "Route: too few points to save";
+                Debug.LogWarning($"[RTG] Route end skipped — only {cleaned.Count} point(s) after cleanup.");
+                yield break;
+            }
+
+            double legLengthM = PathLengthM(cleaned);
+            if (legLengthM < minLegLengthMeters)
+            {
+                _state = State.Idle;
+                StatusText = "Route: leg too short to save";
+                Debug.LogWarning($"[RTG] Route end skipped — leg only {legLengthM:0} m (min {minLegLengthMeters:0} m).");
+                yield break;
+            }
+
+            var sb = new StringBuilder("{\"path\":[");
+            for (int i = 0; i < cleaned.Count; i++)
+            {
+                RtgRouteGeometry.LatLng p = cleaned[i];
                 if (i > 0) sb.Append(',');
                 sb.Append($"{{\"lat\":{D(p.lat)},\"lng\":{D(p.lng)}}}");
             }
@@ -444,9 +707,10 @@ namespace RoutesToGlory.Game
 
         private void MaybeCheckpointLeg()
         {
-            if (!autoRecord || legCheckpointMeters <= 0f) return;
+            float checkpointThreshold = _autopilotTestMode ? autopilotCheckpointMeters : legCheckpointMeters;
+            if (!autoRecord || checkpointThreshold <= 0f) return;
             if (_state != State.Active || _checkpointSaving || _shutdownSaveStarted) return;
-            if (_cumulativeDistanceM < legCheckpointMeters) return;
+            if (_cumulativeDistanceM < checkpointThreshold) return;
             if (_fullPath.Count < 2) return;
 
             _checkpointSaving = true;
@@ -458,6 +722,8 @@ namespace RoutesToGlory.Game
             Debug.Log($"[RTG] Checkpoint save after {_cumulativeDistanceM:0} m…");
             yield return EndRoutine();
             _checkpointSaving = false;
+            if (autoRecord && _hasCur)
+                TryAutoBegin();
         }
 
         private void OnApplicationPause(bool paused)
@@ -536,7 +802,108 @@ namespace RoutesToGlory.Game
         {
             RtgPersistedRouteDrawer drawer = RtgPersistedRouteDrawer.FindOrCreate();
             if (drawer == null) return;
-            drawer.StartCoroutine(drawer.RefreshFromApi(apiBaseUrl, worldId, empireId));
+            if (_debouncedRouteRefresh != null)
+                StopCoroutine(_debouncedRouteRefresh);
+            _debouncedRouteRefresh = StartCoroutine(DebouncedRouteRefresh(drawer));
+        }
+
+        private IEnumerator DebouncedRouteRefresh(RtgPersistedRouteDrawer drawer)
+        {
+            yield return new WaitForSeconds(0.75f);
+            yield return drawer.RefreshFromApi(apiBaseUrl, worldId, empireId);
+            _debouncedRouteRefresh = null;
+        }
+
+        private void MaybeRequestRouteCleanup()
+        {
+            if (!cleanupRoutesOnMapLoad || _routeCleanupRequested) return;
+            if (string.IsNullOrWhiteSpace(worldId) || string.IsNullOrWhiteSpace(empireId)) return;
+
+            _routeCleanupRequested = true;
+            StartCoroutine(CleanupRoutesRoutine());
+        }
+
+        /// <summary>Called after the world map loads so existing messy routes get simplified once.</summary>
+        public void RequestRouteCleanupIfNeeded()
+        {
+            MaybeRequestRouteCleanup();
+        }
+
+        private IEnumerator ResetWorldProgressRoutine(Action<bool, string> done)
+        {
+            AbandonActiveLeg("world reset");
+
+            string json =
+                $"{{\"confirm\":true,\"empireId\":\"{empireId}\"}}";
+
+            bool finished = false;
+            bool success = false;
+            string message = null;
+
+            yield return Post($"/worlds/{worldId}/reset-progress", json, (code, text, ok) =>
+            {
+                finished = true;
+                success = ok && code == 200;
+                message = success ? "World routes cleared" : $"Reset failed ({code})";
+                if (success)
+                {
+                    Debug.Log($"[RTG] World progress reset: {text}");
+                    InvalidateSnapCache();
+                    RefreshPersistedRoutes();
+                }
+                else
+                {
+                    Debug.LogWarning($"[RTG] World progress reset failed ({code}): {text}");
+                }
+            });
+
+            if (!finished) yield break;
+            done?.Invoke(success, message);
+        }
+
+        private IEnumerator CleanupRoutesRoutine()
+        {
+            string json =
+                $"{{\"empireId\":\"{empireId}\",\"toleranceM\":{D(simplifyToleranceMeters)}}}";
+
+            bool done = false;
+            long code = 0;
+            string text = null;
+            bool ok = false;
+
+            yield return Post($"/worlds/{worldId}/routes/cleanup", json, (c, t, o) =>
+            {
+                code = c;
+                text = t;
+                ok = o;
+                done = true;
+            });
+
+            if (!done) yield break;
+
+            if (ok && code == 200)
+            {
+                Debug.Log($"[RTG] Route cleanup: {text}");
+                RtgPersistedRouteDrawer drawer = RtgPersistedRouteDrawer.FindOrCreate();
+                if (drawer != null)
+                    drawer.StartCoroutine(drawer.RefreshFromApi(apiBaseUrl, worldId, empireId));
+            }
+            else
+            {
+                Debug.LogWarning($"[RTG] Route cleanup failed ({code}): {text}");
+            }
+        }
+
+        private static double PathLengthM(List<RtgRouteGeometry.LatLng> path)
+        {
+            double total = 0;
+            for (int i = 1; i < path.Count; i++)
+            {
+                total += Haversine(
+                    path[i - 1].lat, path[i - 1].lng,
+                    path[i].lat, path[i].lng);
+            }
+            return total;
         }
 
         private static double Haversine(double lat1, double lng1, double lat2, double lng2)

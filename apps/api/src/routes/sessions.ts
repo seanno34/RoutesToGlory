@@ -180,7 +180,10 @@ export const sessionRoutes: FastifyPluginAsync = async (app) => {
     );
 
     const settlements = await loadSettlements(session.world_id);
-    const connected = detectGeofenceConnect(
+    const bodySkip = (body as { skipGeofenceConnect?: boolean }).skipGeofenceConnect;
+    const connected = bodySkip
+      ? null
+      : detectGeofenceConnect(
       settlements,
       recentAccepted.rows.reverse().map((p) => ({
         lat: p.lat,

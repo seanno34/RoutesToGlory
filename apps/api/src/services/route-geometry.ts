@@ -161,6 +161,62 @@ export function decimatePath(path: PathPoint[], maxPoints: number): PathPoint[] 
   return result;
 }
 
+/** Douglas-Peucker simplification in meters (for persisted route cleanup). */
+export function simplifyPathRdp(path: PathPoint[], toleranceM: number): PathPoint[] {
+  if (path.length <= 2) return path;
+
+  const keep = new Array<boolean>(path.length).fill(false);
+  keep[0] = true;
+  keep[path.length - 1] = true;
+
+  function simplifyRange(start: number, end: number): void {
+    if (end <= start + 1) return;
+
+    let maxDist = 0;
+    let index = start;
+    const a = path[start]!;
+    const b = path[end]!;
+
+    for (let i = start + 1; i < end; i += 1) {
+      const p = path[i]!;
+      const d = distancePointToSegmentM(p.lat, p.lng, a.lat, a.lng, b.lat, b.lng);
+      if (d > maxDist) {
+        maxDist = d;
+        index = i;
+      }
+    }
+
+    if (maxDist > toleranceM) {
+      keep[index] = true;
+      simplifyRange(start, index);
+      simplifyRange(index, end);
+    }
+  }
+
+  simplifyRange(0, path.length - 1);
+
+  const result: PathPoint[] = [];
+  for (let i = 0; i < path.length; i += 1) {
+    if (keep[i]) result.push(path[i]!);
+  }
+
+  return result.length >= 2 ? result : [path[0]!, path[path.length - 1]!];
+}
+
+export function cleanupPathForPersist(path: PathPoint[], toleranceM = 12): PathPoint[] {
+  if (path.length === 0) return path;
+
+  const deduped: PathPoint[] = [];
+  for (const point of path) {
+    const last = deduped[deduped.length - 1];
+    if (!last || last.lat !== point.lat || last.lng !== point.lng) {
+      deduped.push(point);
+    }
+  }
+
+  return simplifyPathRdp(deduped, toleranceM);
+}
+
 export function pathBbox(path: PathPoint[]): LatLngBbox | null {
   if (path.length === 0) return null;
 

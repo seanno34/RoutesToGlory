@@ -24,8 +24,12 @@ namespace RoutesToGlory.Game
         [Tooltip("Screen-space radius (px) for tapping a marker without physics colliders.")]
         public float tapHitRadiusPixels = 56f;
 
+        [Tooltip("Extra hit radius while Auto Pilot is moving the map under the cursor.")]
+        public float autopilotTapHitRadiusPixels = 160f;
+
         private RtgRouteSession _session;
         private RtgEchoSiteLoader _echoLoader;
+        private RtgPlayerLocation _player;
         private Camera _camera;
         private Vector2? _pressStart;
         private RtgMapMarker _pendingGoodie;
@@ -38,9 +42,11 @@ namespace RoutesToGlory.Game
 #if UNITY_2023_1_OR_NEWER
             _session = Object.FindFirstObjectByType<RtgRouteSession>();
             _echoLoader = Object.FindFirstObjectByType<RtgEchoSiteLoader>();
+            _player = Object.FindFirstObjectByType<RtgPlayerLocation>();
 #else
             _session = Object.FindObjectOfType<RtgRouteSession>();
             _echoLoader = Object.FindObjectOfType<RtgEchoSiteLoader>();
+            _player = Object.FindObjectOfType<RtgPlayerLocation>();
 #endif
             _camera = Camera.main;
             RtgMapMarkerRegistry.Refresh();
@@ -56,8 +62,9 @@ namespace RoutesToGlory.Game
 
             if (ReadPressUp(out Vector2 up) && _pressStart.HasValue)
             {
-                if ((up - _pressStart.Value).sqrMagnitude <= tapSlopPixels * tapSlopPixels)
-                    TryTapAt(up);
+                Vector2 pressDown = _pressStart.Value;
+                if ((up - pressDown).sqrMagnitude <= tapSlopPixels * tapSlopPixels)
+                    TryTapAt(pressDown, up);
                 _pressStart = null;
             }
         }
@@ -76,14 +83,28 @@ namespace RoutesToGlory.Game
                 maxConnectDistanceM = cfg.routes.minConnectDistanceM;
         }
 
-        private void TryTapAt(Vector2 screenPos)
+        private void TryTapAt(Vector2 screenPosDown, Vector2 screenPosUp)
         {
             if (_camera == null || _session == null) return;
 
-            RtgMapMarker marker = FindMarkerNearScreenPoint(screenPos);
-            if (marker == null) return;
+            if (_player != null
+                && (_player.IsScreenPointOverGameUi(screenPosDown) || _player.IsScreenPointOverGameUi(screenPosUp)))
+            {
+                return;
+            }
 
-            if (marker.IsConnected) return;
+            RtgMapMarker marker = FindMarkerNearScreenPoint(screenPosDown, screenPosUp);
+            if (marker == null)
+            {
+                ShowToast("No beacon under tap — aim for the sphere center.");
+                return;
+            }
+
+            if (marker.IsConnected)
+            {
+                ShowToast($"{marker.displayName} is already connected.");
+                return;
+            }
 
             _session.TryGetRoutePath(out List<RtgRouteGeometry.LatLng> activeLeg);
             RtgRoute[] persisted = _echoLoader != null ? _echoLoader.LastMap?.routes : null;
@@ -95,7 +116,8 @@ namespace RoutesToGlory.Game
                     persisted,
                     _session.empireId,
                     maxConnectDistanceM,
-                    out double dist))
+                    out double dist,
+                    probePadM: maxConnectDistanceM * 2.0))
             {
                 bool hasNetwork = (activeLeg != null && activeLeg.Count > 0) ||
                                   (persisted != null && persisted.Length > 0);
@@ -118,21 +140,25 @@ namespace RoutesToGlory.Game
             StartCoroutine(_session.ClaimNearRoute(marker, null, OnClaimDone));
         }
 
-        private RtgMapMarker FindMarkerNearScreenPoint(Vector2 screenPos)
+        private RtgMapMarker FindMarkerNearScreenPoint(Vector2 screenPosDown, Vector2 screenPosUp)
         {
+            Vector2 midpoint = (screenPosDown + screenPosUp) * 0.5f;
             RtgMapMarker best = null;
-            float bestDist = tapHitRadiusPixels;
+            float bestDist = float.MaxValue;
+            float margin = EffectiveTapHitRadiusPixels() * 0.35f;
 
             foreach (RtgMapMarker marker in RtgMapMarkerRegistry.All)
             {
                 if (marker == null || !marker.gameObject.activeInHierarchy) continue;
+                if (!TryGetMarkerScreenHit(marker, out Vector2 screenCenter, out float hitRadiusPx))
+                    continue;
 
-                Vector3 world = marker.transform.position;
-                Vector3 screen = _camera.WorldToScreenPoint(world);
-                if (screen.z <= 0f) continue;
-
-                float dist = Vector2.Distance(screenPos, new Vector2(screen.x, screen.y));
-                if (dist <= bestDist)
+                float allowed = hitRadiusPx + margin;
+                float distDown = Vector2.Distance(screenPosDown, screenCenter);
+                float distUp = Vector2.Distance(screenPosUp, screenCenter);
+                float distMid = Vector2.Distance(midpoint, screenCenter);
+                float dist = Mathf.Min(distDown, Mathf.Min(distUp, distMid));
+                if (dist <= allowed && dist < bestDist)
                 {
                     bestDist = dist;
                     best = marker;
@@ -140,6 +166,50 @@ namespace RoutesToGlory.Game
             }
 
             return best;
+        }
+
+        private bool TryGetMarkerScreenHit(
+            RtgMapMarker marker,
+            out Vector2 screenCenter,
+            out float hitRadiusPx)
+        {
+            screenCenter = default;
+            hitRadiusPx = EffectiveTapHitRadiusPixels();
+
+            if (_camera == null || marker == null)
+                return false;
+
+            Transform beacon = marker.transform.Find("Beacon");
+            Vector3 world = beacon != null ? beacon.position : marker.transform.position;
+
+            Vector3 screen3 = _camera.WorldToScreenPoint(world);
+            if (screen3.z <= 0f)
+                return false;
+
+            screenCenter = new Vector2(screen3.x, screen3.y);
+
+            float worldRadius = marker.kind == RtgMapMarker.Kind.Settlement ? 40f : 30f;
+            if (beacon != null)
+            {
+                Vector3 scale = beacon.lossyScale;
+                worldRadius = Mathf.Max(scale.x, Mathf.Max(scale.y, scale.z)) * 0.5f;
+            }
+
+            Vector3 edgeWorld = world + _camera.transform.right * worldRadius;
+            Vector3 edgeScreen3 = _camera.WorldToScreenPoint(edgeWorld);
+            float projectedRadius = Vector2.Distance(
+                screenCenter,
+                new Vector2(edgeScreen3.x, edgeScreen3.y));
+
+            hitRadiusPx = Mathf.Max(EffectiveTapHitRadiusPixels(), projectedRadius + 20f);
+            return true;
+        }
+
+        private float EffectiveTapHitRadiusPixels()
+        {
+            if (_player != null && _player.IsAutoPilotActive)
+                return Mathf.Max(tapHitRadiusPixels, autopilotTapHitRadiusPixels);
+            return tapHitRadiusPixels;
         }
 
         private void SubmitGoodieChoice(string choice)
@@ -186,7 +256,7 @@ namespace RoutesToGlory.Game
                 return;
             }
 
-            if (result.hasConnector)
+            if (result.ok && result.hasConnector)
             {
                 RtgPersistedRouteDrawer drawer = RtgPersistedRouteDrawer.FindOrCreate();
                 drawer?.AppendConnector(
@@ -195,10 +265,10 @@ namespace RoutesToGlory.Game
                     result.anchorLng,
                     result.targetLat,
                     result.targetLng);
-                return;
             }
 
-            RefreshPersistedRoutes();
+            if (result.ok || result.alreadyConnected)
+                RefreshPersistedRoutes();
         }
 
         private void RefreshPersistedRoutes()

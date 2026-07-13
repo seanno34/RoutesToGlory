@@ -88,6 +88,13 @@ namespace RoutesToGlory.Game
         /// </summary>
         public RtgWorldMap LastMap { get; private set; }
 
+        /// <summary>Keep in-memory map routes aligned after incremental API refreshes.</summary>
+        public void ApplyRouteSnapshot(RtgRoute[] routes)
+        {
+            if (LastMap == null) return;
+            LastMap.routes = routes;
+        }
+
         // Cache runtime-created emissive materials by color so we don't leak one per marker.
         private readonly Dictionary<Color, Material> _materialCache = new();
 
@@ -205,6 +212,8 @@ namespace RoutesToGlory.Game
 
             Debug.Log($"[RTG] Spawned {settlements} Echo Site(s) and {resources} resource node(s).");
             DrawPersistedRoutes(map);
+            InvalidateRouteSnapCache();
+            NotifyRouteCleanup();
             RtgMapMarkerRegistry.Refresh();
             RtgMapConnections.Apply(map, empireId);
             SetupFogOfWar(container, map?.routes);
@@ -221,7 +230,30 @@ namespace RoutesToGlory.Game
         {
             RtgPersistedRouteDrawer drawer = RtgPersistedRouteDrawer.FindOrCreate();
             if (drawer == null) return;
+            int routeCount = map?.routes?.Length ?? 0;
             drawer.SyncRoutes(map?.routes);
+            if (routeCount > 0)
+                Debug.Log($"[RTG] Drew {routeCount} persisted route(s) from map load.");
+        }
+
+        private static void NotifyRouteCleanup()
+        {
+#if UNITY_2023_1_OR_NEWER
+            RtgRouteSession session = Object.FindFirstObjectByType<RtgRouteSession>();
+#else
+            RtgRouteSession session = Object.FindObjectOfType<RtgRouteSession>();
+#endif
+            session?.RequestRouteCleanupIfNeeded();
+        }
+
+        private static void InvalidateRouteSnapCache()
+        {
+#if UNITY_2023_1_OR_NEWER
+            RtgRouteSession session = Object.FindFirstObjectByType<RtgRouteSession>();
+#else
+            RtgRouteSession session = Object.FindObjectOfType<RtgRouteSession>();
+#endif
+            session?.InvalidateSnapCache();
         }
 
         public void ClearMarkers()
