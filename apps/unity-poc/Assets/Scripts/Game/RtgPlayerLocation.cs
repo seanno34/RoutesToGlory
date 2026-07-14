@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
 using CesiumForUnity;
 using UnityEngine;
 #if ENABLE_INPUT_SYSTEM
@@ -52,8 +53,38 @@ namespace RoutesToGlory.Game
         [Tooltip("Wingspan of the top-down ship sprite in meters.")]
         public float shipSizeMeters = 24f;
 
+        [Tooltip("Optional Tripo FBX/prefab. When unset, RtgPlayerShipVisual auto-loads the default Tripo import.")]
+        public GameObject shipHullPrefab;
+
+        [Tooltip("Fine-tune rotation after auto-orient (usually leave at 0,0,0).")]
+        public Vector3 shipHullEulerOffset = Vector3.zero;
+
+        [Tooltip("Tripo hull auto-orient. Disable when tuning orientation manually.")]
+        public bool shipAutoOrientImportedHull = true;
+
         [Tooltip("Tune if the ship nose points backward (180 = flip).")]
         public float shipHeadingOffsetDegrees = 0f;
+
+        [Tooltip("When set, engine port locals below override mesh estimation.")]
+        public bool shipUseCustomEnginePorts;
+
+        public Vector3 shipMainEngineLocal;
+        public Vector3 shipLeftEngineLocal;
+        public Vector3 shipRightEngineLocal;
+
+        [Tooltip("Exhaust plume length multiplier. Lower = shorter flame.")]
+        [Range(0.15f, 2.5f)]
+        public float shipExhaustLengthScale = 1f;
+
+        public RtgEngineCavityTuning shipMainCavity = RtgEngineCavityTuning.Default;
+        public RtgEngineCavityTuning shipLeftCavity = RtgEngineCavityTuning.Default;
+        public RtgEngineCavityTuning shipRightCavity = RtgEngineCavityTuning.Default;
+
+        [Tooltip("Speed-color stops for exhaust/cavity (4 stops, interpolated by mph).")]
+        public RtgExhaustColorStop[] shipExhaustColorStops;
+
+        [Tooltip("Mph at which exhaust colors reach full heat (100+ mph stays at this color).")]
+        public float shipExhaustColorMaxMph = 99f;
 
         [Header("Source")]
         [Tooltip("Manual = real GPS (stationary until you move). Auto Pilot = simulated auto-route.")]
@@ -73,9 +104,9 @@ namespace RoutesToGlory.Game
         [Min(0.01f)]
         public float minSpeedThrottle = 0.25f;
 
-        [Tooltip("Highest multiplier on the in-game throttle lever.")]
+        [Tooltip("Highest multiplier on the in-game throttle lever (testing; color heat caps at 99 mph).")]
         [Min(0.02f)]
-        public float maxSpeedThrottle = 4f;
+        public float maxSpeedThrottle = 800f;
 
         [Tooltip("Starting throttle multiplier. Clamped between min and max.")]
         public float speedThrottle = 1f;
@@ -284,6 +315,18 @@ namespace RoutesToGlory.Game
         private Rect _activeLeverTrack;
         private float _clearRoutesConfirmUntil;
         private string _destinationDraft;
+        private int _enginePortEditIndex;
+        private int _cavityEditIndex;
+        private int _exhaustColorStopEditIndex;
+        private int _exhaustColorChannelIndex;
+        private float _exhaustColorPreviewMph = 40f;
+        private bool _exhaustFlamePreviewEnabled;
+        private int _exhaustColorLastSyncedStopIndex = -1;
+        private static int _activeSettingSliderHint = -1;
+        private string _cavityDepthDraft;
+        private int _cavityDepthDraftEngineIndex = -1;
+        private Vector2 _settingsScrollPosition;
+        private Rect? _activeSettingsScrollViewport;
         private Coroutine _routeBuildCoroutine;
         private RtgWaypoint[] _cachedDriveRoute;
 
@@ -324,6 +367,11 @@ namespace RoutesToGlory.Game
         private double _smoothDisplayLng;
         private bool _hasSmoothDisplay;
 
+        private Vector3 _lastMotionSamplePos;
+        private bool _hasMotionSample;
+        private float _groundSpeedMps;
+        private float _prevTravelHeadingRad;
+
         private void Awake()
         {
             _activeSource = LocationSource.Manual;
@@ -346,7 +394,10 @@ namespace RoutesToGlory.Game
         private void Start()
         {
             ClampSpeedThrottle();
+            EnsureExhaustColorStops();
             EnsureMarker();
+            if (RtgShipTuningConfig.TryLoad(out RtgShipTuningConfig.ShipTuningFile tuning))
+                RtgShipTuningConfig.ApplyTo(this, tuning);
             RefreshMarkerVisual();
             EnsureTerrainHeight();
             EnsureLightRoad();
@@ -467,13 +518,84 @@ namespace RoutesToGlory.Game
             if (_marker != null)
             {
                 UpdateTravelHeading();
-                UpdateShipHeading();
+                UpdateShipMotion();
             }
 
             UpdateCameraFollow();
 
             if (_marker != null)
                 TickPathfinderBeam();
+        }
+
+        private void UpdateShipMotion()
+        {
+            if (_shipVisual == null) return;
+
+            _shipVisual.SetHeadingRadians(_travelHeadingRad);
+
+            Vector3 pos = _marker.position;
+            if (_hasMotionSample)
+            {
+                float dt = Mathf.Max(Time.deltaTime, 1e-4f);
+                Vector3 delta = pos - _lastMotionSamplePos;
+                delta.y = 0f;
+                _groundSpeedMps = delta.magnitude / dt;
+            }
+
+            _lastMotionSamplePos = pos;
+            _hasMotionSample = true;
+
+            float turnRate = 0f;
+            if (Time.deltaTime > 1e-4f)
+            {
+                float deltaDeg = Mathf.DeltaAngle(
+                    _prevTravelHeadingRad * Mathf.Rad2Deg,
+                    _travelHeadingRad * Mathf.Rad2Deg);
+                turnRate = deltaDeg * Mathf.Deg2Rad / Time.deltaTime;
+            }
+
+            _prevTravelHeadingRad = _travelHeadingRad;
+
+            bool lowAngle = perspective == CameraPerspective.LowAngle;
+            _shipVisual.SetPresentation(_camera, _zoom, minZoom, maxZoom, lowAngle);
+
+            bool exhaustTunePreview = _settingsOpen
+                && markerStyle == PlayerMarkerStyle.SpaceshipSprite
+                && _activeSource == LocationSource.Manual;
+            float exhaustPreviewMph = exhaustTunePreview
+                ? _exhaustColorPreviewMph
+                : ResolveExhaustColorHeatMph();
+            _shipVisual.SetCavityPreview(exhaustTunePreview, exhaustPreviewMph, _exhaustColorStopEditIndex);
+            _shipVisual.SetFlamePreview(
+                exhaustTunePreview && _exhaustFlamePreviewEnabled,
+                exhaustPreviewMph);
+            _shipVisual.SetMotionState(ResolveShipThrust01(), turnRate, ResolveExhaustColorHeatMph());
+        }
+
+        private float ResolveThrottleHeat01()
+        {
+            return Mathf.Clamp01(ResolveExhaustColorHeatMph() / Mathf.Max(1f, shipExhaustColorMaxMph));
+        }
+
+        /// <summary>Mph used for exhaust/cavity color (0 = deep orange, 99+ = full neon blue).</summary>
+        private float ResolveExhaustColorHeatMph()
+        {
+            if (_activeSource == LocationSource.Manual)
+                return MpsToMph(Mathf.Max(0f, _groundSpeedMps));
+
+            return EffectiveSimulatedSpeedMph();
+        }
+
+        private float ResolveShipThrust01()
+        {
+            float throttle01 = Mathf.InverseLerp(
+                minSpeedThrottle,
+                maxSpeedThrottle,
+                speedThrottle);
+
+            float referenceSpeedMps = Mathf.Max(6f, EffectiveSimulatedSpeed());
+            float speed01 = Mathf.Clamp01(_groundSpeedMps / referenceSpeedMps);
+            return Mathf.Clamp01(Mathf.Max(throttle01, speed01));
         }
 
         private void TickPathfinderBeam()
@@ -960,6 +1082,15 @@ namespace RoutesToGlory.Game
                 BuildMarkerVisual(root.transform);
         }
 
+        private static bool HasLegacyFlatShipMesh(Transform shipRoot)
+        {
+            Transform mesh = shipRoot != null ? shipRoot.Find("Mesh") : null;
+            if (mesh == null) return false;
+
+            Vector3 scale = mesh.localScale;
+            return scale.y <= 2f && (scale.x >= 12f || scale.z >= 12f);
+        }
+
         /// <summary>Rebuild pin/ship from current marker style and texture.</summary>
         public void RefreshMarkerVisual()
         {
@@ -975,6 +1106,8 @@ namespace RoutesToGlory.Game
             if (markerStyle == PlayerMarkerStyle.SpaceshipSprite)
             {
                 if (beacon != null) DestroyImmediateSafe(beacon.gameObject);
+                if (ship != null && HasLegacyFlatShipMesh(ship))
+                    DestroyImmediateSafe(ship.gameObject);
                 BuildShipVisual(root);
                 return;
             }
@@ -1127,7 +1260,22 @@ namespace RoutesToGlory.Game
             var shipGo = new GameObject("Ship");
             shipGo.transform.SetParent(root, false);
             _shipVisual = shipGo.AddComponent<RtgPlayerShipVisual>();
-            _shipVisual.Configure(tex, shipSizeMeters, shipHeadingOffsetDegrees);
+            _shipVisual.Configure(
+                tex,
+                shipSizeMeters,
+                shipHeadingOffsetDegrees,
+                shipHullPrefab,
+                shipHullEulerOffset,
+                shipAutoOrientImportedHull,
+                new RtgGliderEngineMounts(
+                    shipMainEngineLocal,
+                    shipLeftEngineLocal,
+                    shipRightEngineLocal),
+                shipUseCustomEnginePorts);
+
+            _shipVisual.ApplyExhaustLengthScale(shipExhaustLengthScale);
+            _shipVisual.ApplyCavityTuning(shipMainCavity, shipLeftCavity, shipRightCavity);
+            ApplyShipExhaustColors();
 
             if (!_shipVisual.IsReady)
             {
@@ -1164,10 +1312,113 @@ namespace RoutesToGlory.Game
             return Resources.Load<Texture2D>("RTG_PlayerShip/glider_01");
         }
 
-        private void UpdateShipHeading()
+        private void ApplyShipHullTuning()
         {
-            if (_shipVisual == null) return;
-            _shipVisual.SetHeadingRadians(_travelHeadingRad);
+            if (_shipVisual == null)
+                return;
+
+            _shipVisual.ApplyHullTuning(shipHullEulerOffset, shipHeadingOffsetDegrees);
+        }
+
+        private void ApplyShipEnginePorts()
+        {
+            if (_shipVisual == null)
+                return;
+
+            _shipVisual.ApplyEnginePortPositions(
+                new RtgGliderEngineMounts(
+                    shipMainEngineLocal,
+                    shipLeftEngineLocal,
+                    shipRightEngineLocal));
+        }
+
+        private void ApplyShipExhaustColors()
+        {
+            if (_shipVisual == null)
+                return;
+
+            EnsureExhaustColorStops();
+            _shipVisual.ApplyExhaustColorProfile(shipExhaustColorStops, shipExhaustColorMaxMph);
+
+            bool exhaustTunePreview = _settingsOpen
+                && markerStyle == PlayerMarkerStyle.SpaceshipSprite
+                && _activeSource == LocationSource.Manual;
+            if (exhaustTunePreview)
+            {
+                _shipVisual.SetCavityPreview(
+                    true,
+                    _exhaustColorPreviewMph,
+                    _exhaustColorStopEditIndex);
+                _shipVisual.SetFlamePreview(_exhaustFlamePreviewEnabled, _exhaustColorPreviewMph);
+            }
+        }
+
+        private void EnsureExhaustColorStops()
+        {
+            shipExhaustColorMaxMph = Mathf.Clamp(shipExhaustColorMaxMph, 1f, 200f);
+            shipExhaustColorStops = RtgExhaustColorProfile.NormalizeStops(
+                shipExhaustColorStops,
+                shipExhaustColorMaxMph);
+        }
+
+        private void ApplyShipCavityTuning()
+        {
+            if (_shipVisual == null)
+                return;
+
+            _shipVisual.ApplyCavityTuning(shipMainCavity, shipLeftCavity, shipRightCavity);
+        }
+
+        private RtgEngineCavityTuning GetSelectedCavityTuning()
+        {
+            return _cavityEditIndex switch
+            {
+                1 => shipLeftCavity,
+                2 => shipRightCavity,
+                _ => shipMainCavity,
+            };
+        }
+
+        private void SetSelectedCavityTuning(RtgEngineCavityTuning tuning)
+        {
+            switch (_cavityEditIndex)
+            {
+                case 1:
+                    shipLeftCavity = tuning;
+                    break;
+                case 2:
+                    shipRightCavity = tuning;
+                    break;
+                default:
+                    shipMainCavity = tuning;
+                    break;
+            }
+        }
+
+        private void ApplyShipExhaustLength()
+        {
+            if (_shipVisual == null)
+                return;
+
+            _shipVisual.ApplyExhaustLengthScale(shipExhaustLengthScale);
+        }
+
+        private void SaveShipHullTuning()
+        {
+            RtgShipTuningConfig.TrySave(RtgShipTuningConfig.CaptureFrom(this), out _);
+        }
+
+        private void ReloadShipHullTuning()
+        {
+            if (!RtgShipTuningConfig.TryLoad(out RtgShipTuningConfig.ShipTuningFile tuning))
+            {
+                Debug.LogWarning("[RTG] No rtg-ship-tuning.json found to reload.");
+                return;
+            }
+
+            RtgShipTuningConfig.ApplyTo(this, tuning);
+            RefreshMarkerVisual();
+            ApplyShipExhaustColors();
         }
 
         /// <summary>Travel direction on the ground plane (+Z = north). Radians.</summary>
@@ -1229,6 +1480,7 @@ namespace RoutesToGlory.Game
         {
             _camera = Camera.main;
             if (_camera == null) return;
+            RtgAudioSession.EnsureListener(_camera);
             _cameraController = _camera.GetComponent<CesiumCameraController>();
             _cameraOriginShift = _camera.GetComponent<CesiumOriginShift>();
             _georeference = _camera.GetComponentInParent<CesiumGeoreference>();
@@ -1538,6 +1790,24 @@ namespace RoutesToGlory.Game
             }
         }
 
+        private Rect ToScreenGuiRect(Rect contentRect)
+        {
+            if (!_activeSettingsScrollViewport.HasValue)
+                return contentRect;
+
+            Rect viewport = _activeSettingsScrollViewport.Value;
+            return new Rect(
+                viewport.x + contentRect.x,
+                viewport.y + contentRect.y - _settingsScrollPosition.y,
+                contentRect.width,
+                contentRect.height);
+        }
+
+        private void RegisterGameUiRect(Rect rect)
+        {
+            _gameUiRects.Add(ToScreenGuiRect(rect));
+        }
+
         private void DrawSettingsGearAndPanel(float margin, float midY)
         {
             const float scale = 2f;
@@ -1565,6 +1835,7 @@ namespace RoutesToGlory.Game
             const bool showGps = true;
             bool showAutopilotParity = _activeSource == LocationSource.AutoPilot;
             bool showDeviceGpsTuning = _activeSource == LocationSource.Manual;
+            bool showHullTuning = markerStyle == PlayerMarkerStyle.SpaceshipSprite;
 
             const float panelWidthDesired = 300f * scale;
             const float rowH = 56f * scale;
@@ -1572,19 +1843,27 @@ namespace RoutesToGlory.Game
             const float headerH = 34f * scale;
             const float pad = 12f * scale;
             const float destFieldH = 44f * scale;
+            const float hullSectionHeaderH = 28f * scale;
+            const float hullButtonRowH = 44f * scale;
 
-            float panelH = headerH + pad;
-            if (showPitch) panelH += pitchH + pad;
-            if (showAutopilotParity) panelH += rowH * 2f + destFieldH + rowH + pad;
-            if (showGps) panelH += rowH * (showDeviceGpsTuning ? 3f : 1f) + pad;
-            panelH = Mathf.Min(panelH, Screen.height - margin * 2f);
+            float scrollContentH = pad;
+            if (showPitch) scrollContentH += pitchH + pad;
+            if (showAutopilotParity) scrollContentH += rowH * 2f + destFieldH + rowH + pad;
+            if (showGps) scrollContentH += rowH * (showDeviceGpsTuning ? 3f : 1f) + pad;
+            if (showHullTuning)
+                scrollContentH += CalculateHullTuningScrollHeight(rowH, hullSectionHeaderH, hullButtonRowH, scale, pad);
+
+            float maxPanelH = Mathf.Min(Screen.height * 0.82f, Screen.height - margin * 2f);
+            float idealPanelH = headerH + scrollContentH;
+            float visiblePanelH = Mathf.Min(idealPanelH, maxPanelH);
+            float scrollViewH = Mathf.Max(48f, visiblePanelH - headerH);
 
             float panelX = gearRect.xMax + 8f * scale;
             float panelWidth = Mathf.Min(panelWidthDesired, Screen.width - panelX - margin);
             if (panelX + panelWidth > Screen.width - margin)
                 panelX = Mathf.Max(margin, Screen.width - margin - panelWidth);
-            float panelY = Mathf.Clamp(midY - panelH * 0.5f, margin, Screen.height - margin - panelH);
-            var panelRect = new Rect(panelX, panelY, panelWidth, panelH);
+            float panelY = Mathf.Clamp(midY - visiblePanelH * 0.5f, margin, Screen.height - margin - visiblePanelH);
+            var panelRect = new Rect(panelX, panelY, panelWidth, visiblePanelH);
             _gameUiRects.Add(panelRect);
 
             Color prevColor = GUI.color;
@@ -1598,10 +1877,22 @@ namespace RoutesToGlory.Game
                 "Settings",
                 titleStyle);
 
-            float y = panelRect.y + headerH;
+            var scrollViewport = new Rect(panelRect.x, panelRect.y + headerH, panelWidth, scrollViewH);
+            _activeSettingsScrollViewport = scrollViewport;
+            _settingsScrollPosition = GUI.BeginScrollView(
+                scrollViewport,
+                _settingsScrollPosition,
+                new Rect(0, 0, panelWidth, scrollContentH),
+                false,
+                true);
+
+            float innerW = panelWidth - pad * 2f;
+            var contentPanel = new Rect(pad, 0f, innerW, scrollContentH);
+            float y = pad * 0.5f;
+
             if (showPitch)
             {
-                DrawPitchLever(panelRect.x + pad, y, panelRect.width - pad * 2f, pitchH, scale);
+                DrawPitchLever(contentPanel.x, y, contentPanel.width, pitchH, scale);
                 y += pitchH;
             }
 
@@ -1609,7 +1900,7 @@ namespace RoutesToGlory.Game
             {
                 y += pad * 0.5f;
                 bool newParity = DrawSettingToggle(
-                    new Rect(panelRect.x + pad, y, panelRect.width - pad * 2f, rowH),
+                    new Rect(contentPanel.x, y, contentPanel.width, rowH),
                     "Real drive parity",
                     autopilotRealDriveParity,
                     scale);
@@ -1622,17 +1913,17 @@ namespace RoutesToGlory.Game
                 }
 
                 _destinationDraft = DrawSettingTextField(
-                    new Rect(panelRect.x + pad, y, panelRect.width - pad * 2f, destFieldH),
+                    new Rect(contentPanel.x, y, contentPanel.width, destFieldH),
                     "Destination (City, ST)",
                     _destinationDraft ?? autopilotDestinationCity,
                     scale);
                 y += destFieldH;
 
                 float applyW = 132f * scale;
-                var applyRect = new Rect(panelRect.x + pad, y, applyW, rowH - 8f * scale);
-                var hintRect = new Rect(applyRect.xMax + 8f * scale, y, panelRect.width - pad * 2f - applyW - 8f * scale, rowH - 8f * scale);
-                _gameUiRects.Add(applyRect);
-                _gameUiRects.Add(hintRect);
+                var applyRect = new Rect(contentPanel.x, y, applyW, rowH - 8f * scale);
+                var hintRect = new Rect(applyRect.xMax + 8f * scale, y, contentPanel.width - applyW - 8f * scale, rowH - 8f * scale);
+                RegisterGameUiRect(applyRect);
+                RegisterGameUiRect(hintRect);
 
                 var prevBtn = GUI.skin.button.fontSize;
                 GUI.skin.button.fontSize = Mathf.RoundToInt(14f * scale);
@@ -1649,7 +1940,7 @@ namespace RoutesToGlory.Game
             {
                 y += pad * 0.5f;
                 float newSmoothing = DrawSettingSlider(
-                    new Rect(panelRect.x + pad, y, panelRect.width - pad * 2f, rowH),
+                    new Rect(contentPanel.x, y, contentPanel.width, rowH),
                     "Position smooth",
                     gpsSmoothing,
                     2f,
@@ -1660,7 +1951,7 @@ namespace RoutesToGlory.Game
                 if (showDeviceGpsTuning)
                 {
                     float newUpdateDistance = DrawSettingSlider(
-                        new Rect(panelRect.x + pad, y, panelRect.width - pad * 2f, rowH),
+                        new Rect(contentPanel.x, y, contentPanel.width, rowH),
                         "GPS update (m)",
                         gpsUpdateDistanceMeters,
                         0.5f,
@@ -1668,7 +1959,7 @@ namespace RoutesToGlory.Game
                         scale: scale);
                     y += rowH;
                     float newMaxSnap = DrawSettingSlider(
-                        new Rect(panelRect.x + pad, y, panelRect.width - pad * 2f, rowH),
+                        new Rect(contentPanel.x, y, contentPanel.width, rowH),
                         "GPS max snap (m)",
                         gpsMaxSnapMeters,
                         30f,
@@ -1691,6 +1982,646 @@ namespace RoutesToGlory.Game
                     gpsSmoothing = newSmoothing;
                 }
             }
+
+            if (showHullTuning)
+            {
+                y += pad * 0.5f;
+                y = DrawHullTuningSection(contentPanel, y, rowH, hullSectionHeaderH, hullButtonRowH, scale);
+                y = DrawExhaustColorSection(contentPanel, y, rowH, hullSectionHeaderH, hullButtonRowH, scale);
+                y = DrawEnginePortTuningSection(contentPanel, y, rowH, hullSectionHeaderH, hullButtonRowH, scale);
+            }
+
+            GUI.EndScrollView();
+            _activeSettingsScrollViewport = null;
+        }
+
+        private static float CalculateHullTuningScrollHeight(
+            float rowH,
+            float sectionHeaderH,
+            float buttonRowH,
+            float scale,
+            float pad)
+        {
+            float hull = sectionHeaderH + rowH * 5f + buttonRowH;
+            float exhaust = sectionHeaderH + rowH * 6f + buttonRowH * 3f + 40f * scale;
+            float engine = sectionHeaderH * 2f + 8f * scale + rowH * 10f + buttonRowH * 3f;
+            return pad * 0.5f + hull + exhaust + engine + pad;
+        }
+
+        private float DrawExhaustColorSection(
+            Rect panelRect,
+            float y,
+            float rowH,
+            float sectionHeaderH,
+            float buttonRowH,
+            float scale)
+        {
+            EnsureExhaustColorStops();
+            _exhaustColorStopEditIndex = Mathf.Clamp(
+                _exhaustColorStopEditIndex,
+                0,
+                RtgExhaustColorProfile.StopCount - 1);
+            _exhaustColorChannelIndex = Mathf.Clamp(_exhaustColorChannelIndex, 0, 3);
+
+            if (_exhaustColorLastSyncedStopIndex != _exhaustColorStopEditIndex)
+            {
+                _exhaustColorLastSyncedStopIndex = _exhaustColorStopEditIndex;
+                _exhaustColorPreviewMph = shipExhaustColorStops[_exhaustColorStopEditIndex].speedMph;
+            }
+
+            var sectionStyle = BrightLabel(Mathf.RoundToInt(14f * scale), new Color(0.88f, 0.94f, 1f), FontStyle.Bold);
+            GUI.Label(
+                new Rect(panelRect.x, y, panelRect.width, sectionHeaderH),
+                "Exhaust colors",
+                sectionStyle);
+            y += sectionHeaderH;
+
+            float previousMaxMph = shipExhaustColorMaxMph;
+            float maxMph = DrawSettingSlider(
+                new Rect(panelRect.x, y, panelRect.width, rowH),
+                "Color max mph",
+                shipExhaustColorMaxMph,
+                20f,
+                120f,
+                "0",
+                scale);
+            y += rowH;
+
+            float btnW = (panelRect.width - 8f * scale) / RtgExhaustColorProfile.StopCount;
+            var prevBtn = GUI.skin.button.fontSize;
+            GUI.skin.button.fontSize = Mathf.RoundToInt(12f * scale);
+            for (int i = 0; i < RtgExhaustColorProfile.StopCount; i++)
+            {
+                var btn = new Rect(panelRect.x + i * (btnW + 2f * scale), y, btnW, buttonRowH - 8f * scale);
+                RegisterGameUiRect(btn);
+                string label = _exhaustColorStopEditIndex == i
+                    ? $"{shipExhaustColorStops[i].speedMph:0}*"
+                    : $"{shipExhaustColorStops[i].speedMph:0}";
+                if (GUI.Button(btn, label))
+                {
+                    GUIUtility.hotControl = 0;
+                    _activeSettingSliderHint = -1;
+                    _exhaustColorStopEditIndex = i;
+                    _exhaustColorLastSyncedStopIndex = i;
+                    _exhaustColorPreviewMph = shipExhaustColorStops[i].speedMph;
+                    ApplyShipExhaustColors();
+                }
+            }
+
+            GUI.skin.button.fontSize = prevBtn;
+            y += buttonRowH;
+
+            float previousPreviewMph = _exhaustColorPreviewMph;
+            float previewMph = DrawSettingSlider(
+                new Rect(panelRect.x, y, panelRect.width, rowH),
+                "Preview mph",
+                _exhaustColorPreviewMph,
+                0f,
+                maxMph,
+                "0",
+                scale,
+                controlName: "ExhaustPreviewMph");
+            y += rowH;
+            if (!Mathf.Approximately(previewMph, previousPreviewMph))
+            {
+                _exhaustColorPreviewMph = previewMph;
+                ApplyShipExhaustColors();
+            }
+
+            var flameToggleBtn = new Rect(panelRect.x, y, panelRect.width, buttonRowH - 8f * scale);
+            RegisterGameUiRect(flameToggleBtn);
+            GUI.skin.button.fontSize = Mathf.RoundToInt(12f * scale);
+            string flameToggleLabel = _exhaustFlamePreviewEnabled
+                ? "Show flames (manual): ON"
+                : "Show flames (manual): OFF";
+            if (GUI.Button(flameToggleBtn, flameToggleLabel))
+                _exhaustFlamePreviewEnabled = !_exhaustFlamePreviewEnabled;
+
+            GUI.skin.button.fontSize = prevBtn;
+            y += buttonRowH;
+
+            string[] channelLabels = { "Cavity outer", "Cavity core", "Flame", "Glow" };
+            float channelBtnW = (panelRect.width - 6f * scale) / channelLabels.Length;
+            GUI.skin.button.fontSize = Mathf.RoundToInt(11f * scale);
+            for (int i = 0; i < channelLabels.Length; i++)
+            {
+                var btn = new Rect(panelRect.x + i * (channelBtnW + 2f * scale), y, channelBtnW, buttonRowH - 8f * scale);
+                RegisterGameUiRect(btn);
+                string label = _exhaustColorChannelIndex == i
+                    ? $"{channelLabels[i]} *"
+                    : channelLabels[i];
+                if (GUI.Button(btn, label))
+                {
+                    GUIUtility.hotControl = 0;
+                    _activeSettingSliderHint = -1;
+                    _exhaustColorChannelIndex = i;
+                }
+            }
+
+            GUI.skin.button.fontSize = prevBtn;
+            y += buttonRowH;
+
+            RtgExhaustColorStop storedStop = shipExhaustColorStops[_exhaustColorStopEditIndex];
+            Color storedColor = GetExhaustColorChannel(storedStop, _exhaustColorChannelIndex);
+            int stopHint = _exhaustColorStopEditIndex;
+            int channelHint = _exhaustColorChannelIndex;
+
+            float stopSpeed = DrawSettingSlider(
+                new Rect(panelRect.x, y, panelRect.width, rowH),
+                $"Stop {_exhaustColorStopEditIndex + 1} speed (mph)",
+                storedStop.speedMph,
+                0f,
+                maxMph,
+                "0",
+                scale,
+                controlHint: ExhaustColorSliderHint(stopHint, channelHint, 0));
+            y += rowH;
+
+            float r = DrawSettingSlider(
+                new Rect(panelRect.x, y, panelRect.width, rowH),
+                "Red",
+                storedColor.r,
+                0f,
+                1f,
+                "0.00",
+                scale,
+                controlHint: ExhaustColorSliderHint(stopHint, channelHint, 1));
+            y += rowH;
+
+            float g = DrawSettingSlider(
+                new Rect(panelRect.x, y, panelRect.width, rowH),
+                "Green",
+                storedColor.g,
+                0f,
+                1f,
+                "0.00",
+                scale,
+                controlHint: ExhaustColorSliderHint(stopHint, channelHint, 2));
+            y += rowH;
+
+            float b = DrawSettingSlider(
+                new Rect(panelRect.x, y, panelRect.width, rowH),
+                "Blue",
+                storedColor.b,
+                0f,
+                1f,
+                "0.00",
+                scale,
+                controlHint: ExhaustColorSliderHint(stopHint, channelHint, 3));
+            y += rowH;
+
+            var swatchRect = new Rect(panelRect.x, y + 6f * scale, panelRect.width, 28f * scale);
+            RegisterGameUiRect(swatchRect);
+            DrawColorSwatch(swatchRect, new Color(r, g, b, 1f));
+            y += 36f * scale;
+
+            Color editedColor = new Color(r, g, b, 1f);
+            bool colorsChanged = !Mathf.Approximately(maxMph, shipExhaustColorMaxMph)
+                || !Mathf.Approximately(stopSpeed, storedStop.speedMph)
+                || !ColorsApproximately(storedColor, editedColor);
+
+            if (colorsChanged)
+            {
+                shipExhaustColorMaxMph = maxMph;
+                RtgExhaustColorStop updatedStop = storedStop;
+                updatedStop.speedMph = stopSpeed;
+                SetExhaustColorChannel(ref updatedStop, _exhaustColorChannelIndex, editedColor);
+                shipExhaustColorStops[_exhaustColorStopEditIndex] = updatedStop;
+                shipExhaustColorStops = RtgExhaustColorProfile.NormalizeStops(
+                    shipExhaustColorStops,
+                    shipExhaustColorMaxMph);
+                _exhaustColorPreviewMph = shipExhaustColorStops[_exhaustColorStopEditIndex].speedMph;
+                ApplyShipExhaustColors();
+            }
+
+            return y;
+        }
+
+        private static bool ColorsApproximately(Color a, Color b)
+        {
+            return Mathf.Approximately(a.r, b.r)
+                && Mathf.Approximately(a.g, b.g)
+                && Mathf.Approximately(a.b, b.b);
+        }
+
+        private static int ExhaustColorSliderHint(int stopIndex, int channelIndex, int componentIndex)
+        {
+            unchecked
+            {
+                return 0x52C00000 ^ (stopIndex << 16) ^ (channelIndex << 8) ^ componentIndex;
+            }
+        }
+
+        private static Color GetExhaustColorChannel(RtgExhaustColorStop stop, int channelIndex)
+        {
+            return channelIndex switch
+            {
+                1 => stop.cavityCore,
+                2 => stop.flame,
+                3 => stop.glow,
+                _ => stop.cavityOuter,
+            };
+        }
+
+        private static void SetExhaustColorChannel(ref RtgExhaustColorStop stop, int channelIndex, Color color)
+        {
+            switch (channelIndex)
+            {
+                case 1:
+                    stop.cavityCore = color;
+                    break;
+                case 2:
+                    stop.flame = color;
+                    break;
+                case 3:
+                    stop.glow = color;
+                    break;
+                default:
+                    stop.cavityOuter = color;
+                    break;
+            }
+        }
+
+        private static void DrawColorSwatch(Rect rect, Color color)
+        {
+            Color previous = GUI.color;
+            GUI.color = new Color(0.12f, 0.18f, 0.28f, 1f);
+            GUI.Box(rect, GUIContent.none);
+            var inset = new Rect(rect.x + 2f, rect.y + 2f, rect.width - 4f, rect.height - 4f);
+            GUI.color = new Color(Mathf.Clamp01(color.r), Mathf.Clamp01(color.g), Mathf.Clamp01(color.b), 1f);
+            GUI.Box(inset, GUIContent.none);
+            GUI.color = previous;
+        }
+
+        private float DrawEnginePortTuningSection(
+            Rect panelRect,
+            float y,
+            float rowH,
+            float sectionHeaderH,
+            float buttonRowH,
+            float scale)
+        {
+            var sectionStyle = BrightLabel(Mathf.RoundToInt(14f * scale), new Color(0.88f, 0.94f, 1f), FontStyle.Bold);
+            GUI.Label(
+                new Rect(panelRect.x, y, panelRect.width, sectionHeaderH),
+                "Engine ports (hull local)",
+                sectionStyle);
+            y += sectionHeaderH;
+
+            float btnW = (panelRect.width - 8f * scale) / 3f;
+            var mainBtn = new Rect(panelRect.x, y, btnW, buttonRowH - 8f * scale);
+            var leftBtn = new Rect(mainBtn.xMax + 4f * scale, y, btnW, buttonRowH - 8f * scale);
+            var rightBtn = new Rect(leftBtn.xMax + 4f * scale, y, btnW, buttonRowH - 8f * scale);
+            RegisterGameUiRect(mainBtn);
+            RegisterGameUiRect(leftBtn);
+            RegisterGameUiRect(rightBtn);
+
+            var prevBtn = GUI.skin.button.fontSize;
+            GUI.skin.button.fontSize = Mathf.RoundToInt(13f * scale);
+            if (GUI.Button(mainBtn, _enginePortEditIndex == 0 ? "Main *" : "Main"))
+                _enginePortEditIndex = 0;
+            if (GUI.Button(leftBtn, _enginePortEditIndex == 1 ? "Left *" : "Left"))
+                _enginePortEditIndex = 1;
+            if (GUI.Button(rightBtn, _enginePortEditIndex == 2 ? "Right *" : "Right"))
+                _enginePortEditIndex = 2;
+            GUI.skin.button.fontSize = prevBtn;
+            y += buttonRowH;
+
+            Vector3 current = _enginePortEditIndex switch
+            {
+                1 => shipLeftEngineLocal,
+                2 => shipRightEngineLocal,
+                _ => shipMainEngineLocal,
+            };
+
+            float sliderMin = -shipSizeMeters * 0.75f;
+            float sliderMax = shipSizeMeters * 0.75f;
+            float aftMin = -shipSizeMeters * 1.1f;
+            float aftMax = 20f;
+
+            Vector3 previous = current;
+            float x = DrawSettingSlider(
+                new Rect(panelRect.x, y, panelRect.width, rowH),
+                "Port X (wings)",
+                current.x,
+                sliderMin,
+                sliderMax,
+                "0.0",
+                scale);
+            y += rowH;
+            float portY = DrawSettingSlider(
+                new Rect(panelRect.x, y, panelRect.width, rowH),
+                "Port Y (up)",
+                current.y,
+                sliderMin * 0.35f,
+                sliderMax * 0.35f,
+                "0.0",
+                scale);
+            y += rowH;
+            float z = DrawSettingSlider(
+                new Rect(panelRect.x, y, panelRect.width, rowH),
+                "Port Z (aft -)",
+                current.z,
+                aftMin,
+                aftMax,
+                "0.0",
+                scale);
+            y += rowH;
+
+            Vector3 updated = new Vector3(x, portY, z);
+            if (updated != previous)
+            {
+                shipUseCustomEnginePorts = true;
+                switch (_enginePortEditIndex)
+                {
+                    case 1:
+                        shipLeftEngineLocal = updated;
+                        break;
+                    case 2:
+                        shipRightEngineLocal = updated;
+                        break;
+                    default:
+                        shipMainEngineLocal = updated;
+                        break;
+                }
+
+                ApplyShipEnginePorts();
+            }
+
+            float previousLength = shipExhaustLengthScale;
+            float length = DrawSettingSlider(
+                new Rect(panelRect.x, y, panelRect.width, rowH),
+                "Flame length",
+                shipExhaustLengthScale,
+                0.15f,
+                2.5f,
+                "0.00",
+                scale);
+            y += rowH;
+            if (!Mathf.Approximately(length, previousLength))
+            {
+                shipExhaustLengthScale = length;
+                ApplyShipExhaustLength();
+            }
+
+            y += 8f * scale;
+            GUI.Label(
+                new Rect(panelRect.x, y, panelRect.width, sectionHeaderH),
+                "Cavity fill",
+                sectionStyle);
+            y += sectionHeaderH;
+
+            var cavityMainBtn = new Rect(panelRect.x, y, btnW, buttonRowH - 8f * scale);
+            var cavityLeftBtn = new Rect(cavityMainBtn.xMax + 4f * scale, y, btnW, buttonRowH - 8f * scale);
+            var cavityRightBtn = new Rect(cavityLeftBtn.xMax + 4f * scale, y, btnW, buttonRowH - 8f * scale);
+            RegisterGameUiRect(cavityMainBtn);
+            RegisterGameUiRect(cavityLeftBtn);
+            RegisterGameUiRect(cavityRightBtn);
+
+            GUI.skin.button.fontSize = Mathf.RoundToInt(13f * scale);
+            if (GUI.Button(cavityMainBtn, _cavityEditIndex == 0 ? "Main *" : "Main"))
+                _cavityEditIndex = 0;
+            if (GUI.Button(cavityLeftBtn, _cavityEditIndex == 1 ? "Left *" : "Left"))
+                _cavityEditIndex = 1;
+            if (GUI.Button(cavityRightBtn, _cavityEditIndex == 2 ? "Right *" : "Right"))
+                _cavityEditIndex = 2;
+            GUI.skin.button.fontSize = prevBtn;
+            y += buttonRowH;
+
+            float previousCavitySize = GetSelectedCavityTuning().sizeMeters;
+            float cavitySize = DrawSettingSlider(
+                new Rect(panelRect.x, y, panelRect.width, rowH),
+                "Cavity size (m)",
+                GetSelectedCavityTuning().sizeMeters,
+                0.08f,
+                2f,
+                "0.00",
+                scale);
+            y += rowH;
+
+            float previousCavityOffsetX = GetSelectedCavityTuning().offsetXMeters;
+            float cavityOffsetX = DrawSettingSlider(
+                new Rect(panelRect.x, y, panelRect.width, rowH),
+                "Cavity offset X",
+                GetSelectedCavityTuning().offsetXMeters,
+                -5f,
+                5f,
+                "0.00",
+                scale);
+            y += rowH;
+
+            float previousCavityOffsetY = GetSelectedCavityTuning().offsetYMeters;
+            float cavityOffsetY = DrawSettingSlider(
+                new Rect(panelRect.x, y, panelRect.width, rowH),
+                "Cavity offset Y",
+                GetSelectedCavityTuning().offsetYMeters,
+                -5f,
+                5f,
+                "0.00",
+                scale);
+            y += rowH;
+
+            if (_cavityDepthDraftEngineIndex != _cavityEditIndex)
+            {
+                _cavityDepthDraftEngineIndex = _cavityEditIndex;
+                _cavityDepthDraft = GetSelectedCavityTuning().depthOffsetMeters.ToString("0.0", CultureInfo.InvariantCulture);
+            }
+
+            float previousCavityDepth = GetSelectedCavityTuning().depthOffsetMeters;
+            float cavityDepth = DrawSettingSliderWithInput(
+                new Rect(panelRect.x, y, panelRect.width, rowH),
+                "Cavity depth",
+                GetSelectedCavityTuning().depthOffsetMeters,
+                -50f,
+                50f,
+                "0.0",
+                scale,
+                $"CavityDepth_{_cavityEditIndex}",
+                ref _cavityDepthDraft);
+            y += rowH;
+
+            float previousCavityIntensity = GetSelectedCavityTuning().intensity;
+            float cavityIntensity = DrawSettingSlider(
+                new Rect(panelRect.x, y, panelRect.width, rowH),
+                "Cavity intensity",
+                GetSelectedCavityTuning().intensity,
+                0.2f,
+                5f,
+                "0.00",
+                scale);
+            y += rowH;
+
+            float previousCavityCore = GetSelectedCavityTuning().coreRatio;
+            float cavityCore = DrawSettingSlider(
+                new Rect(panelRect.x, y, panelRect.width, rowH),
+                "Cavity core",
+                GetSelectedCavityTuning().coreRatio,
+                0.15f,
+                0.95f,
+                "0.00",
+                scale);
+            y += rowH;
+
+            RtgEngineCavityTuning updatedCavity = new RtgEngineCavityTuning
+            {
+                sizeMeters = cavitySize,
+                offsetXMeters = cavityOffsetX,
+                offsetYMeters = cavityOffsetY,
+                depthOffsetMeters = cavityDepth,
+                intensity = cavityIntensity,
+                coreRatio = cavityCore,
+            };
+            if (!Mathf.Approximately(cavitySize, previousCavitySize)
+                || !Mathf.Approximately(cavityOffsetX, previousCavityOffsetX)
+                || !Mathf.Approximately(cavityOffsetY, previousCavityOffsetY)
+                || !Mathf.Approximately(cavityDepth, previousCavityDepth)
+                || !Mathf.Approximately(cavityIntensity, previousCavityIntensity)
+                || !Mathf.Approximately(cavityCore, previousCavityCore))
+            {
+                SetSelectedCavityTuning(updatedCavity);
+                ApplyShipCavityTuning();
+            }
+
+            float estimateW = (panelRect.width - 8f * scale) * 0.5f;
+            var estimateRect = new Rect(panelRect.x, y, estimateW, buttonRowH - 8f * scale);
+            var resetRect = new Rect(estimateRect.xMax + 8f * scale, y, estimateW, buttonRowH - 8f * scale);
+            RegisterGameUiRect(estimateRect);
+            RegisterGameUiRect(resetRect);
+            GUI.skin.button.fontSize = Mathf.RoundToInt(13f * scale);
+            if (GUI.Button(estimateRect, "Auto-detect"))
+            {
+                if (_shipVisual != null && _shipVisual.TryGetEstimatedEnginePorts(out RtgGliderEngineMounts mounts))
+                {
+                    shipUseCustomEnginePorts = true;
+                    shipMainEngineLocal = mounts.Main;
+                    shipLeftEngineLocal = mounts.Left;
+                    shipRightEngineLocal = mounts.Right;
+                    ApplyShipEnginePorts();
+                    Debug.Log(
+                        $"[RTG] Auto-detected engine ports — main={mounts.Main} " +
+                        $"left={mounts.Left} right={mounts.Right}");
+                }
+                else
+                {
+                    Debug.LogWarning(
+                        "[RTG] Auto-detect failed — Tripo hull mesh may be unreadable. " +
+                        "Nudge Port X/Y/Z manually or use Blockout.");
+                }
+            }
+
+            if (GUI.Button(resetRect, "Blockout"))
+            {
+                RtgGliderEngineMounts defaults = RtgGliderEngineMounts.BlockoutDefaults(shipSizeMeters);
+                shipUseCustomEnginePorts = true;
+                shipMainEngineLocal = defaults.Main;
+                shipLeftEngineLocal = defaults.Left;
+                shipRightEngineLocal = defaults.Right;
+                ApplyShipEnginePorts();
+            }
+
+            GUI.skin.button.fontSize = prevBtn;
+            y += buttonRowH;
+            return y;
+        }
+
+        private float DrawHullTuningSection(
+            Rect panelRect,
+            float y,
+            float rowH,
+            float sectionHeaderH,
+            float buttonRowH,
+            float scale)
+        {
+            var sectionStyle = BrightLabel(Mathf.RoundToInt(14f * scale), new Color(0.88f, 0.94f, 1f), FontStyle.Bold);
+            GUI.Label(
+                new Rect(panelRect.x, y, panelRect.width, sectionHeaderH),
+                "Hull orientation",
+                sectionStyle);
+            y += sectionHeaderH;
+
+            Vector3 previousEuler = shipHullEulerOffset;
+            float previousHeading = shipHeadingOffsetDegrees;
+
+            float pitchX = DrawSettingSlider(
+                new Rect(panelRect.x, y, panelRect.width, rowH),
+                "Hull pitch X",
+                shipHullEulerOffset.x,
+                -90f,
+                90f,
+                "0",
+                scale);
+            y += rowH;
+
+            float yawY = DrawSettingSlider(
+                new Rect(panelRect.x, y, panelRect.width, rowH),
+                "Hull yaw Y",
+                shipHullEulerOffset.y,
+                -180f,
+                180f,
+                "0",
+                scale);
+            y += rowH;
+
+            float rollZ = DrawSettingSlider(
+                new Rect(panelRect.x, y, panelRect.width, rowH),
+                "Hull roll Z",
+                shipHullEulerOffset.z,
+                -90f,
+                90f,
+                "0",
+                scale);
+            y += rowH;
+
+            float heading = DrawSettingSlider(
+                new Rect(panelRect.x, y, panelRect.width, rowH),
+                "Heading offset",
+                shipHeadingOffsetDegrees,
+                -180f,
+                180f,
+                "0",
+                scale);
+            y += rowH;
+
+            bool autoOrient = DrawSettingToggle(
+                new Rect(panelRect.x, y, panelRect.width, rowH),
+                "Auto-orient hull",
+                shipAutoOrientImportedHull,
+                scale);
+            y += rowH;
+
+            float buttonW = (panelRect.width - 8f * scale) * 0.5f;
+            var saveRect = new Rect(panelRect.x, y, buttonW, buttonRowH - 8f * scale);
+            var reloadRect = new Rect(saveRect.xMax + 8f * scale, y, buttonW, buttonRowH - 8f * scale);
+            RegisterGameUiRect(saveRect);
+            RegisterGameUiRect(reloadRect);
+
+            var prevBtn = GUI.skin.button.fontSize;
+            GUI.skin.button.fontSize = Mathf.RoundToInt(14f * scale);
+            if (GUI.Button(saveRect, "Save tuning"))
+                SaveShipHullTuning();
+            if (GUI.Button(reloadRect, "Reload"))
+                ReloadShipHullTuning();
+            GUI.skin.button.fontSize = prevBtn;
+            y += buttonRowH;
+
+            Vector3 newEuler = new Vector3(pitchX, yawY, rollZ);
+            if (autoOrient != shipAutoOrientImportedHull)
+            {
+                shipAutoOrientImportedHull = autoOrient;
+                shipHullEulerOffset = newEuler;
+                shipHeadingOffsetDegrees = heading;
+                RefreshMarkerVisual();
+                return y;
+            }
+
+            if (newEuler != previousEuler || !Mathf.Approximately(heading, previousHeading))
+            {
+                shipHullEulerOffset = newEuler;
+                shipHeadingOffsetDegrees = heading;
+                ApplyShipHullTuning();
+            }
+
+            return y;
         }
 
         private static Texture2D GetSettingsGearIcon()
@@ -1907,7 +2838,8 @@ namespace RoutesToGlory.Game
             int id = GUIUtility.GetControlID(controlHint, FocusType.Passive);
             Event e = Event.current;
             Rect hitRect = BuildVerticalLeverHitRect(trackRect, normalized, knobScale);
-            _gameUiRects.Add(hitRect);
+            Rect screenHitRect = ToScreenGuiRect(hitRect);
+            RegisterGameUiRect(hitRect);
 
             switch (e.type)
             {
@@ -1915,12 +2847,12 @@ namespace RoutesToGlory.Game
                     if (e.button != 0)
                         break;
 
-                    if (hitRect.Contains(e.mousePosition))
+                    if (screenHitRect.Contains(e.mousePosition))
                     {
                         GUIUtility.hotControl = id;
                         _activeLeverHint = controlHint;
-                        _activeLeverTrack = trackRect;
-                        value = ValueFromVerticalTrack(e.mousePosition.y, trackRect, min, max);
+                        _activeLeverTrack = ToScreenGuiRect(trackRect);
+                        value = ValueFromVerticalTrack(e.mousePosition.y, _activeLeverTrack, min, max);
                         e.Use();
                     }
 
@@ -1955,6 +2887,77 @@ namespace RoutesToGlory.Game
             return Mathf.Lerp(min, max, t);
         }
 
+        private static float ValueFromHorizontalTrack(float mouseX, Rect trackRect, float min, float max)
+        {
+            float t = Mathf.InverseLerp(trackRect.xMin, trackRect.xMax, mouseX);
+            return Mathf.Lerp(min, max, t);
+        }
+
+        private static void DrawHorizontalSliderVisual(Rect trackRect, float value, float min, float max)
+        {
+            GUIStyle sliderStyle = GUI.skin.horizontalSlider;
+            GUIStyle thumbStyle = GUI.skin.horizontalSliderThumb;
+            sliderStyle.Draw(trackRect, GUIContent.none, false, false, false, false);
+
+            float t = Mathf.InverseLerp(min, max, value);
+            float thumbW = thumbStyle.fixedWidth > 0f ? thumbStyle.fixedWidth : 13f;
+            float thumbH = thumbStyle.fixedHeight > 0f ? thumbStyle.fixedHeight : trackRect.height;
+            float thumbX = Mathf.Lerp(trackRect.x, trackRect.xMax - thumbW, t);
+            float thumbY = trackRect.y + (trackRect.height - thumbH) * 0.5f;
+            thumbStyle.Draw(
+                new Rect(thumbX, thumbY, thumbW, thumbH),
+                GUIContent.none,
+                false,
+                false,
+                false,
+                false);
+        }
+
+        private static float HorizontalSettingSlider(
+            Rect trackRect,
+            float value,
+            float min,
+            float max,
+            int controlHint)
+        {
+            int id = GUIUtility.GetControlID(controlHint, FocusType.Passive);
+            Event e = Event.current;
+            Rect hitRect = trackRect;
+
+            switch (e.type)
+            {
+                case EventType.MouseDown:
+                    if (e.button != 0 || !hitRect.Contains(e.mousePosition))
+                        break;
+
+                    GUIUtility.hotControl = id;
+                    _activeSettingSliderHint = controlHint;
+                    value = ValueFromHorizontalTrack(e.mousePosition.x, hitRect, min, max);
+                    e.Use();
+                    break;
+                case EventType.MouseDrag:
+                    if (GUIUtility.hotControl != id)
+                        break;
+
+                    value = ValueFromHorizontalTrack(e.mousePosition.x, hitRect, min, max);
+                    e.Use();
+                    break;
+                case EventType.MouseUp:
+                    if (GUIUtility.hotControl != id || e.button != 0)
+                        break;
+
+                    GUIUtility.hotControl = 0;
+                    _activeSettingSliderHint = -1;
+                    e.Use();
+                    break;
+                case EventType.Repaint:
+                    DrawHorizontalSliderVisual(trackRect, value, min, max);
+                    break;
+            }
+
+            return Mathf.Clamp(value, min, max);
+        }
+
         private float DrawSettingSlider(
             Rect rect,
             string label,
@@ -1962,9 +2965,12 @@ namespace RoutesToGlory.Game
             float min,
             float max,
             string format = "0.0",
-            float scale = 1f)
+            float scale = 1f,
+            float step = 0f,
+            string controlName = null,
+            int controlHint = 0)
         {
-            _gameUiRects.Add(rect);
+            RegisterGameUiRect(rect);
 
             int fontSize = Mathf.RoundToInt(14f * scale);
             var labelStyle = BrightLabel(fontSize, new Color(0.93f, 0.97f, 1f), FontStyle.Bold);
@@ -1982,16 +2988,107 @@ namespace RoutesToGlory.Game
                 rect.y + 22f * scale,
                 54f * scale,
                 22f * scale);
-            _gameUiRects.Add(sliderRect);
+            RegisterGameUiRect(sliderRect);
 
-            float newValue = GUI.HorizontalSlider(sliderRect, value, min, max);
+            float sliderValue = controlHint != 0
+                ? HorizontalSettingSlider(sliderRect, value, min, max, controlHint)
+                : GUI.HorizontalSlider(sliderRect, value, min, max);
+
+            float newValue = step > 0f
+                ? SnapSettingValue(sliderValue, min, max, step)
+                : sliderValue;
             GUI.Label(valueRect, newValue.ToString(format), valueStyle);
             return newValue;
         }
 
+        private float DrawSettingSliderWithInput(
+            Rect rect,
+            string label,
+            float value,
+            float min,
+            float max,
+            string format,
+            float scale,
+            string controlName,
+            ref string draft)
+        {
+            RegisterGameUiRect(rect);
+
+            int fontSize = Mathf.RoundToInt(14f * scale);
+            var labelStyle = BrightLabel(fontSize, new Color(0.93f, 0.97f, 1f), FontStyle.Bold);
+
+            GUI.Label(new Rect(rect.x, rect.y, rect.width, 20f * scale), label, labelStyle);
+
+            const float valueFieldW = 76f;
+            var sliderRect = new Rect(
+                rect.x,
+                rect.y + 24f * scale,
+                rect.width - (valueFieldW + 6f) * scale,
+                22f * scale);
+            var valueRect = new Rect(
+                rect.xMax - valueFieldW * scale,
+                rect.y + 22f * scale,
+                valueFieldW * scale,
+                22f * scale);
+            RegisterGameUiRect(sliderRect);
+            RegisterGameUiRect(valueRect);
+
+            int sliderHint = $"{controlName}_Slider".GetHashCode();
+            float sliderValue = HorizontalSettingSlider(sliderRect, value, min, max, sliderHint);
+
+            var prevFieldFont = GUI.skin.textField.fontSize;
+            GUI.skin.textField.fontSize = Mathf.RoundToInt(14f * scale);
+            GUI.SetNextControlName(controlName);
+            string nextDraft = GUI.TextField(valueRect, draft ?? string.Empty);
+            GUI.skin.textField.fontSize = prevFieldFont;
+
+            bool editing = GUI.GetNameOfFocusedControl() == controlName;
+            draft = nextDraft;
+
+            if (editing)
+            {
+                if (TryParseSettingFloat(nextDraft, out float typedValue))
+                    return Mathf.Clamp(typedValue, min, max);
+
+                return value;
+            }
+
+            float clampedSlider = Mathf.Clamp(sliderValue, min, max);
+            bool sliderMoved = !Mathf.Approximately(sliderValue, value);
+            if (sliderMoved)
+            {
+                draft = clampedSlider.ToString(format, CultureInfo.InvariantCulture);
+                return clampedSlider;
+            }
+
+            if (TryParseSettingFloat(draft, out float fromDraft))
+                return Mathf.Clamp(fromDraft, min, max);
+
+            draft = clampedSlider.ToString(format, CultureInfo.InvariantCulture);
+            return clampedSlider;
+        }
+
+        private static bool TryParseSettingFloat(string text, out float value)
+        {
+            return float.TryParse(
+                text,
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out value);
+        }
+
+        private static float SnapSettingValue(float value, float min, float max, float step)
+        {
+            if (step <= 0f)
+                return Mathf.Clamp(value, min, max);
+
+            value = Mathf.Round(value / step) * step;
+            return Mathf.Clamp(value, min, max);
+        }
+
         private bool DrawSettingToggle(Rect rect, string label, bool value, float scale = 1f)
         {
-            _gameUiRects.Add(rect);
+            RegisterGameUiRect(rect);
 
             int fontSize = Mathf.RoundToInt(14f * scale);
             var labelStyle = BrightLabel(fontSize, new Color(0.93f, 0.97f, 1f), FontStyle.Bold);
@@ -2004,7 +3101,7 @@ namespace RoutesToGlory.Game
                 rect.y + (rect.height - toggleH) * 0.5f,
                 toggleW,
                 toggleH);
-            _gameUiRects.Add(toggleRect);
+            RegisterGameUiRect(toggleRect);
 
             GUI.Label(labelRect, label, labelStyle);
 
@@ -2018,12 +3115,12 @@ namespace RoutesToGlory.Game
 
         private string DrawSettingTextField(Rect rect, string label, string value, float scale = 1f)
         {
-            _gameUiRects.Add(rect);
+            RegisterGameUiRect(rect);
 
             int fontSize = Mathf.RoundToInt(13f * scale);
             var labelStyle = BrightLabel(fontSize, new Color(0.93f, 0.97f, 1f), FontStyle.Bold);
             var fieldRect = new Rect(rect.x, rect.y + 18f * scale, rect.width, rect.height - 18f * scale);
-            _gameUiRects.Add(fieldRect);
+            RegisterGameUiRect(fieldRect);
 
             GUI.Label(new Rect(rect.x, rect.y, rect.width, 16f * scale), label, labelStyle);
 
@@ -2141,7 +3238,7 @@ namespace RoutesToGlory.Game
 
             Color titleColor = new Color(0.97f, 0.99f, 1f);
             Color subColor = new Color(0.93f, 0.97f, 1f);
-            Color tierColor = Color.Lerp(new Color(0.98f, 0.99f, 1f), ThrottleGlowColor(speedThrottle), 0.4f);
+            Color tierColor = Color.Lerp(new Color(0.98f, 0.99f, 1f), ThrottleGlowColor(currentMph), 0.4f);
             Color mphColor = new Color(1f, 1f, 1f);
             Color mphOutline = new Color(0.02f, 0.06f, 0.14f, 0.95f);
 
@@ -2213,7 +3310,7 @@ namespace RoutesToGlory.Game
             float fillT = Mathf.InverseLerp(minThrottle, maxThrottle, speedThrottle);
             float fillH = trackRect.height * fillT;
             var fillRect = new Rect(trackRect.x + 4f, trackRect.yMax - fillH - 4f, trackRect.width - 8f, fillH);
-            Color glowColor = ThrottleGlowColor(speedThrottle);
+            Color glowColor = ThrottleGlowColor(currentMph);
 
             GUI.color = new Color(0.12f, 0.18f, 0.28f, cockpitAnchored ? 0.72f : 1f);
             GUI.Box(trackRect, GUIContent.none);
@@ -2246,7 +3343,7 @@ namespace RoutesToGlory.Game
 
             GUI.Label(
                 new Rect(panelRect.x, footerTop + 4f, panelRect.width, 22f),
-                ThrottleTierLabel(speedThrottle),
+                ThrottleTierLabel(currentMph),
                 tierStyle);
             if (!cockpitAnchored)
             {
@@ -2275,7 +3372,7 @@ namespace RoutesToGlory.Game
             float panelH = panelHeightOverride ?? Mathf.Min(320f * uiScale, Screen.height - margin - panelY);
             float headerH = 64f * uiScale;
             var panelRect = new Rect(panelX, panelY, width, panelH);
-            _gameUiRects.Add(panelRect);
+            RegisterGameUiRect(panelRect);
 
             bool portrait = Screen.height > Screen.width;
             float pitch = portrait ? cockpitPortraitPitchDegrees : cockpitLandscapePitchDegrees;
@@ -2335,20 +3432,19 @@ namespace RoutesToGlory.Game
             GUI.skin.label.fontSize = prevLabel;
         }
 
-        private static string ThrottleTierLabel(float throttle)
+        private string ThrottleTierLabel(float mph)
         {
-            if (throttle >= 2.5f) return "WARP";
-            if (throttle >= 1.5f) return "BURN";
-            if (throttle >= 0.75f) return "FAST";
+            EnsureExhaustColorStops();
+            if (mph >= shipExhaustColorStops[3].speedMph - 0.5f) return "WARP";
+            if (mph >= shipExhaustColorStops[2].speedMph) return "BURN";
+            if (mph >= shipExhaustColorStops[1].speedMph) return "FAST";
             return "CRUISE";
         }
 
-        private static Color ThrottleGlowColor(float throttle)
+        private Color ThrottleGlowColor(float mph)
         {
-            if (throttle >= 2.5f) return new Color(1f, 0.35f, 0.95f);
-            if (throttle >= 1.5f) return new Color(1f, 0.55f, 0.2f);
-            if (throttle >= 0.75f) return new Color(0.3f, 0.95f, 1f);
-            return new Color(0.35f, 0.75f, 0.95f);
+            EnsureExhaustColorStops();
+            return RtgExhaustColorProfile.Sample(mph, shipExhaustColorStops, shipExhaustColorMaxMph, s => s.glow);
         }
 
         private string FormatSpeedLabel()
@@ -2716,6 +3812,9 @@ namespace RoutesToGlory.Game
 
             _panned = false;
             _hasHeadingSample = false;
+            _hasMotionSample = false;
+            _groundSpeedMps = 0f;
+            _prevTravelHeadingRad = _travelHeadingRad;
             ResetDisplayPositionSmoothing();
             if (_marker != null)
             {

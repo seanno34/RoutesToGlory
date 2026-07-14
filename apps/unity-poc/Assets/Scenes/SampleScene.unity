@@ -168,6 +168,12 @@ MonoBehaviour:
   sizeMeters: 42
   headingOffsetDegrees: 0
   groundClearanceMeters: 1
+  importedHullPrefab: {fileID: 0}
+  hullLocalEulerOffset: {x: 0, y: 0, z: 0}
+  autoOrientImportedHull: 1
+  hullScaleMultiplier: 1
+  maxBankDegrees: 22
+  maxThrustPitchDegrees: 5
 --- !u!1 &265368706
 GameObject:
   m_ObjectHideFlags: 0
@@ -287,8 +293,16 @@ MonoBehaviour:
   shipTexture: {fileID: 0}
   cockpitTexture: {fileID: 0}
   cockpitPortraitTexture: {fileID: 0}
-  shipSizeMeters: 42
-  shipHeadingOffsetDegrees: 0
+  shipSizeMeters: 24
+  shipHullPrefab: {fileID: 919132149155446097, guid: b70541d2e88b44d5c971092bb889aad0, type: 3}
+  shipHullEulerOffset: {x: 0, y: -129.90565, z: 0}
+  shipAutoOrientImportedHull: 1
+  shipHeadingOffsetDegrees: -180
+  shipUseCustomEnginePorts: 0
+  shipMainEngineLocal: {x: 0, y: 0, z: 0}
+  shipLeftEngineLocal: {x: 0, y: 0, z: 0}
+  shipRightEngineLocal: {x: 0, y: 0, z: 0}
+  shipExhaustLengthScale: 1
   routeMode: 2
   simulatedSpeed: 100
   tourSpeed: 500
@@ -377,6 +391,16 @@ MonoBehaviour:
   cockpitBeamWidthStartM: 5
   cockpitBeamLengthM: 50
   cockpitBeamGlowMultiplier: 1.6
+  enableBeamAudio: 1
+  beamHumClip: {fileID: 0}
+  vaporizeClip: {fileID: 0}
+  beamHumVolume: 0.55
+  beamArmVolume: 0.5
+  vaporizeVolume: 0.55
+  vaporizeMinInterval: 0.09
+  enableBeamHaptics: 1
+  beamHapticInterval: 0.34
+  beamHapticDurationMs: 18
 --- !u!1 &377447296
 GameObject:
   m_ObjectHideFlags: 0
@@ -812,9 +836,8 @@ MonoBehaviour:
   empireId: f9efe845-bf99-4ccd-8c90-4762094c185e
   sampleFileName: sample-world-map.json
   groundHeightMeters: 1476
-  settlementFloatHeight: 120
-  resourceFloatHeight: 70
-  labelSizeFactor: 0.06
+  groundMarkerClearanceM: 6
+  groundLabelSizeFactor: 0.09
   labelColor: {r: 0.9, g: 0.98, b: 1, a: 1}
   loadOnPlay: 1
   scatterForTapTest: 1
@@ -1121,6 +1144,7 @@ GameObject:
   - component: {fileID: 1425919402}
   - component: {fileID: 1425919401}
   - component: {fileID: 1425919405}
+  - component: {fileID: 1425919406}
   m_Layer: 0
   m_Name: RTG Fly Camera
   m_TagString: MainCamera
@@ -1136,7 +1160,7 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1425919399}
   serializedVersion: 2
-  m_LocalRotation: {x: 0.3007058, y: 3.5763875e-17, z: -4.1137412e-18, w: 0.95371693}
+  m_LocalRotation: {x: 0.3007058, y: 2.2650199e-17, z: -5.9909e-18, w: 0.95371693}
   m_LocalPosition: {x: 2.3280804e-10, y: 1200, z: -0.00093125924}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
@@ -1264,11 +1288,11 @@ MonoBehaviour:
   _localToGlobeFixedMatrix:
     c0:
       x: 0.9641792465240623
-      y: -0.2652515420733528
-      z: -0.000000000000000042626472174160377
+      y: -0.2652515420733527
+      z: -0.000000000000000012292568858994937
       w: 0
     c1:
-      x: -0.05623637598487907
+      x: -0.0562363759848791
       y: -0.20441708349936794
       z: 0.9772671652584857
       w: 0
@@ -1378,6 +1402,14 @@ MonoBehaviour:
     m_VarianceClampScale: 0.9
     m_ContrastAdaptiveSharpening: 0
   m_Version: 2
+--- !u!81 &1425919406
+AudioListener:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1425919399}
+  m_Enabled: 1
 --- !u!1 &1964602097
 GameObject:
   m_ObjectHideFlags: 0
