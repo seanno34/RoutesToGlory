@@ -1,8 +1,8 @@
 # Glider Hero Asset — Commission Brief & Asset Store Search Spec
 
 **Purpose:** Source a production-quality 3D player ship for Routes to Glory, matching the approved concept art `glider_01`.  
-**Priority:** Moved ahead of remaining POC items (cockpit look-around, hostile ordnance).  
-**Target project:** `apps/game` (production Unity client). POC Phase A blockout in `apps/unity-poc` proves the pipeline.
+**Status (2026-07-14):** **Satisfied for POC/v1** — Tripo `futuristic_fighter_3d_model` integrated with socket exhaust; accepted as production-ready. Revisit this brief only if a visual upgrade becomes necessary.  
+**Target project:** `apps/game` (production Unity client). POC in `apps/unity-poc` carries the Tripo prefab forward.
 
 **Reference art:** `apps/images/glider_01.png` (attach to commission; include in Asset Store evaluation)
 

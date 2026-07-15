@@ -159,11 +159,11 @@ Prototype is "done" when we can make a confident go/no-go decision against **bot
 - [x] **Alien terrain dressing** — Procedural scatter (`RtgTerrainScatter`) dresses revealed fog tiles; **Pathfinder beam** (`RtgPathfinderBeam`) activates on proximity and vaporizes props; terrain clearance glides over hills
 - [x] **Ground-anchored resource markers** — `RtgGroundMarkerVisual` glow pads + per-resource deposits on terrain; legacy floating orbs removed
 - [x] **Glider combat vehicle presentation (Phase A)** — Low-poly 3D blockout (`RtgGliderBlockoutMesh`), blob shadow, particle afterburner; proves Unity 3D pipeline on device
-- [ ] **Glider hero asset (Phase B)** — Production mesh from `glider_01`; see [GLIDER_HERO_ASSET_BRIEF.md](GLIDER_HERO_ASSET_BRIEF.md). Asset Store or commission → integrate in POC, carry to `apps/game`
-- [ ] **Cockpit look-around & rear view** *(deferred)* — Tap-and-drag yaw/pitch in cockpit; rear backup camera inset
-- [ ] **Hostile ordnance** *(deferred)* — Client VFX + targeting in POC; server combat resolver stays lightweight
+- [x] **Glider hero asset (Phase B)** — Tripo `futuristic_fighter_3d_model` integrated with socket exhaust VFX; accepted as production-ready for POC/v1 (visual polish optional later). See [GLIDER_HERO_ASSET_BRIEF.md](GLIDER_HERO_ASSET_BRIEF.md) if revisiting art.
+- [ ] **Cockpit look-around & rear view** — Tap-and-drag yaw/pitch in cockpit; rear backup camera inset (`RtgCockpitRearCamera` scaffolded, needs wiring)
+- [ ] **Hostile ordnance** — Client VFX + targeting when hostiles in range; server combat resolver stays lightweight
 
-**Status (2026-07-13):** Phase 1 complete. Phase 2 core loop done; **glider hero asset (Phase B) is next** — cockpit/ordnance deferred until after hero mesh integration.
+**Status (2026-07-14):** Phase 1 complete. Phase 2 **almost done** — cockpit drag-look and ordnance are the remaining active POC items before go/no-go.
 
 On **go** (both phases): finalize [POC_TO_PRODUCTION.md](POC_TO_PRODUCTION.md) and start `apps/game` on production-quality foundations.
 
@@ -281,3 +281,5 @@ apps/api/src/routes/game.ts              # HTTP routes
 | 2026-07-12 | POC Phase 2 criteria added: route cleanup/snap, terrain dressing, resource tiles, glider VFX, cockpit look-around/rear view, hostile ordnance |
 | 2026-07-12 | POC Phase 2 route cleanup/snap: corridor snap, RDP simplify on save, server cleanup endpoint |
 | 2026-07-13 | Glider Phase A (3D blockout + blob shadow + particles); Phase B hero asset brief; cockpit/ordnance deferred |
+| 2026-07-14 | Phase B hero glider accepted (Tripo mesh + socket exhaust); Phase 2 active scope complete |
+| 2026-07-14 | Cockpit drag-look + ordnance undeferred — remaining Phase 2 POC work |
