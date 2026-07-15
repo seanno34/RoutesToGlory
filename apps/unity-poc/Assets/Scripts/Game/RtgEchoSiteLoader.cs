@@ -53,6 +53,10 @@ namespace RoutesToGlory.Game
         [Tooltip("Load automatically when entering Play mode.")]
         public bool loadOnPlay = true;
 
+        [Header("World presentation")]
+        [Tooltip("Pre-surveyed worlds show the full map at mission start — no fog of war. Frees GPU for terrain tiles.")]
+        public bool preSurveyedWorld = true;
+
         [Header("Tap-to-connect test layout")]
         [Tooltip("Offset nearby markers off the tour corridor so you can test tap-claim (near) and reject (far).")]
         public bool scatterForTapTest = true;
@@ -99,6 +103,7 @@ namespace RoutesToGlory.Game
         private void Awake()
         {
             RtgDevWorldConfig.TryApplyTo(this);
+            RtgWorldScanSettings.Apply(preSurveyedWorld);
         }
 
         private void Start()
@@ -214,8 +219,28 @@ namespace RoutesToGlory.Game
             NotifyRouteCleanup();
             RtgMapMarkerRegistry.Refresh();
             RtgMapConnections.Apply(map, empireId);
-            SetupFogOfWar(container, map?.routes);
+            RtgWorldScanSettings.Apply(preSurveyedWorld);
+            if (preSurveyedWorld)
+                ShutdownFogOfWar();
+            else
+                SetupFogOfWar(container, map?.routes);
+            EnsureAllMarkersVisible(container);
             SetupTerrainScatter();
+        }
+
+        private static void EnsureAllMarkersVisible(Transform container)
+        {
+            if (container == null) return;
+            foreach (RtgMapMarker marker in container.GetComponentsInChildren<RtgMapMarker>(true))
+                marker.gameObject.SetActive(true);
+        }
+
+        private static void ShutdownFogOfWar()
+        {
+            RtgFogOfWar fog = RtgFogOfWar.Find();
+            if (fog == null) return;
+            fog.ShutdownForPreSurvey();
+            fog.enabled = false;
         }
 
         private void SetupTerrainScatter()

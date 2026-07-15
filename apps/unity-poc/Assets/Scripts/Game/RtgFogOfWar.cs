@@ -113,6 +113,12 @@ namespace RoutesToGlory.Game
 
         private void Awake()
         {
+            if (RtgWorldScanSettings.PreSurveyedWorld)
+            {
+                enabled = false;
+                return;
+            }
+
 #if UNITY_2023_1_OR_NEWER
             _georeference = GetComponentInParent<CesiumGeoreference>()
                 ?? UnityEngine.Object.FindFirstObjectByType<CesiumGeoreference>();
@@ -131,6 +137,7 @@ namespace RoutesToGlory.Game
 
         private void Start()
         {
+            if (RtgWorldScanSettings.PreSurveyedWorld) return;
             if (!Application.isPlaying) return;
             StartCoroutine(DelayedBootstrap());
         }
@@ -166,6 +173,8 @@ namespace RoutesToGlory.Game
 
         public void OnMapSpawned(Transform markersContainer, RtgRoute[] routes = null)
         {
+            if (RtgWorldScanSettings.PreSurveyedWorld) return;
+
             _markerRoot = markersContainer;
             if (!Application.isPlaying) return;
 
@@ -303,6 +312,8 @@ namespace RoutesToGlory.Game
 
         public void ApplyExplorationDelta(string[] newlyRevealedTileIds, string[] newResourceNodeIds)
         {
+            if (RtgWorldScanSettings.PreSurveyedWorld) return;
+
             if (newlyRevealedTileIds != null)
             {
                 foreach (string tileId in newlyRevealedTileIds)
@@ -329,6 +340,7 @@ namespace RoutesToGlory.Game
         /// </summary>
         public bool IsTileDressable(string tileId)
         {
+            if (RtgWorldScanSettings.PreSurveyedWorld) return !string.IsNullOrEmpty(tileId);
             if (string.IsNullOrEmpty(tileId)) return false;
             if (_permanentReveal.ContainsKey(tileId)) return true;
             if (!_hasFocus) return false;
@@ -367,6 +379,7 @@ namespace RoutesToGlory.Game
 
         private void LateUpdate()
         {
+            if (RtgWorldScanSettings.PreSurveyedWorld) return;
             if (!_ready || !_sheetSpawned) return;
 
             if (!TryGetPlayerLatLng(out double playerLat, out double playerLng))
@@ -847,6 +860,20 @@ namespace RoutesToGlory.Game
             {
                 Destroy(_revealTexture);
                 _revealTexture = null;
+            }
+        }
+
+        /// <summary>
+        /// Tear down fog mesh, reveal texture, and coroutines when the world is pre-surveyed.
+        /// </summary>
+        public void ShutdownForPreSurvey()
+        {
+            StopAllCoroutines();
+            ClearFog();
+            if (_fogMaterial != null)
+            {
+                Destroy(_fogMaterial);
+                _fogMaterial = null;
             }
         }
 

@@ -6,8 +6,11 @@ using UnityEngine;
 namespace RoutesToGlory.Game
 {
     /// <summary>
-    /// Procedural alien terrain dressing: trees, rocks, and brush scattered on
-    /// revealed fog tiles around the player so the Survey World reads as a place.
+    /// Procedural alien terrain dressing: trees, rocks, and brush scattered around
+    /// the player. <b>POC note:</b> these are amateur placeholders built to test
+    /// the Pathfinder beam laser — not production environmental art. Replacement
+    /// deferred until after terrain tiles (Phase 1) and embedded resources (Phase 2).
+    /// See docs/REALISTIC_TERRAIN_POC.md Phase 3.
     /// </summary>
     public class RtgTerrainScatter : MonoBehaviour
     {
@@ -24,8 +27,8 @@ namespace RoutesToGlory.Game
         [Tooltip("Tile radius around the player to keep dressed.")]
         public int tileRadius = 4;
 
-        [Tooltip("Only dress tiles the fog system has permanently revealed (plus the live pin bubble).")]
-        public bool requireRevealedTiles = true;
+        [Tooltip("Only dress tiles the fog system has permanently revealed. Off when the world is pre-surveyed.")]
+        public bool requireRevealedTiles = false;
 
         [Header("Density (per tile)")]
         public int treesPerTile = 2;

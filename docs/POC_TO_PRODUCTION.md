@@ -13,7 +13,7 @@
 | Milestone | State |
 |---|---|
 | Phase 1 exit criteria | Done (2026-07-12) |
-| Phase 2 exit criteria | In progress — cockpit drag-look + ordnance remaining |
+| Phase 2 exit criteria | In progress — **realistic terrain/map tiles** active (textures → resources); cockpit drag-look + hostile ordnance deferred |
 | Production TDD (`apps/game`) | **Not started** — after Phase 2 complete |
 
 ---
@@ -30,6 +30,7 @@ These proved out in POC and should **not** be re-invented in production:
 | **Tap-to-connect** | Corridor distance to **path**, not GPS pin; `useNetworkRoutes` on server | `RtgTapToConnect`, `route-claim.ts` |
 | **GPS smoothing** | Velocity prediction + exponential smooth + glitch snap; tunable in-game | `RtgDeviceLocationProvider` |
 | **Cockpit UX pattern** | Overlay draw order (world → cockpit art → controls); anchor UI to cockpit art UV | `RtgCockpitView`, `RtgPlayerLocation` |
+| **Pre-surveyed world** | Full map visible at mission start; no client fog rendering | `RtgWorldScanSettings`, `RtgEchoSiteLoader.preSurveyedWorld` |
 | **Manual vs Auto Pilot** | Manual = real GPS; Auto Pilot = simulated route | `RtgPlayerLocation` |
 | **Field-test workflow** | `pnpm dev:field` (caffeinate + API) for Mac-as-server driving tests | `scripts/field-test-server.sh` |
 | **Shader / pipeline artifacts** | Light Road glow concept, alien overlay shader approach, tile pipeline scripts | Copy Shader Graphs + pipeline docs, not POC placeholders |
@@ -103,8 +104,9 @@ Documented during POC; acceptable for field testing, **not** for massive route n
 | Glider exhaust (Tripo + sockets + cones) | Done (POC) | See [EXHAUST_VFX_LESSONS.md](EXHAUST_VFX_LESSONS.md); mobile-validated via StreamingAssets tuning |
 | Glider hero asset (Phase B) | Done (POC) | Tripo mesh accepted production-ready; optional visual polish later — carry prefab + sockets to `apps/game` |
 | Ground-anchored resource markers | Done (POC) | `RtgGroundMarkerVisual` |
-| Cockpit look-around & rear view | **Next (POC)** | `RtgCockpitRearCamera` + look fields exist; wire drag-look + inset render |
-| Hostile ordnance | **Next (POC)** | Client VFX + targeting; lightweight server resolver |
+| Cockpit look-around & rear view | **Deferred (POC)** | `RtgCameraManager` + drag-look code path done; visual acceptance not met (dashboard slides). See `apps/unity-poc/docs/COCKPIT_DRAG_LOOK_SUMMARY.md` |
+| Realistic terrain & map tiles | **Active (POC)** | Civ-rival biome readability at glider pass-over; raster pipeline. Phase 2: tile-embedded resources. Phase 3: replace laser-test scatter props. See `apps/unity-poc/docs/REALISTIC_TERRAIN_POC.md` |
+| Hostile ordnance | **Deferred (POC)** | Client VFX + targeting; lightweight server resolver. See `apps/unity-poc/docs/HOSTILE_ORDNANCE_POC.md` |
 
 ---
 
@@ -141,3 +143,6 @@ When Phase 2 is done:
 | 2026-07-14 | Tripo glider exhaust: socket attachments, cone plumes, tuning JSON; lessons in EXHAUST_VFX_LESSONS.md |
 | 2026-07-14 | Hero glider (Tripo) accepted as production-ready; Phase 2 active scope complete |
 | 2026-07-14 | Cockpit drag-look + ordnance re-added to active POC scope (undeferred) |
+| 2026-07-14 | Cockpit drag-look **deferred** (visual UX); hostile ordnance is sole remaining go/no-go POC item |
+| 2026-07-14 | Priority shift: **realistic terrain/map tiles** replaces hostile ordnance as active POC |
+| 2026-07-14 | Unity fog of war **disabled** — pre-surveyed world fiction; GPU budget for terrain tiles |

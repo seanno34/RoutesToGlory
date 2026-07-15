@@ -1,0 +1,49 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!21 &2100000
+Material:
+  serializedVersion: 8
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: RTG_AlienTerrainBiome
+  m_Shader: {fileID: 4800000, guid: a7c3e8f12b4d5e6f8091a2b3c4d5e6f7, type: 3}
+  m_Parent: {fileID: 0}
+  m_ModifiedSerializedProperties: 0
+  m_ValidKeywords: []
+  m_InvalidKeywords: []
+  m_LightmapFlags: 4
+  m_EnableInstancingVariants: 0
+  m_DoubleSidedGI: 0
+  m_CustomRenderQueue: -1
+  stringTagMap:
+    RenderType: Opaque
+  disabledShaderPasses: []
+  m_LockedProperties: 
+  m_SavedProperties:
+    serializedVersion: 3
+    m_TexEnvs:
+    - _baseColorTexture:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    m_Ints: []
+    m_Floats:
+    - _DetailScale: 0.05
+    - _DetailStrength: 0.22
+    - _HeightScaleM: 45
+    - _NoiseScale: 0.008
+    - _NoiseStrength: 0.65
+    - _Saturation: 1.35
+    - _SlopeBlend: 1.4
+    - _SlopeRiftStart: 0.38
+    m_Colors:
+    - _ForestColor: {r: 0.14, g: 0.58, b: 0.3, a: 1}
+    - _HighlandColor: {r: 0.62, g: 0.78, b: 0.92, a: 1}
+    - _PlainColor: {r: 0.72, g: 0.55, b: 0.22, a: 1}
+    - _RiftColor: {r: 0.92, g: 0.38, b: 0.12, a: 1}
+    - _WetlandColor: {r: 0.18, g: 0.28, b: 0.52, a: 1}
+    - _baseColorFactor: {r: 1, g: 1, b: 1, a: 1}
+  m_BuildTextureStacks: []
+  m_AllowLocking: 1

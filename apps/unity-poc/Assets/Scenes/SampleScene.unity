@@ -18,8 +18,8 @@ RenderSettings:
   m_FogColor: {r: 0.34, g: 0.22, b: 0.46, a: 1}
   m_FogMode: 1
   m_FogDensity: 0.01
-  m_LinearFogStart: 1500
-  m_LinearFogEnd: 18000
+  m_LinearFogStart: 6000
+  m_LinearFogEnd: 22000
   m_AmbientSkyColor: {r: 0.2, g: 0.16, b: 0.3, a: 1}
   m_AmbientEquatorColor: {r: 0.114, g: 0.125, b: 0.133, a: 1}
   m_AmbientGroundColor: {r: 0.047, g: 0.043, b: 0.035, a: 1}
@@ -299,10 +299,68 @@ MonoBehaviour:
   shipAutoOrientImportedHull: 1
   shipHeadingOffsetDegrees: -180
   shipUseCustomEnginePorts: 0
+  shipMainExhaustAnchor:
+    span01: 0.5
+    height01: 0.38
+    aftInset01: 0.07
+  shipLeftExhaustAnchor:
+    span01: 0.24
+    height01: 0.36
+    aftInset01: 0.1
+  shipRightExhaustAnchor:
+    span01: 0.76
+    height01: 0.36
+    aftInset01: 0.1
   shipMainEngineLocal: {x: 0, y: 0, z: 0}
   shipLeftEngineLocal: {x: 0, y: 0, z: 0}
   shipRightEngineLocal: {x: 0, y: 0, z: 0}
+  shipEnginePortsMeshLocal: 1
   shipExhaustLengthScale: 1
+  mobilePlumeVisibilityBoost: 1.35
+  shipMainCavity:
+    sizeMeters: 0.42
+    offsetXMeters: 0
+    offsetYMeters: 0
+    depthOffsetMeters: 0.06
+    intensity: 1
+    coreRatio: 0.62
+    plumeMaxLengthMeters: 6
+    plumeLengthPower: 1.15
+    plumeBaseWidthScale: 1
+    plumeCoreWidthRatio: 0.58
+    plumeOffsetXMeters: 0
+    plumeOffsetYMeters: 0
+    plumeOffsetZMeters: 0
+  shipLeftCavity:
+    sizeMeters: 0.42
+    offsetXMeters: 0
+    offsetYMeters: 0
+    depthOffsetMeters: 0.06
+    intensity: 1
+    coreRatio: 0.62
+    plumeMaxLengthMeters: 6
+    plumeLengthPower: 1.15
+    plumeBaseWidthScale: 1
+    plumeCoreWidthRatio: 0.58
+    plumeOffsetXMeters: 0
+    plumeOffsetYMeters: 0
+    plumeOffsetZMeters: 0
+  shipRightCavity:
+    sizeMeters: 0.42
+    offsetXMeters: 0
+    offsetYMeters: 0
+    depthOffsetMeters: 0.06
+    intensity: 1
+    coreRatio: 0.62
+    plumeMaxLengthMeters: 6
+    plumeLengthPower: 1.15
+    plumeBaseWidthScale: 1
+    plumeCoreWidthRatio: 0.58
+    plumeOffsetXMeters: 0
+    plumeOffsetYMeters: 0
+    plumeOffsetZMeters: 0
+  shipExhaustColorStops: []
+  shipExhaustColorMaxMph: 99
   routeMode: 2
   simulatedSpeed: 100
   tourSpeed: 500
@@ -350,12 +408,15 @@ MonoBehaviour:
   cockpitPitchMinDegrees: 0
   cockpitPitchMaxDegrees: 40
   cockpitZoomSmoothing: 28
+  cockpitHeadingOffsetDegrees: 0
+  cockpitFieldOfView: 90
   cockpitLookYawMaxDegrees: 85
   cockpitLookPitchMinDegrees: -12
   cockpitLookPitchMaxDegrees: 28
   cockpitLookYawSensitivity: 0.16
   cockpitLookPitchSensitivity: 0.12
   cockpitLookSmoothing: 16
+  cockpitLookDebugHud: 1
   pathfinderDetectionRangeM: 115
   pathfinderMapBeamWidthM: 22
   pathfinderUseCockpitBeam: 1
@@ -412,6 +473,7 @@ GameObject:
   - component: {fileID: 377447297}
   - component: {fileID: 377447298}
   - component: {fileID: 377447299}
+  - component: {fileID: 377447300}
   m_Layer: 0
   m_Name: RTG Terrain
   m_TagString: Untagged
@@ -463,8 +525,8 @@ MonoBehaviour:
   _enableFogCulling: 1
   _enforceCulledScreenSpaceError: 1
   _culledScreenSpaceError: 64
-  _opaqueMaterial: {fileID: 2100000, guid: a4755afd9dab74c66be03e292da90a0c, type: 2}
-  _generateSmoothNormals: 0
+  _opaqueMaterial: {fileID: 2100000, guid: b8d4f9a21c5e6f708192a3b4c5d6e7f8, type: 2}
+  _generateSmoothNormals: 1
   _ignoreKhrMaterialsUnlit: 0
   _pointCloudShading:
     _attenuation: 0
@@ -500,6 +562,23 @@ MonoBehaviour:
   - 80
   - 150
   - 300
+--- !u!114 &377447300
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 377447296}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: c9e5a1b32d4f60718293b4c5d6e7f809, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::RoutesToGlory.Game.RtgTerrainMaterialController
+  terrainTileset: {fileID: 377447298}
+  biomeMaterial: {fileID: 2100000, guid: b8d4f9a21c5e6f708192a3b4c5d6e7f8, type: 2}
+  followPlayerHeight: 1
+  manualHeightReferenceY: 0
+  disableRasterOverlays: 1
 --- !u!1 &410087039
 GameObject:
   m_ObjectHideFlags: 0
@@ -840,6 +919,7 @@ MonoBehaviour:
   groundLabelSizeFactor: 0.09
   labelColor: {r: 0.9, g: 0.98, b: 1, a: 1}
   loadOnPlay: 1
+  preSurveyedWorld: 1
   scatterForTapTest: 1
   scatterRadiusMeters: 8000
   scatterCenterLat: 42.7597
@@ -1092,7 +1172,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!4 &1382155357
 Transform:
   m_ObjectHideFlags: 0
@@ -1160,7 +1240,7 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1425919399}
   serializedVersion: 2
-  m_LocalRotation: {x: 0.3007058, y: 2.2650199e-17, z: -5.9909e-18, w: 0.95371693}
+  m_LocalRotation: {x: 0.3007058, y: 3.4825564e-17, z: -3.2460782e-18, w: 0.95371693}
   m_LocalPosition: {x: 2.3280804e-10, y: 1200, z: -0.00093125924}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
@@ -1288,11 +1368,11 @@ MonoBehaviour:
   _localToGlobeFixedMatrix:
     c0:
       x: 0.9641792465240623
-      y: -0.2652515420733527
-      z: -0.000000000000000012292568858994937
+      y: -0.2652515420733528
+      z: -0.00000000000000003775109257236099
       w: 0
     c1:
-      x: -0.0562363759848791
+      x: -0.05623637598487907
       y: -0.20441708349936794
       z: 0.9772671652584857
       w: 0

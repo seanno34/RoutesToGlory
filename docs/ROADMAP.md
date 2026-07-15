@@ -156,14 +156,15 @@ Prototype is "done" when we can make a confident go/no-go decision against **bot
 #### Phase 2 — World feel, routes & combat (in progress)
 
 - [x] **Route cleanup & snap-to-corridor** — Snap glider onto nearby owned routes while moving; Douglas-Peucker simplify on save; one-time server cleanup for existing routes (`POST /worlds/:id/routes/cleanup`)
-- [x] **Alien terrain dressing** — Procedural scatter (`RtgTerrainScatter`) dresses revealed fog tiles; **Pathfinder beam** (`RtgPathfinderBeam`) activates on proximity and vaporizes props; terrain clearance glides over hills
+- [x] **Alien terrain dressing** — Procedural scatter (`RtgTerrainScatter`) + **Pathfinder beam** (`RtgPathfinderBeam`) laser test; scatter props are amateur placeholders (replace Phase 3). Forward terrain clearance for hills.
 - [x] **Ground-anchored resource markers** — `RtgGroundMarkerVisual` glow pads + per-resource deposits on terrain; legacy floating orbs removed
 - [x] **Glider combat vehicle presentation (Phase A)** — Low-poly 3D blockout (`RtgGliderBlockoutMesh`), blob shadow, particle afterburner; proves Unity 3D pipeline on device
 - [x] **Glider hero asset (Phase B)** — Tripo `futuristic_fighter_3d_model` integrated with socket exhaust VFX; accepted as production-ready for POC/v1 (visual polish optional later). See [GLIDER_HERO_ASSET_BRIEF.md](GLIDER_HERO_ASSET_BRIEF.md) if revisiting art.
-- [ ] **Cockpit look-around & rear view** — Tap-and-drag yaw/pitch in cockpit; rear backup camera inset (`RtgCockpitRearCamera` scaffolded, needs wiring)
-- [ ] **Hostile ordnance** — Client VFX + targeting when hostiles in range; server combat resolver stays lightweight
+- [~] **Cockpit look-around & rear view** — **ON HOLD (deferred).** Camera manager + drag-look code path works (`lookYaw`/`lookPitch`, `camΔ=0`, `panned=false`); user still sees dashboard slide with drag — visual/UX polish, not go/no-go. See `apps/unity-poc/docs/COCKPIT_DRAG_LOOK_SUMMARY.md`
+- [ ] **Realistic terrain & map tiles** — **Active POC item.** Civ-rival biome readability at glider pass-over; raster pipeline + alien textures. Phase 2: resources embedded in tiles. See `apps/unity-poc/docs/REALISTIC_TERRAIN_POC.md`
+- [~] **Hostile ordnance** — **Deferred.** Client VFX + targeting; lightweight server resolver. See `apps/unity-poc/docs/HOSTILE_ORDNANCE_POC.md`
 
-**Status (2026-07-14):** Phase 1 complete. Phase 2 **almost done** — cockpit drag-look and ordnance are the remaining active POC items before go/no-go.
+**Status (2026-07-14):** Phase 1 complete. Phase 2 active scope: **realistic terrain/map tiles** (textures first, terrain-aware resources second). Cockpit drag-look and hostile ordnance deferred.
 
 On **go** (both phases): finalize [POC_TO_PRODUCTION.md](POC_TO_PRODUCTION.md) and start `apps/game` on production-quality foundations.
 
