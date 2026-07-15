@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
@@ -5,29 +6,21 @@ using UnityEngine.Rendering;
 namespace RoutesToGlory.Game
 {
     /// <summary>
-    /// Layered sci-fi exhaust per nozzle: nozzle bloom + stretched flame core + animated flipbook halo.
-    /// Warm yellow at low thrust, electric blue at full burn. Uses additive particles + soft sprites.
+    /// Sci-fi exhaust per nozzle: cavity head spheres + thrust-driven cone plume.
+    /// Cone replaces particle flames for a cleaner mobile-friendly look.
     /// </summary>
     public class RtgGliderAfterburner : MonoBehaviour
     {
         [Range(0f, 0.5f)]
         public float minVisibleThrust = 0.06f;
 
-        public int maxFlameEmissionRate = 22;
-        public int maxGlowEmissionRate = 12;
+        [Tooltip("When true, cone mesh plumes replace particle flame streaks.")]
+        public bool useConePlume = true;
+
         public float colorIntensity = 2.2f;
 
-        private const float BaseStreakLengthScale = 1.35f;
-        private const float BaseStreakLifetimeMin = 0.08f;
-        private const float BaseStreakLifetimeMax = 0.16f;
-        private const float BaseStreakVelocityMin = -10f;
-        private const float BaseStreakVelocityMax = -18f;
-        private const float BaseGlowLifetimeMin = 0.07f;
-        private const float BaseGlowLifetimeMax = 0.13f;
-        private const float BaseGlowVelocityMin = -6f;
-        private const float BaseGlowVelocityMax = -12f;
-
         private float _flameLengthScale = 1f;
+        private float _plumeVisibilityScale = 1f;
         private float _lastThrust01;
         private float _lastColorMph;
         private float _colorMaxMph = 99f;
@@ -44,23 +37,34 @@ namespace RoutesToGlory.Game
         private Material _nozzleMaterial;
         private Material _cavityFillMaterial;
         private Material _cavityCoreMaterial;
-        private MaterialPropertyBlock _cavityOrbPropertyBlock;
+        private Material _plumeMaterial;
 
         private struct EngineVfx
         {
+            public string SocketName;
             public ParticleSystem FlameStreak;
             public ParticleSystem FlipbookGlow;
             public Transform NozzleCavityRoot;
             public Transform NozzleCavityOuter;
             public Transform NozzleCavityCore;
+            public Transform PlumeOuter;
+            public Transform PlumeCore;
             public MeshRenderer CavityOuterRenderer;
             public MeshRenderer CavityCoreRenderer;
+            public MeshRenderer PlumeOuterRenderer;
+            public MeshRenderer PlumeCoreRenderer;
             public Transform NozzleBloom;
             public Material NozzleMaterial;
             public Material CavityOuterMaterial;
             public Material CavityCoreMaterial;
+            public Material PlumeOuterMaterial;
+            public Material PlumeCoreMaterial;
             public Material StreakMaterial;
             public Material GlowMaterial;
+            public MaterialPropertyBlock CavityOuterBlock;
+            public MaterialPropertyBlock CavityCoreBlock;
+            public MaterialPropertyBlock PlumeOuterBlock;
+            public MaterialPropertyBlock PlumeCoreBlock;
             public RtgEngineCavityTuning CavityTuning;
             public float Weight;
             public float SizeScale;
@@ -71,12 +75,23 @@ namespace RoutesToGlory.Game
             RtgEngineCavityTuning left,
             RtgEngineCavityTuning right)
         {
-            ApplyCavityTuningToEngine(0, main.Clamped());
-            ApplyCavityTuningToEngine(1, left.Clamped());
-            ApplyCavityTuningToEngine(2, right.Clamped());
+            for (int i = 0; i < _engines.Count; i++)
+            {
+                EngineVfx engine = _engines[i];
+                engine.CavityTuning = ResolveCavityTuningForSocket(
+                    engine.SocketName,
+                    main,
+                    left,
+                    right);
+                _engines[i] = engine;
+            }
 
-            if (_forceCavityPreview)
-                RefreshCavityPreview();
+            RefreshPresentation();
+        }
+
+        public void RefreshPresentation()
+        {
+            SetThrust(_lastThrust01, _lastColorMph);
         }
 
         public void SetExhaustColorProfile(RtgExhaustColorStop[] stops, float maxMph)
@@ -94,81 +109,67 @@ namespace RoutesToGlory.Game
             _forceCavityPreview = enabled;
             _cavityPreviewMph = Mathf.Max(0f, previewMph);
             _cavityTuneStopIndex = enabled ? tuneStopIndex : -1;
-            SetThrust(_lastThrust01, _lastColorMph);
+            RefreshPresentation();
         }
 
         public void SetFlamePreview(bool enabled, float previewMph = 0f)
         {
             _forceFlamePreview = enabled;
             _flamePreviewMph = Mathf.Max(0f, previewMph);
-            SetThrust(_lastThrust01, _lastColorMph);
+            RefreshPresentation();
         }
 
         private void RefreshCavityPreview()
         {
             ThrustPalette palette = BuildTunePalette(_cavityPreviewMph, _cavityTuneStopIndex);
             float heat = Mathf.Clamp01(_cavityPreviewMph / Mathf.Max(1f, _colorMaxMph));
+            float plumeDrive = Mathf.Max(0.65f, heat * 0.9f);
             foreach (EngineVfx engine in _engines)
             {
                 if (engine.NozzleCavityRoot == null)
                     continue;
 
                 engine.NozzleCavityRoot.gameObject.SetActive(true);
-                ApplyCavityLayout(engine, heat, palette);
+                ApplyCavityLayout(
+                    engine,
+                    heat,
+                    plumeDrive,
+                    palette,
+                    showPlume: useConePlume && _forceFlamePreview,
+                    colorMph: _cavityPreviewMph,
+                    tuneStopIndex: _cavityTuneStopIndex);
             }
         }
 
-        private void ApplyCavityTuningToEngine(int index, RtgEngineCavityTuning tuning)
+        private static RtgEngineCavityTuning ResolveCavityTuningForSocket(
+            string socketName,
+            RtgEngineCavityTuning main,
+            RtgEngineCavityTuning left,
+            RtgEngineCavityTuning right)
         {
-            if (index < 0 || index >= _engines.Count)
-                return;
-
-            EngineVfx engine = _engines[index];
-            engine.CavityTuning = tuning;
-            _engines[index] = engine;
+            if (string.Equals(socketName, RtgGliderExhaustSockets.LeftSocketName, StringComparison.Ordinal))
+                return left.Clamped();
+            if (string.Equals(socketName, RtgGliderExhaustSockets.RightSocketName, StringComparison.Ordinal))
+                return right.Clamped();
+            return main.Clamped();
         }
 
         public void SetFlameLengthScale(float scale)
         {
             _flameLengthScale = Mathf.Clamp(scale, 0.15f, 2.5f);
-            foreach (EngineVfx engine in _engines)
-                ApplyFlameLength(engine);
+            SetThrust(_lastThrust01, _lastColorMph);
         }
 
-        private void ApplyFlameLength(EngineVfx engine)
+        /// <summary>
+        /// Boosts plume length only (mobile zoom compensation). Cavity head size stays in tuned meters.
+        /// </summary>
+        public void SetPlumeVisibilityScale(float scale)
         {
-            float length = _flameLengthScale;
-            float size = engine.SizeScale;
-
-            if (engine.FlameStreak != null)
-            {
-                var streakMain = engine.FlameStreak.main;
-                streakMain.startLifetime = new ParticleSystem.MinMaxCurve(
-                    BaseStreakLifetimeMin * length,
-                    BaseStreakLifetimeMax * length);
-
-                var streakVelocity = engine.FlameStreak.velocityOverLifetime;
-                streakVelocity.z = new ParticleSystem.MinMaxCurve(
-                    BaseStreakVelocityMin * size * length,
-                    BaseStreakVelocityMax * size * length);
-
-                var streakRenderer = engine.FlameStreak.GetComponent<ParticleSystemRenderer>();
-                streakRenderer.lengthScale = BaseStreakLengthScale * length;
-            }
-
-            if (engine.FlipbookGlow != null)
-            {
-                var glowMain = engine.FlipbookGlow.main;
-                glowMain.startLifetime = new ParticleSystem.MinMaxCurve(
-                    BaseGlowLifetimeMin * length,
-                    BaseGlowLifetimeMax * length);
-
-                var glowVelocity = engine.FlipbookGlow.velocityOverLifetime;
-                glowVelocity.z = new ParticleSystem.MinMaxCurve(
-                    BaseGlowVelocityMin * size * length,
-                    BaseGlowVelocityMax * size * length);
-            }
+            _plumeVisibilityScale = Mathf.Max(1f, scale);
+            SetThrust(_lastThrust01, _lastColorMph);
         }
+
+        public void SetVfxWorldScale(float scale) => SetPlumeVisibilityScale(scale);
 
         public void Configure(Transform mainEngine, Transform leftEngine, Transform rightEngine, float shipSizeMeters)
         {
@@ -182,7 +183,16 @@ namespace RoutesToGlory.Game
 
             SetFlameLengthScale(_flameLengthScale);
             SetThrust(0f, 0f);
-            Debug.Log($"[RTG] Afterburner configured with {_engines.Count} engine VFX stacks.");
+            if (_engines.Count == 0)
+            {
+                Debug.LogError(
+                    "[RTG] Afterburner has 0 engine VFX stacks — exhaust shaders/materials failed to load. " +
+                    "Check Resources/RTG_PlayerShip/RTG_Exhaust*.mat are included in the build.");
+            }
+            else
+            {
+                Debug.Log($"[RTG] Afterburner configured with {_engines.Count} engine VFX stacks.");
+            }
         }
 
         public void SetThrust(float thrust01, float colorMph = -1f)
@@ -217,25 +227,32 @@ namespace RoutesToGlory.Game
             ThrustPalette palette,
             bool exhaustOn)
         {
-            bool showFlames = _forceCavityPreview
+            bool showPlume = useConePlume && (_forceCavityPreview
                 ? _forceFlamePreview
-                : exhaustOn;
-            bool useFlamePreviewPalette = _forceFlamePreview && _forceCavityPreview;
-            float flameMph = useFlamePreviewPalette ? _flamePreviewMph : _lastColorMph;
-            float flameHeat = Mathf.Clamp01(flameMph / Mathf.Max(1f, _colorMaxMph));
-            ThrustPalette flamePalette = useFlamePreviewPalette ? BuildPalette(_flamePreviewMph) : palette;
+                : exhaustOn);
 
-            float intensity = Mathf.Max(active, heat * 0.85f);
-            if (useFlamePreviewPalette)
-                intensity = Mathf.Max(0.45f, flameHeat * 0.85f);
+            if (!useConePlume)
+            {
+                bool showFlames = _forceCavityPreview ? _forceFlamePreview : exhaustOn;
+                bool useFlamePreviewPalette = _forceFlamePreview && _forceCavityPreview;
+                float flameMph = useFlamePreviewPalette ? _flamePreviewMph : _lastColorMph;
+                float flameHeat = Mathf.Clamp01(flameMph / Mathf.Max(1f, _colorMaxMph));
+                ThrustPalette flamePalette = useFlamePreviewPalette ? BuildPalette(_flamePreviewMph) : palette;
+                float intensity = Mathf.Max(active, heat * 0.85f);
+                if (useFlamePreviewPalette)
+                    intensity = Mathf.Max(0.45f, flameHeat * 0.85f);
 
-            float flameRate = maxFlameEmissionRate * intensity * share;
-            float glowRate = maxGlowEmissionRate * intensity * share;
-
-            UpdateParticleSystem(engine.FlameStreak, flameRate, flamePalette.FlameStart, flamePalette.FlameEnd, showFlames);
-            UpdateParticleSystem(engine.FlipbookGlow, glowRate, flamePalette.GlowStart, flamePalette.GlowEnd, showFlames);
-            ApplyParticleTint(engine.FlameStreak, engine.StreakMaterial, flamePalette.FlameStart, flameHeat);
-            ApplyParticleTint(engine.FlipbookGlow, engine.GlowMaterial, flamePalette.GlowStart, flameHeat);
+                float flameRate = 22 * intensity * share;
+                float glowRate = 12 * intensity * share;
+                UpdateParticleSystem(engine.FlameStreak, flameRate, flamePalette.FlameStart, flamePalette.FlameEnd, showFlames);
+                UpdateParticleSystem(engine.FlipbookGlow, glowRate, flamePalette.GlowStart, flamePalette.GlowEnd, showFlames);
+                ApplyParticleTint(engine.FlameStreak, engine.StreakMaterial, flamePalette.FlameStart, flameHeat);
+                ApplyParticleTint(engine.FlipbookGlow, engine.GlowMaterial, flamePalette.GlowStart, flameHeat);
+            }
+            else
+            {
+                HideParticleSystems(engine);
+            }
 
             if (engine.NozzleCavityRoot != null)
             {
@@ -249,7 +266,17 @@ namespace RoutesToGlory.Game
                     float cavityHeat = Mathf.Clamp01(cavityMph / Mathf.Max(1f, _colorMaxMph));
                     int tuneStopIndex = _forceCavityPreview ? _cavityTuneStopIndex : -1;
                     ThrustPalette cavityPalette = BuildTunePalette(cavityMph, tuneStopIndex);
-                    ApplyCavityLayout(engine, cavityHeat, cavityPalette);
+                    float plumeDrive = _forceCavityPreview
+                        ? Mathf.Max(0.65f, active, cavityHeat * 0.9f)
+                        : active;
+                    ApplyCavityLayout(
+                        engine,
+                        cavityHeat,
+                        plumeDrive,
+                        cavityPalette,
+                        showPlume,
+                        colorMph: cavityMph,
+                        tuneStopIndex: tuneStopIndex);
                 }
             }
 
@@ -257,52 +284,169 @@ namespace RoutesToGlory.Game
                 engine.NozzleBloom.gameObject.SetActive(false);
         }
 
-        private void ApplyCavityLayout(EngineVfx engine, float heat, ThrustPalette palette)
+        private static void HideParticleSystems(EngineVfx engine)
+        {
+            if (engine.FlameStreak != null && engine.FlameStreak.gameObject.activeSelf)
+                engine.FlameStreak.gameObject.SetActive(false);
+            if (engine.FlipbookGlow != null && engine.FlipbookGlow.gameObject.activeSelf)
+                engine.FlipbookGlow.gameObject.SetActive(false);
+        }
+
+        private void ApplyCavityLayout(
+            EngineVfx engine,
+            float heat,
+            float plumeDrive01,
+            ThrustPalette palette,
+            bool showPlume,
+            float colorMph,
+            int tuneStopIndex)
         {
             RtgEngineCavityTuning tuning = engine.CavityTuning.sizeMeters > 0f
                 ? engine.CavityTuning
                 : RtgEngineCavityTuning.Default;
 
+            float meterToLocal = 1f;
+            if (engine.NozzleCavityRoot != null && engine.NozzleCavityRoot.parent != null)
+            {
+                float parentScale = engine.NozzleCavityRoot.parent.lossyScale.x;
+                meterToLocal = 1f / Mathf.Max(0.001f, parentScale);
+            }
+
             float nozzleScale = engine.Weight < 0.9f ? 0.84f : 1f;
-            float diameter = tuning.sizeMeters * nozzleScale * (0.92f + 0.08f * heat);
+            float diameter = tuning.sizeMeters * meterToLocal * nozzleScale * (0.92f + 0.08f * heat);
 
             engine.NozzleCavityRoot.localPosition = new Vector3(
-                tuning.offsetXMeters,
-                tuning.offsetYMeters,
-                tuning.depthOffsetMeters);
+                tuning.offsetXMeters * meterToLocal,
+                tuning.offsetYMeters * meterToLocal,
+                tuning.depthOffsetMeters * meterToLocal);
+
+            // During color-stop preview, skip per-engine intensity on cavity tints so RGB sliders
+            // stay responsive (main often runs intensity 5x vs 0.2 on the wing nozzles).
+            float cavityColorGain = tuneStopIndex >= 0 ? 1f : tuning.intensity;
 
             if (engine.NozzleCavityOuter != null)
             {
                 engine.NozzleCavityOuter.localScale = Vector3.one * diameter;
-                ApplyOrbTint(engine.CavityOuterRenderer, engine.CavityOuterMaterial, palette.CavityOuter * tuning.intensity);
+                ApplyOrbTint(
+                    engine.CavityOuterRenderer,
+                    engine.CavityOuterMaterial,
+                    engine.CavityOuterBlock,
+                    palette.CavityOuter * cavityColorGain);
             }
 
             if (engine.NozzleCavityCore != null)
             {
                 engine.NozzleCavityCore.localScale = Vector3.one * diameter * tuning.coreRatio;
-                ApplyOrbTint(engine.CavityCoreRenderer, engine.CavityCoreMaterial, palette.CavityCore * tuning.intensity);
+                ApplyOrbTint(
+                    engine.CavityCoreRenderer,
+                    engine.CavityCoreMaterial,
+                    engine.CavityCoreBlock,
+                    palette.CavityCore * cavityColorGain);
+            }
+
+            float plumeActive = plumeDrive01 <= minVisibleThrust
+                ? 0f
+                : Mathf.InverseLerp(minVisibleThrust, 1f, Mathf.Clamp01(plumeDrive01));
+            ResolvePlumeLength(
+                colorMph,
+                tuneStopIndex,
+                out float plumeMaxMeters,
+                out float plumeLengthScale);
+            float plumeLength = plumeMaxMeters
+                * meterToLocal
+                * Mathf.Pow(plumeActive, tuning.plumeLengthPower)
+                * plumeLengthScale
+                * _plumeVisibilityScale;
+            float baseWidth = diameter * tuning.plumeBaseWidthScale;
+            float coreWidth = baseWidth * tuning.plumeCoreWidthRatio;
+            float plumeAttachZ = diameter * 0.42f;
+            Vector3 plumeLocalPos = new Vector3(
+                tuning.plumeOffsetXMeters * meterToLocal,
+                tuning.plumeOffsetYMeters * meterToLocal,
+                plumeAttachZ + tuning.plumeOffsetZMeters * meterToLocal);
+
+            Color plumeOuterColor = palette.PlumeOuter * tuning.intensity;
+            Color plumeCoreColor = palette.PlumeCore * tuning.intensity;
+
+            if (engine.PlumeOuter != null)
+            {
+                bool visible = showPlume && plumeLength > 0.02f;
+                engine.PlumeOuter.gameObject.SetActive(visible);
+                if (visible)
+                {
+                    engine.PlumeOuter.localPosition = plumeLocalPos;
+                    engine.PlumeOuter.localScale = new Vector3(baseWidth, baseWidth, plumeLength);
+                    ApplyOrbTint(
+                        engine.PlumeOuterRenderer,
+                        engine.PlumeOuterMaterial,
+                        engine.PlumeOuterBlock,
+                        plumeOuterColor);
+                }
+            }
+
+            if (engine.PlumeCore != null)
+            {
+                bool visible = showPlume && plumeLength > 0.04f;
+                engine.PlumeCore.gameObject.SetActive(visible);
+                if (visible)
+                {
+                    float coreLength = plumeLength * 0.88f;
+                    engine.PlumeCore.localPosition = plumeLocalPos;
+                    engine.PlumeCore.localScale = new Vector3(coreWidth, coreWidth, coreLength);
+                    ApplyOrbTint(
+                        engine.PlumeCoreRenderer,
+                        engine.PlumeCoreMaterial,
+                        engine.PlumeCoreBlock,
+                        plumeCoreColor);
+                }
             }
         }
 
-        private void ApplyOrbTint(MeshRenderer renderer, Material material, Color hdrColor)
+        private void ResolvePlumeLength(
+            float colorMph,
+            int tuneStopIndex,
+            out float plumeMaxMeters,
+            out float plumeLengthScale)
         {
-            if (material == null)
+            RtgExhaustColorStop[] stops = _colorStops ?? RtgExhaustColorProfile.CreateDefaultStops();
+            float maxMph = Mathf.Max(1f, _colorMaxMph);
+
+            if (tuneStopIndex >= 0 && tuneStopIndex < stops.Length)
+            {
+                RtgExhaustColorStop stop = stops[tuneStopIndex];
+                plumeMaxMeters = RtgExhaustColorProfile.GetPlumeMaxLengthMeters(stop);
+                plumeLengthScale = RtgExhaustColorProfile.GetPlumeLengthScale(stop);
+                return;
+            }
+
+            plumeMaxMeters = RtgExhaustColorProfile.SamplePlumeMaxLengthMeters(colorMph, stops, maxMph);
+            plumeLengthScale = RtgExhaustColorProfile.SamplePlumeLengthScale(colorMph, stops, maxMph);
+        }
+
+        private void ApplyOrbTint(
+            MeshRenderer renderer,
+            Material material,
+            MaterialPropertyBlock propertyBlock,
+            Color hdrColor)
+        {
+            if (renderer == null || material == null)
                 return;
 
             hdrColor.a = 1f;
             ApplyAdditiveTint(material, hdrColor);
+            renderer.sharedMaterial = material;
 
-            if (renderer == null)
+            if (propertyBlock == null)
                 return;
 
-            _cavityOrbPropertyBlock ??= new MaterialPropertyBlock();
-            renderer.GetPropertyBlock(_cavityOrbPropertyBlock);
-            _cavityOrbPropertyBlock.SetColor("_BaseColor", hdrColor);
+            propertyBlock.SetColor("_BaseColor", hdrColor);
             if (material.HasProperty("_Color"))
-                _cavityOrbPropertyBlock.SetColor("_Color", hdrColor);
+                propertyBlock.SetColor("_Color", hdrColor);
             if (material.HasProperty("_TintColor"))
-                _cavityOrbPropertyBlock.SetColor("_TintColor", hdrColor);
-            renderer.SetPropertyBlock(_cavityOrbPropertyBlock);
+                propertyBlock.SetColor("_TintColor", hdrColor);
+            if (material.HasProperty("_EmissionColor"))
+                propertyBlock.SetColor("_EmissionColor", hdrColor);
+            renderer.SetPropertyBlock(propertyBlock);
         }
 
         private static void ApplyParticleTint(
@@ -383,21 +527,30 @@ namespace RoutesToGlory.Game
             Color cavityCoreBase = SampleChannel(s => s.cavityCore);
             Color flameBase = SampleChannel(s => s.flame);
             Color glowBase = SampleChannel(s => s.glow);
+            Color plumeOuterBase = SampleChannel(s => ResolvePlumeOuter(s));
+            Color plumeCoreBase = SampleChannel(s => ResolvePlumeCore(s));
             Color flameTailBase = tuneStopIndex >= 0 && tuneStopIndex < stops.Length
-                ? Color.Lerp(stops[tuneStopIndex].flame, stops[tuneStopIndex].glow, 0.45f)
+                ? Color.Lerp(ResolvePlumeOuter(stops[tuneStopIndex]), ResolvePlumeCore(stops[tuneStopIndex]), 0.45f)
                 : RtgExhaustColorProfile.Sample(
                     cappedMph * 0.85f,
                     stops,
                     maxMph,
-                    s => Color.Lerp(s.flame, s.glow, 0.45f));
+                    s => Color.Lerp(ResolvePlumeOuter(s), ResolvePlumeCore(s), 0.45f));
 
             Color flameStart = flameBase * Mathf.Lerp(2.4f, 4f, heat) * i;
             Color flameEnd = flameTailBase * Mathf.Lerp(1.6f, 3f, heat) * i;
             Color glowStart = glowBase * Mathf.Lerp(2f, 3.5f, heat) * i;
             Color glowEnd = flameTailBase * Mathf.Lerp(1.4f, 2.6f, heat) * i;
+            float plumeBold = Mathf.Lerp(2.4f, 4f, heat) * i;
+            Color plumeOuter = plumeOuterBase * plumeBold;
+            Color plumeCore = plumeCoreBase * Mathf.Lerp(2f, 3.5f, heat) * i;
 
-            float cavityOuterBold = Mathf.Lerp(5f, 9f, rawHeat) * i;
-            float cavityCoreBold = Mathf.Lerp(6f, 11f, rawHeat) * i;
+            float cavityOuterBold = tuneStopIndex >= 0
+                ? colorIntensity
+                : Mathf.Lerp(5f, 9f, rawHeat) * i;
+            float cavityCoreBold = tuneStopIndex >= 0
+                ? colorIntensity
+                : Mathf.Lerp(6f, 11f, rawHeat) * i;
             Color cavityOuter = cavityOuterBase * cavityOuterBold;
             Color cavityCore = cavityCoreBase * cavityCoreBold;
 
@@ -410,10 +563,26 @@ namespace RoutesToGlory.Game
                 FlameEnd = flameEnd,
                 GlowStart = glowStart,
                 GlowEnd = glowEnd,
+                PlumeOuter = plumeOuter,
+                PlumeCore = plumeCore,
                 CavityOuter = cavityOuter,
                 CavityCore = cavityCore,
                 Nozzle = nozzleRim,
             };
+        }
+
+        private static Color ResolvePlumeOuter(RtgExhaustColorStop stop)
+        {
+            return stop.plumeOuter.r + stop.plumeOuter.g + stop.plumeOuter.b > 0.01f
+                ? stop.plumeOuter
+                : stop.flame;
+        }
+
+        private static Color ResolvePlumeCore(RtgExhaustColorStop stop)
+        {
+            return stop.plumeCore.r + stop.plumeCore.g + stop.plumeCore.b > 0.01f
+                ? stop.plumeCore
+                : stop.glow;
         }
 
         private struct ThrustPalette
@@ -422,6 +591,8 @@ namespace RoutesToGlory.Game
             public Color FlameEnd;
             public Color GlowStart;
             public Color GlowEnd;
+            public Color PlumeOuter;
+            public Color PlumeCore;
             public Color CavityOuter;
             public Color CavityCore;
             public Color Nozzle;
@@ -429,30 +600,64 @@ namespace RoutesToGlory.Game
 
         private void AddEngine(Transform nozzle, float weight, float sizeScale)
         {
-            if (_streakMaterial == null) return;
+            if (_cavityFillMaterial == null || _cavityCoreMaterial == null)
+                return;
+
+            if (!useConePlume && (_streakMaterial == null || _flipbookMaterial == null))
+                return;
+
+            ClearNozzleVfxChildren(nozzle);
+
+            ParticleSystem flameStreak = null;
+            ParticleSystem flipbookGlow = null;
+            Material streakMat = null;
+            Material glowMat = null;
+
+            if (!useConePlume)
+            {
+                flameStreak = CreateFlameStreakSystem(nozzle, sizeScale, weight, out streakMat);
+                flipbookGlow = CreateFlipbookSystem(nozzle, sizeScale, weight, out glowMat);
+            }
 
             _engines.Add(new EngineVfx
             {
-                FlameStreak = CreateFlameStreakSystem(nozzle, sizeScale, weight, out Material streakMat),
-                FlipbookGlow = CreateFlipbookSystem(nozzle, sizeScale, weight, out Material glowMat),
+                SocketName = nozzle.name,
+                FlameStreak = flameStreak,
+                FlipbookGlow = flipbookGlow,
                 NozzleCavityRoot = CreateNozzleCavity(
                     nozzle,
                     out Transform outer,
                     out Transform core,
+                    out Transform plumeOuter,
+                    out Transform plumeCore,
                     out Material outerMat,
                     out Material coreMat,
+                    out Material plumeOuterMat,
+                    out Material plumeCoreMat,
                     out MeshRenderer outerRenderer,
-                    out MeshRenderer coreRenderer),
+                    out MeshRenderer coreRenderer,
+                    out MeshRenderer plumeOuterRenderer,
+                    out MeshRenderer plumeCoreRenderer),
                 NozzleCavityOuter = outer,
                 NozzleCavityCore = core,
+                PlumeOuter = plumeOuter,
+                PlumeCore = plumeCore,
                 CavityOuterRenderer = outerRenderer,
                 CavityCoreRenderer = coreRenderer,
+                PlumeOuterRenderer = plumeOuterRenderer,
+                PlumeCoreRenderer = plumeCoreRenderer,
                 NozzleBloom = CreateNozzleBloom(nozzle, sizeScale),
                 NozzleMaterial = null,
                 CavityOuterMaterial = outerMat,
                 CavityCoreMaterial = coreMat,
+                PlumeOuterMaterial = plumeOuterMat,
+                PlumeCoreMaterial = plumeCoreMat,
                 StreakMaterial = streakMat,
                 GlowMaterial = glowMat,
+                CavityOuterBlock = new MaterialPropertyBlock(),
+                CavityCoreBlock = new MaterialPropertyBlock(),
+                PlumeOuterBlock = new MaterialPropertyBlock(),
+                PlumeCoreBlock = new MaterialPropertyBlock(),
                 CavityTuning = RtgEngineCavityTuning.Default,
                 Weight = weight,
                 SizeScale = sizeScale,
@@ -597,10 +802,16 @@ namespace RoutesToGlory.Game
             Transform nozzle,
             out Transform outer,
             out Transform core,
+            out Transform plumeOuter,
+            out Transform plumeCore,
             out Material outerMaterial,
             out Material coreMaterial,
+            out Material plumeOuterMaterial,
+            out Material plumeCoreMaterial,
             out MeshRenderer outerRenderer,
-            out MeshRenderer coreRenderer)
+            out MeshRenderer coreRenderer,
+            out MeshRenderer plumeOuterRenderer,
+            out MeshRenderer plumeCoreRenderer)
         {
             var root = new GameObject($"{nozzle.name}_CavityRoot");
             root.transform.SetParent(nozzle, false);
@@ -621,8 +832,52 @@ namespace RoutesToGlory.Game
                 sortingOrder: 12,
                 out coreMaterial,
                 out coreRenderer);
+            plumeOuter = CreatePlumeCone(
+                root.transform,
+                "PlumeOuter",
+                _plumeMaterial,
+                sortingOrder: 9,
+                out plumeOuterMaterial,
+                out plumeOuterRenderer);
+            plumeCore = CreatePlumeCone(
+                root.transform,
+                "PlumeCore",
+                _plumeMaterial,
+                sortingOrder: 10,
+                out plumeCoreMaterial,
+                out plumeCoreRenderer);
 
+            plumeOuter.gameObject.SetActive(false);
+            plumeCore.gameObject.SetActive(false);
             return root.transform;
+        }
+
+        private Transform CreatePlumeCone(
+            Transform parent,
+            string name,
+            Material template,
+            int sortingOrder,
+            out Material instanceMaterial,
+            out MeshRenderer meshRenderer)
+        {
+            var go = new GameObject(name);
+            go.transform.SetParent(parent, false);
+            go.transform.localPosition = Vector3.zero;
+            go.transform.localRotation = Quaternion.identity;
+            go.transform.localScale = Vector3.one;
+
+            var filter = go.AddComponent<MeshFilter>();
+            filter.sharedMesh = RtgMeshPrimitives.ExhaustCone;
+
+            meshRenderer = go.AddComponent<MeshRenderer>();
+            meshRenderer.shadowCastingMode = ShadowCastingMode.Off;
+            meshRenderer.receiveShadows = false;
+            instanceMaterial = new Material(template) { name = $"RTG_{name}_Runtime" };
+            ApplyExhaustTexture(instanceMaterial, RtgGliderExhaustTextures.CavityFill);
+            meshRenderer.material = instanceMaterial;
+            meshRenderer.sortingOrder = sortingOrder;
+            ApplyOrbTint(meshRenderer, instanceMaterial, null, Color.black);
+            return go.transform;
         }
 
         private Transform CreateCavitySphere(
@@ -648,7 +903,7 @@ namespace RoutesToGlory.Game
             instanceMaterial = new Material(template) { name = $"RTG_{name}_Runtime" };
             meshRenderer.material = instanceMaterial;
             meshRenderer.sortingOrder = sortingOrder;
-            ApplyOrbTint(meshRenderer, instanceMaterial, Color.black);
+            ApplyOrbTint(meshRenderer, instanceMaterial, null, Color.black);
             return go.transform;
         }
 
@@ -676,30 +931,94 @@ namespace RoutesToGlory.Game
         {
             if (_streakMaterial == null)
             {
-                _streakMaterial = CreateAdditiveMaterial("RTG_ExhaustStreak", RtgGliderExhaustTextures.FlameStreak);
-                if (_streakMaterial != null)
-                    _streakMaterial.mainTexture = RtgGliderExhaustTextures.FlameStreak;
+                _streakMaterial = LoadExhaustMaterial(
+                    "RTG_PlayerShip/RTG_ExhaustStreak",
+                    "RTG_ExhaustStreak",
+                    RtgGliderExhaustTextures.FlameStreak);
             }
 
             if (_flipbookMaterial == null)
             {
-                _flipbookMaterial = CreateAdditiveMaterial("RTG_ExhaustFlipbook", RtgGliderExhaustTextures.FlameFlipbook);
-                if (_flipbookMaterial != null)
-                    _flipbookMaterial.mainTexture = RtgGliderExhaustTextures.FlameFlipbook;
+                _flipbookMaterial = LoadExhaustMaterial(
+                    "RTG_PlayerShip/RTG_ExhaustFlipbook",
+                    "RTG_ExhaustFlipbook",
+                    RtgGliderExhaustTextures.FlameFlipbook);
             }
 
             if (_nozzleMaterial == null)
             {
-                _nozzleMaterial = CreateAdditiveMaterial("RTG_ExhaustNozzle", RtgGliderExhaustTextures.SoftGlow);
-                if (_nozzleMaterial != null)
-                    _nozzleMaterial.mainTexture = RtgGliderExhaustTextures.SoftGlow;
+                _nozzleMaterial = LoadExhaustMaterial(
+                    "RTG_PlayerShip/RTG_ExhaustNozzle",
+                    "RTG_ExhaustNozzle",
+                    RtgGliderExhaustTextures.SoftGlow);
             }
 
             if (_cavityFillMaterial == null)
-                _cavityFillMaterial = CreateCavityOrbMaterial("RTG_CavityFill");
+            {
+                _cavityFillMaterial = LoadExhaustMaterial(
+                    "RTG_PlayerShip/RTG_CavityFill",
+                    "RTG_CavityFill",
+                    texture: null);
+            }
 
             if (_cavityCoreMaterial == null)
-                _cavityCoreMaterial = CreateCavityOrbMaterial("RTG_CavityCore");
+            {
+                _cavityCoreMaterial = LoadExhaustMaterial(
+                    "RTG_PlayerShip/RTG_CavityCore",
+                    "RTG_CavityCore",
+                    texture: null);
+            }
+
+            if (_plumeMaterial == null)
+            {
+                _plumeMaterial = LoadExhaustMaterial(
+                    "RTG_PlayerShip/RTG_CavityFill",
+                    "RTG_ExhaustPlume",
+                    RtgGliderExhaustTextures.CavityFill);
+            }
+
+            if (_cavityFillMaterial == null)
+            {
+                Debug.LogError(
+                    "[RTG] Cavity fill material missing — exhaust VFX cannot be created.");
+            }
+        }
+
+        private static Material LoadExhaustMaterial(string resourcePath, string runtimeName, Texture2D texture)
+        {
+            Material template = Resources.Load<Material>(resourcePath);
+            if (template != null && template.shader != null && template.shader.isSupported)
+            {
+                var material = new Material(template) { name = runtimeName };
+                ApplyExhaustTexture(material, texture);
+                return material;
+            }
+
+            Material fallback = texture != null
+                ? CreateAdditiveMaterial(runtimeName, texture)
+                : CreateCavityOrbMaterial(runtimeName);
+            if (fallback != null)
+            {
+                Debug.LogWarning(
+                    $"[RTG] Loaded exhaust material '{runtimeName}' via Shader.Find fallback. " +
+                    $"Prefer Resources asset at {resourcePath}.");
+                return fallback;
+            }
+
+            Debug.LogError(
+                $"[RTG] Failed to load exhaust material '{runtimeName}' from Resources ({resourcePath}) " +
+                "and Shader.Find fallback.");
+            return null;
+        }
+
+        private static void ApplyExhaustTexture(Material material, Texture2D texture)
+        {
+            if (material == null || texture == null)
+                return;
+
+            material.mainTexture = texture;
+            if (material.HasProperty("_BaseMap"))
+                material.SetTexture("_BaseMap", texture);
         }
 
         private static Material CreateCavityOrbMaterial(string name)
@@ -769,6 +1088,15 @@ namespace RoutesToGlory.Game
             return material;
         }
 
+        private static void ClearNozzleVfxChildren(Transform nozzle)
+        {
+            if (nozzle == null)
+                return;
+
+            for (int i = nozzle.childCount - 1; i >= 0; i--)
+                DestroySafe(nozzle.GetChild(i).gameObject);
+        }
+
         private void ClearEngines()
         {
             foreach (EngineVfx engine in _engines)
@@ -787,13 +1115,15 @@ namespace RoutesToGlory.Game
                 {
                     if (engine.CavityOuterMaterial != null) DestroySafe(engine.CavityOuterMaterial);
                     if (engine.CavityCoreMaterial != null) DestroySafe(engine.CavityCoreMaterial);
+                    if (engine.PlumeOuterMaterial != null) DestroySafe(engine.PlumeOuterMaterial);
+                    if (engine.PlumeCoreMaterial != null) DestroySafe(engine.PlumeCoreMaterial);
                     DestroySafe(engine.NozzleCavityRoot.gameObject);
                 }
             }
             _engines.Clear();
         }
 
-        private static void DestroySafe(Object obj)
+        private static void DestroySafe(UnityEngine.Object obj)
         {
             if (obj == null) return;
             if (Application.isPlaying) Destroy(obj);
@@ -808,6 +1138,7 @@ namespace RoutesToGlory.Game
             DestroySafe(_nozzleMaterial);
             DestroySafe(_cavityFillMaterial);
             DestroySafe(_cavityCoreMaterial);
+            DestroySafe(_plumeMaterial);
         }
     }
 }

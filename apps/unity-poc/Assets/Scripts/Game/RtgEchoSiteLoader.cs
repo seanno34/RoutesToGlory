@@ -41,14 +41,11 @@ namespace RoutesToGlory.Game
         [Tooltip("Approx. ground height (m above ellipsoid) for the POC area near Douglas, WY.")]
         public double groundHeightMeters = 1476.0;
 
-        [Tooltip("Meters a settlement beacon floats above the ground.")]
-        public float settlementFloatHeight = 120f;
+        [Tooltip("Meters above ellipsoid ground height for the marker anchor.")]
+        public float groundMarkerClearanceM = 6f;
 
-        [Tooltip("Meters a resource beacon floats above the ground.")]
-        public float resourceFloatHeight = 70f;
-
-        [Tooltip("Multiplier from beacon size to label text size. Raise/lower if labels read too big or small.")]
-        public float labelSizeFactor = 0.06f;
+        [Tooltip("Label size multiplier for ground-anchored markers.")]
+        public float groundLabelSizeFactor = 0.09f;
 
         [Tooltip("Label foreground color (a black outline is drawn behind it for contrast).")]
         public Color labelColor = new Color(0.90f, 0.98f, 1.00f); // pale alien cyan-white
@@ -97,6 +94,7 @@ namespace RoutesToGlory.Game
 
         // Cache runtime-created emissive materials by color so we don't leak one per marker.
         private readonly Dictionary<Color, Material> _materialCache = new();
+        private readonly Dictionary<Color, Material> _glowPadCache = new();
 
         private void Awake()
         {
@@ -283,7 +281,6 @@ namespace RoutesToGlory.Game
         private void SpawnSettlement(RtgSettlement s, Transform container)
         {
             Color color = AlignmentColor(s.alignment, s.is_goodie_hut != 0);
-            float diameter = TierDiameter(s.tier);
 
             double lat = s.lat, lng = s.lng;
             bool isGoodieHut = s.is_goodie_hut != 0 || s.tier == "goodie_hut";
@@ -291,9 +288,16 @@ namespace RoutesToGlory.Game
             string tapTag = ApplyTapTestScatter(ref lat, ref lng, pinOnCorridor, s.id);
 
             GameObject root = CreateMarkerRoot($"Echo Site — {s.name} ({s.tier})", container);
-            AddVisual(root.transform, PrimitiveType.Sphere, color, Vector3.one * diameter, Quaternion.identity);
-            AddLabel(root.transform, $"{s.name}\n{TierLabel(s.tier)} · {s.alignment}{tapTag}", diameter);
-            AnchorAt(root, lng, lat, groundHeightMeters + settlementFloatHeight);
+            RtgGroundMarkerVisual.BuildResult visual = RtgGroundMarkerVisual.BuildSettlement(
+                root.transform,
+                s.tier,
+                isGoodieHut,
+                color,
+                GetEmissiveMaterial(color),
+                GetGlowPadMaterial(color));
+            AnchorAt(root, lng, lat, groundHeightMeters + groundMarkerClearanceM);
+            AddLabel(root.transform, $"{s.name}\n{TierLabel(s.tier)} · {s.alignment}{tapTag}",
+                visual.LabelHeightM, groundLabelSizeFactor);
             root.AddComponent<RtgMapMarker>().Configure(
                 RtgMapMarker.Kind.Settlement, s.id, s.name, s.tier, lat, lng);
             RtgMapMarkerRegistry.Register(root.GetComponent<RtgMapMarker>());
@@ -302,15 +306,21 @@ namespace RoutesToGlory.Game
         private void SpawnResource(RtgResourceNode r, Transform container)
         {
             Color color = ResourceColor(r.resource_id);
-            float size = RichnessSize(r.richness);
 
             double lat = r.lat, lng = r.lng;
             string tapTag = ApplyTapTestScatter(ref lat, ref lng, false, r.id);
 
             GameObject root = CreateMarkerRoot($"Resource — {r.resource_id} ({r.richness})", container);
-            AddVisual(root.transform, PrimitiveType.Cube, color, Vector3.one * size, Quaternion.Euler(45f, 45f, 0f));
-            AddLabel(root.transform, $"{ResourceName(r.resource_id)}\n{r.richness}{tapTag}", size);
-            AnchorAt(root, lng, lat, groundHeightMeters + resourceFloatHeight);
+            RtgGroundMarkerVisual.BuildResult visual = RtgGroundMarkerVisual.BuildResource(
+                root.transform,
+                r.resource_id,
+                r.richness,
+                color,
+                GetEmissiveMaterial(color),
+                GetGlowPadMaterial(color));
+            AnchorAt(root, lng, lat, groundHeightMeters + groundMarkerClearanceM);
+            AddLabel(root.transform, $"{ResourceName(r.resource_id)}\n{r.richness}{tapTag}",
+                visual.LabelHeightM, groundLabelSizeFactor);
             root.AddComponent<RtgMapMarker>().Configure(
                 RtgMapMarker.Kind.Resource, r.id, ResourceName(r.resource_id), r.richness, lat, lng);
             RtgMapMarkerRegistry.Register(root.GetComponent<RtgMapMarker>());
@@ -408,16 +418,6 @@ namespace RoutesToGlory.Game
             return root;
         }
 
-        private void AddVisual(
-            Transform root, PrimitiveType shape, Color color, Vector3 scale, Quaternion localRotation)
-        {
-            Mesh mesh = shape == PrimitiveType.Cube ? RtgMeshPrimitives.Cube : RtgMeshPrimitives.Sphere;
-            GameObject go = RtgMeshPrimitives.CreateMeshObject(
-                "Beacon", mesh, GetEmissiveMaterial(color), root);
-            go.transform.localRotation = localRotation;
-            go.transform.localScale = scale;
-        }
-
         // Outline offsets (8-way) for the faux text outline. Legacy TextMesh has no
         // outline, so we draw black copies around a lighter main copy.
         private static readonly Vector2[] OutlineDirections =
@@ -426,14 +426,14 @@ namespace RoutesToGlory.Game
             new Vector2(1f, 1f), new Vector2(1f, -1f), new Vector2(-1f, 1f), new Vector2(-1f, -1f),
         };
 
-        private void AddLabel(Transform root, string text, float beaconSize)
+        private void AddLabel(Transform root, string text, float beaconSize, float sizeFactor)
         {
             var pivot = new GameObject("Label");
             pivot.transform.SetParent(root, false);
-            pivot.transform.localPosition = new Vector3(0f, beaconSize * 0.9f, 0f);
+            pivot.transform.localPosition = new Vector3(0f, beaconSize, 0f);
             pivot.AddComponent<RtgBillboard>();
 
-            float charSize = Mathf.Max(1f, beaconSize * labelSizeFactor);
+            float charSize = Mathf.Max(1f, beaconSize * sizeFactor);
             float outline = charSize * 0.08f;
 
             // Black outline copies at z = 0, offset in the label plane.
@@ -502,6 +502,35 @@ namespace RoutesToGlory.Game
             return mat;
         }
 
+        private Material GetGlowPadMaterial(Color color)
+        {
+            if (_glowPadCache.TryGetValue(color, out Material cached) && cached != null)
+                return cached;
+
+            Shader shader = Shader.Find("Universal Render Pipeline/Unlit");
+            if (shader == null) shader = Shader.Find("Sprites/Default");
+
+            var mat = new Material(shader)
+            {
+                name = $"RTG_GlowPad_{ColorUtility.ToHtmlStringRGB(color)}"
+            };
+
+            Color glow = color;
+            glow.a = 0.42f;
+            if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", glow);
+            if (mat.HasProperty("_Color")) mat.SetColor("_Color", glow);
+            if (mat.HasProperty("_Surface"))
+            {
+                mat.SetFloat("_Surface", 1f);
+                mat.SetFloat("_Blend", 0f);
+                mat.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+                mat.renderQueue = 3000;
+            }
+
+            _glowPadCache[color] = mat;
+            return mat;
+        }
+
         private static Color AlignmentColor(string alignment, bool isGoodieHut)
         {
             if (isGoodieHut) return new Color(1.00f, 0.82f, 0.25f);   // gold
@@ -511,30 +540,6 @@ namespace RoutesToGlory.Game
                 case "hostile":       return new Color(1.00f, 0.35f, 0.28f); // red-orange
                 case "alien_enclave": return new Color(0.85f, 0.30f, 1.00f); // magenta
                 default:              return new Color(0.35f, 0.85f, 1.00f); // neutral cyan
-            }
-        }
-
-        private static float TierDiameter(string tier)
-        {
-            switch (tier)
-            {
-                case "super_city": return 200f;
-                case "city":       return 150f;
-                case "town":       return 110f;
-                case "settlement": return 80f;
-                case "goodie_hut": return 60f;
-                default:           return 80f;
-            }
-        }
-
-        private static float RichnessSize(string richness)
-        {
-            switch (richness)
-            {
-                case "rich":     return 90f;
-                case "moderate": return 60f;
-                case "sparse":   return 40f;
-                default:         return 55f;
             }
         }
 

@@ -50,9 +50,8 @@ namespace RoutesToGlory.Game
         public float maxThrustPitchDegrees = 5f;
 
         private Transform _hullRoot;
-        private Transform _mainEngine;
-        private Transform _leftEngine;
-        private Transform _rightEngine;
+        private Transform _attachmentsRoot;
+        private RtgGliderExhaustSockets.SocketSet _exhaustSockets;
         private MeshRenderer _renderer;
         private Material _hullMaterial;
         private RtgGliderBlobShadow _blobShadow;
@@ -66,6 +65,20 @@ namespace RoutesToGlory.Game
         private Quaternion _baseMeshRotation = Quaternion.identity;
         private RtgGliderEngineMounts _engineMounts;
         private bool _useCustomEnginePorts;
+        private RtgExhaustAnchor _mainAnchor = RtgGliderExhaustAnchors.DefaultMain;
+        private RtgExhaustAnchor _leftAnchor = RtgGliderExhaustAnchors.DefaultLeft;
+        private RtgExhaustAnchor _rightAnchor = RtgGliderExhaustAnchors.DefaultRight;
+        private RtgEngineCavityTuning _cachedMainCavity = RtgEngineCavityTuning.Default;
+        private RtgEngineCavityTuning _cachedLeftCavity = RtgEngineCavityTuning.Default;
+        private RtgEngineCavityTuning _cachedRightCavity = RtgEngineCavityTuning.Default;
+        private bool _hasCachedCavityTuning;
+
+        public const float SocketSpanMinMeters = -8f;
+        public const float SocketSpanMaxMeters = 8f;
+        public const float SocketHeightMinMeters = -4f;
+        public const float SocketHeightMaxMeters = 4f;
+        public const float SocketDepthMinMeters = -8f;
+        public const float SocketDepthMaxMeters = 4f;
 
         public bool IsReady => _hullRoot != null && (_usingImportedHull
             ? _renderer != null
@@ -79,7 +92,10 @@ namespace RoutesToGlory.Game
             Vector3 hullEulerOffset = default,
             bool autoOrientHull = true,
             RtgGliderEngineMounts engineMounts = default,
-            bool useCustomEnginePorts = false)
+            bool useCustomEnginePorts = false,
+            RtgExhaustAnchor mainAnchor = default,
+            RtgExhaustAnchor leftAnchor = default,
+            RtgExhaustAnchor rightAnchor = default)
         {
             texture = tex;
             sizeMeters = sizeM;
@@ -88,22 +104,185 @@ namespace RoutesToGlory.Game
                 importedHullPrefab = hullPrefab;
             hullLocalEulerOffset = hullEulerOffset;
             autoOrientImportedHull = autoOrientHull;
-            _engineMounts = engineMounts;
+            if (RtgGliderEngineMounts.HasSavedPositions(engineMounts))
+                _engineMounts = engineMounts;
             _useCustomEnginePorts = useCustomEnginePorts;
+            if (useCustomEnginePorts)
+            {
+                _mainAnchor = mainAnchor.Clamped();
+                _leftAnchor = leftAnchor.Clamped();
+                _rightAnchor = rightAnchor.Clamped();
+            }
+
             Rebuild();
         }
 
-        public void ApplyEnginePortPositions(RtgGliderEngineMounts mounts)
+        public void ApplySingleExhaustAnchor(int engineIndex, RtgExhaustAnchor anchor)
+        {
+            anchor = anchor.Clamped();
+            switch (engineIndex)
+            {
+                case 1:
+                    _leftAnchor = anchor;
+                    break;
+                case 2:
+                    _rightAnchor = anchor;
+                    break;
+                default:
+                    _mainAnchor = anchor;
+                    break;
+            }
+
+            _useCustomEnginePorts = true;
+        }
+
+        public bool TryGetExhaustSocketWorldPosition(int engineIndex, out Vector3 world)
+        {
+            world = Vector3.zero;
+            Transform socket = engineIndex switch
+            {
+                1 => _exhaustSockets.Left,
+                2 => _exhaustSockets.Right,
+                _ => _exhaustSockets.Main,
+            };
+
+            if (socket == null)
+                return false;
+
+            world = socket.position;
+            return true;
+        }
+
+        public void ApplyEngineMounts(RtgGliderEngineMounts mounts)
         {
             _engineMounts = mounts;
             _useCustomEnginePorts = true;
+            ApplyMountsToSockets();
+            ReconfigureAfterburner();
+        }
 
-            if (_mainEngine != null)
-                _mainEngine.localPosition = mounts.Main;
-            if (_leftEngine != null)
-                _leftEngine.localPosition = mounts.Left;
-            if (_rightEngine != null)
-                _rightEngine.localPosition = mounts.Right;
+        public bool TryGetSocketLocalPosition(int engineIndex, out Vector3 localPosition)
+        {
+            localPosition = engineIndex switch
+            {
+                1 => _engineMounts.Left,
+                2 => _engineMounts.Right,
+                _ => _engineMounts.Main,
+            };
+
+            Transform socket = engineIndex switch
+            {
+                1 => _exhaustSockets.Left,
+                2 => _exhaustSockets.Right,
+                _ => _exhaustSockets.Main,
+            };
+
+            if (socket != null)
+            {
+                localPosition = socket.localPosition;
+                return true;
+            }
+
+            return _exhaustSockets.Attachments != null;
+        }
+
+        public void ApplySingleEngineMount(int engineIndex, Vector3 socketLocal)
+        {
+            switch (engineIndex)
+            {
+                case 1:
+                    _engineMounts.Left = socketLocal;
+                    break;
+                case 2:
+                    _engineMounts.Right = socketLocal;
+                    break;
+                default:
+                    _engineMounts.Main = socketLocal;
+                    break;
+            }
+
+            _useCustomEnginePorts = true;
+            ApplyMountsToSockets();
+            _afterburner?.RefreshPresentation();
+        }
+
+        public bool TryGetEngineMounts(out RtgGliderEngineMounts mounts)
+        {
+            if (_exhaustSockets.Main != null || _exhaustSockets.Left != null || _exhaustSockets.Right != null)
+            {
+                mounts = RtgGliderExhaustSockets.CaptureLocalPositions(_exhaustSockets);
+                _engineMounts = mounts;
+                return true;
+            }
+
+            mounts = _engineMounts;
+            return _exhaustSockets.Attachments != null;
+        }
+
+        public void ApplyExhaustAnchors(
+            RtgExhaustAnchor main,
+            RtgExhaustAnchor left,
+            RtgExhaustAnchor right)
+        {
+            // Legacy anchor fields kept for JSON migration only — sockets are authoritative.
+            _mainAnchor = main.Clamped();
+            _leftAnchor = left.Clamped();
+            _rightAnchor = right.Clamped();
+            _useCustomEnginePorts = true;
+        }
+
+        public bool TryGetExhaustAnchors(
+            out RtgExhaustAnchor main,
+            out RtgExhaustAnchor left,
+            out RtgExhaustAnchor right)
+        {
+            main = _mainAnchor;
+            left = _leftAnchor;
+            right = _rightAnchor;
+            return true;
+        }
+
+        private void ReconfigureAfterburner()
+        {
+            if (_afterburner == null)
+                return;
+
+            if (_exhaustSockets.Main == null && _exhaustSockets.Left == null && _exhaustSockets.Right == null)
+            {
+                Debug.LogWarning("[RTG] Exhaust sockets missing — afterburner VFX not created.");
+                return;
+            }
+
+            _afterburner.Configure(
+                _exhaustSockets.Main,
+                _exhaustSockets.Left,
+                _exhaustSockets.Right,
+                sizeMeters);
+
+            if (_hasCachedCavityTuning)
+            {
+                _afterburner.SetEngineCavityTunings(
+                    _cachedMainCavity,
+                    _cachedLeftCavity,
+                    _cachedRightCavity);
+            }
+
+            _afterburner.RefreshPresentation();
+        }
+
+        private void ApplyMountsToSockets()
+        {
+            if (_exhaustSockets.Attachments == null)
+                return;
+
+            RtgGliderExhaustSockets.ApplyLocalPositions(_exhaustSockets, _engineMounts);
+        }
+
+        private static bool HasAnyMountPosition(RtgGliderEngineMounts mounts)
+        {
+            return mounts.Main != Vector3.zero
+                || mounts.Left != Vector3.zero
+                || mounts.Right != Vector3.zero;
         }
 
         public void ApplyCavityTuning(
@@ -111,8 +290,13 @@ namespace RoutesToGlory.Game
             RtgEngineCavityTuning left,
             RtgEngineCavityTuning right)
         {
+            _cachedMainCavity = main.Clamped();
+            _cachedLeftCavity = left.Clamped();
+            _cachedRightCavity = right.Clamped();
+            _hasCachedCavityTuning = true;
+
             if (_afterburner != null)
-                _afterburner.SetEngineCavityTunings(main, left, right);
+                _afterburner.SetEngineCavityTunings(_cachedMainCavity, _cachedLeftCavity, _cachedRightCavity);
         }
 
         public void ApplyExhaustColorProfile(RtgExhaustColorStop[] stops, float maxMph)
@@ -139,15 +323,27 @@ namespace RoutesToGlory.Game
                 _afterburner.SetFlameLengthScale(scale);
         }
 
+        public bool TryResetSocketsToDefaults(out RtgGliderEngineMounts mounts)
+        {
+            RtgGliderBlockoutMesh.BuildResult blockout = RtgGliderBlockoutMesh.Build(sizeMeters);
+            mounts = new RtgGliderEngineMounts(
+                blockout.MainEngineLocal,
+                blockout.LeftEngineLocal,
+                blockout.RightEngineLocal);
+            ApplyEngineMounts(mounts);
+            return true;
+        }
+
         public bool TryGetEstimatedEnginePorts(out RtgGliderEngineMounts mounts)
         {
-            if (_hullRoot == null || _meshTransform == null)
+            if (_exhaustSockets.Main != null || _exhaustSockets.Left != null || _exhaustSockets.Right != null)
             {
-                mounts = default;
-                return false;
+                mounts = RtgGliderExhaustSockets.CaptureLocalPositions(_exhaustSockets);
+                return true;
             }
 
-            return RtgGliderEngineMounts.TryEstimateFromMesh(_hullRoot, _meshTransform, out mounts);
+            mounts = RtgGliderEngineMounts.BlockoutDefaults(sizeMeters);
+            return true;
         }
 
         public void ApplyHullTuning(Vector3 hullEuler, float headingOffsetDeg, bool? autoOrient = null)
@@ -175,14 +371,26 @@ namespace RoutesToGlory.Game
             ApplyHullTilt();
         }
 
-        public void SetPresentation(Camera camera, float zoom, float minZoom, float maxZoom, bool lowAngleView)
+        public void SetPresentation(
+            Camera camera,
+            float zoom,
+            float minZoom,
+            float maxZoom,
+            bool lowAngleView,
+            float mobilePlumeVisibilityScale = 1f)
         {
-            // 3D mesh reads from all camera angles; no sprite pitch hacks needed in Phase A.
             _ = camera;
             _ = zoom;
             _ = minZoom;
             _ = maxZoom;
             _ = lowAngleView;
+            _ = mobilePlumeVisibilityScale;
+
+            if (_afterburner == null)
+                return;
+
+            // VFX are mesh-anchored in world meters — no device-specific scale compensation.
+            _afterburner.SetPlumeVisibilityScale(1f);
         }
 
         public void SetMotionState(float thrust01, float turnRateRadPerSec, float colorMph = -1f)
@@ -259,15 +467,22 @@ namespace RoutesToGlory.Game
                     "Assign shipHullPrefab on RtgPlayerLocation or add the model under Resources/RTG_PlayerShip/TripoGlider/.");
             }
 
-            RtgGliderEngineMounts mounts = ResolveEngineMounts(blockout);
-            _mainEngine = CreateEnginePoint("MainEngine", mounts.Main, _hullRoot);
-            _leftEngine = CreateEnginePoint("LeftEngine", mounts.Left, _hullRoot);
-            _rightEngine = CreateEnginePoint("RightEngine", mounts.Right, _hullRoot);
+            RtgGliderEngineMounts fallbackMounts = new RtgGliderEngineMounts(
+                blockout.MainEngineLocal,
+                blockout.LeftEngineLocal,
+                blockout.RightEngineLocal);
+            if (!RtgGliderEngineMounts.HasSavedPositions(_engineMounts))
+                _engineMounts = fallbackMounts;
+
+            _attachmentsRoot = null;
+            _exhaustSockets = RtgGliderExhaustSockets.Resolve(_hullRoot, _engineMounts);
+            _attachmentsRoot = _exhaustSockets.Attachments;
 
             _afterburner = hullGo.GetComponent<RtgGliderAfterburner>();
             if (_afterburner == null)
                 _afterburner = hullGo.AddComponent<RtgGliderAfterburner>();
-            _afterburner.Configure(_mainEngine, _leftEngine, _rightEngine, sizeMeters);
+
+            ReconfigureAfterburner();
         }
 
         private bool TryBuildImportedHull(Transform hullParent)
@@ -276,7 +491,7 @@ namespace RoutesToGlory.Game
             if (source == null) return false;
 
             var meshGo = Instantiate(source, hullParent);
-            meshGo.name = "GliderMesh";
+            meshGo.name = "Model";
             meshGo.transform.localPosition = Vector3.zero;
             meshGo.transform.localRotation = Quaternion.identity;
             meshGo.transform.localScale = Vector3.one;
@@ -669,7 +884,7 @@ namespace RoutesToGlory.Game
         {
             _hullMesh = blockout.Mesh;
 
-            var meshGo = new GameObject("GliderMesh");
+            var meshGo = new GameObject("Model");
             meshGo.transform.SetParent(hullParent, false);
             var meshFilter = meshGo.AddComponent<MeshFilter>();
             meshFilter.sharedMesh = _hullMesh;
@@ -741,43 +956,6 @@ namespace RoutesToGlory.Game
                     }
                 }
             }
-        }
-
-        private RtgGliderEngineMounts ResolveEngineMounts(RtgGliderBlockoutMesh.BuildResult blockout)
-        {
-            if (_useCustomEnginePorts)
-                return _engineMounts;
-
-            if (_usingImportedHull && _meshTransform != null
-                && RtgGliderEngineMounts.TryEstimateFromMesh(_hullRoot, _meshTransform, out RtgGliderEngineMounts estimated))
-            {
-                _engineMounts = estimated;
-                Debug.Log(
-                    $"[RTG] Estimated engine ports from mesh — main={estimated.Main} " +
-                    $"left={estimated.Left} right={estimated.Right}");
-                return estimated;
-            }
-
-            if (_engineMounts.Main != Vector3.zero
-                || _engineMounts.Left != Vector3.zero
-                || _engineMounts.Right != Vector3.zero)
-            {
-                return _engineMounts;
-            }
-
-            return new RtgGliderEngineMounts(
-                blockout.MainEngineLocal,
-                blockout.LeftEngineLocal,
-                blockout.RightEngineLocal);
-        }
-
-        private static Transform CreateEnginePoint(string name, Vector3 localPos, Transform parent)
-        {
-            var go = new GameObject(name);
-            go.transform.SetParent(parent, false);
-            go.transform.localPosition = localPos;
-            go.transform.localRotation = Quaternion.LookRotation(Vector3.back, Vector3.up);
-            return go.transform;
         }
 
         private void ApplyHullMaterial()

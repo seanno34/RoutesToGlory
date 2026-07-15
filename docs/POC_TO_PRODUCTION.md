@@ -4,7 +4,7 @@
 
 **When to read:** Before starting the production Unity project. Update this file as Phase 2 POC work lands.
 
-**Related:** [ROADMAP.md](ROADMAP.md) (exit criteria) · [ENGINE_EVALUATION.md](ENGINE_EVALUATION.md) (client platform) · [SETUP.md](SETUP.md)
+**Related:** [ROADMAP.md](ROADMAP.md) (exit criteria) · [ENGINE_EVALUATION.md](ENGINE_EVALUATION.md) (client platform) · [EXHAUST_VFX_LESSONS.md](EXHAUST_VFX_LESSONS.md) (ship thruster VFX) · [SETUP.md](SETUP.md)
 
 ---
 
@@ -46,7 +46,8 @@ POC code is disposable. Production should **reimplement** with clean architectur
 | **Player / camera** | Tightly coupled MonoBehaviour; needs input, camera, and presentation layers | `RtgPlayerLocation` |
 | **Route rendering** | Per-route `LineRenderer` + full map load won't scale | `RtgPersistedRouteDrawer`, `RtgLightRoad` |
 | **Marker visuals** | Primitive spheres/capsules | `RtgEchoSiteLoader` |
-| **Glider presentation** | Flat sprite; needs depth, afterburner, combat presentation | Phase 2 criteria |
+| **Glider / exhaust VFX** | Socket-based Attachments frame, cone plumes, four-stop colors, JSON tuning — **not** bounds-anchored | [EXHAUST_VFX_LESSONS.md](EXHAUST_VFX_LESSONS.md), `RtgGliderExhaustSockets` |
+| **Glider presentation (remaining)** | Combat tilt, ordnance, hero mesh polish beyond Tripo POC | Phase 2 criteria |
 | **Settings / tuners** | Gear panel is IMGUI; persist tuning via proper settings service | `DrawSettingsGearAndPanel` |
 
 ---
@@ -98,10 +99,12 @@ Documented during POC; acceptable for field testing, **not** for massive route n
 |---|---|---|
 | Route cleanup & snap | Done | Keep RDP + snap semantics; add spatial index + cache |
 | Alien terrain dressing | Done (POC) | `RtgTerrainScatter` + proximity-triggered `RtgPathfinderBeam`; cleared tiles persist; forward terrain clearance for hills |
-| Ground-anchored resource markers | Pending | Establish scale + glow readability gates before art spend |
-| Glider afterburner / depth | Pending | Throttle-linked VFX carries to production |
-| Cockpit look-around & rear view | Pending | Tap-drag yaw/pitch in cockpit; side-window sightlines; rear-camera inset — reference `RtgCockpitView` |
-| Hostile ordnance | Pending | Client VFX in POC; production needs server combat resolver |
+| Glider Phase A (3D blockout) | Done (POC) | Blob shadow + particle exhaust; see `RtgGliderBlockoutMesh` |
+| Glider exhaust (Tripo + sockets + cones) | Done (POC) | See [EXHAUST_VFX_LESSONS.md](EXHAUST_VFX_LESSONS.md); mobile-validated via StreamingAssets tuning |
+| Glider hero asset (Phase B) | **Next** | [GLIDER_HERO_ASSET_BRIEF.md](GLIDER_HERO_ASSET_BRIEF.md) — store/commission → prefab integration |
+| Ground-anchored resource markers | Done (POC) | `RtgGroundMarkerVisual` |
+| Cockpit look-around & rear view | Deferred | After hero glider |
+| Hostile ordnance | Deferred | After hero glider |
 
 ---
 
@@ -135,3 +138,4 @@ When Phase 2 is done:
 |---|---|
 | 2026-07-12 | Initial doc: Phase 1 done, route snap/cleanup learnings, scalability debt, tuning defaults |
 | 2026-07-12 | Phase 2: added cockpit look-around (tap-drag) + rear backup camera criterion |
+| 2026-07-14 | Tripo glider exhaust: socket attachments, cone plumes, tuning JSON; lessons in EXHAUST_VFX_LESSONS.md |

@@ -12,7 +12,7 @@ namespace RoutesToGlory.Game
         [Tooltip("Beam arms when a vaporizable prop enters this forward distance (m).")]
         public float detectionRangeM = 115f;
 
-        [Tooltip("While active, props within this forward distance (m) are disintegrated.")]
+        [Tooltip("Legacy vaporize cap (m). Effective reach is at least detectionRangeM.")]
         public float vaporizeRangeM = 80f;
 
         [Tooltip("Corridor half-width near the glider (m).")]
@@ -21,7 +21,7 @@ namespace RoutesToGlory.Game
         [Tooltip("Corridor half-width at max range (m).")]
         public float corridorHalfWidthFarM = 24f;
 
-        [Tooltip("Threat scan rate (Hz).")]
+        [Tooltip("Threat scan rate (Hz). Scan runs every frame; kept for tuning compatibility.")]
         public float scanHz = 8f;
 
         [Header("Beam visual (map / route view)")]
@@ -64,11 +64,15 @@ namespace RoutesToGlory.Game
 
         [Tooltip("Hum volume at full beam intensity.")]
         [Range(0f, 1f)]
-        public float beamHumVolume = 0.38f;
+        public float beamHumVolume = 0.55f;
+
+        [Tooltip("Short chirp when the beam first arms.")]
+        [Range(0f, 1f)]
+        public float beamArmVolume = 0.5f;
 
         [Tooltip("Vaporize zap volume.")]
         [Range(0f, 1f)]
-        public float vaporizeVolume = 0.45f;
+        public float vaporizeVolume = 0.55f;
 
         [Tooltip("Minimum seconds between vaporize zaps (avoids machine-gun SFX).")]
         public float vaporizeMinInterval = 0.09f;
@@ -94,18 +98,21 @@ namespace RoutesToGlory.Game
         private Material _beamGlowMaterial;
         private RtgTerrainScatter _scatter;
         private RtgTerrainHeight _terrainHeight;
-        private float _nextScanTime;
         private bool _threatInRange;
+        private RtgScatterObstacle _lockedThreat;
         private bool _cockpitMode;
         private Camera _viewCamera;
         private AudioSource _humSource;
         private AudioSource _zapSource;
         private AudioClip _runtimeHumClip;
+        private AudioClip _runtimeArmClip;
         private AudioClip _runtimeZapClip;
         private bool _ownsRuntimeHumClip;
+        private bool _ownsRuntimeArmClip;
         private bool _ownsRuntimeZapClip;
         private float _lastVaporizeSfxTime;
         private bool _humPlaying;
+        private bool _wasAudioArmed;
         private float _lastHapticTime;
         private bool _wasBeamArmed;
 
@@ -147,24 +154,33 @@ namespace RoutesToGlory.Game
             if (_scatter == null)
                 _scatter = RtgTerrainScatter.Find();
 
-            if (Time.time >= _nextScanTime)
-            {
-                _nextScanTime = Time.time + (scanHz > 0.01f ? 1f / scanHz : 0.125f);
-                RunThreatScan(lat, lng, headingRad);
-            }
+            Vector3 beamOrigin = ResolveBeamOrigin(shipAnchor);
+            Vector3 beamForward = ResolveBeamForward(headingRad, shipAnchor);
 
-            float targetIntensity = _threatInRange ? 1f : 0f;
+            RunThreatScan(beamOrigin, beamForward);
+
             float fadeT = beamFadeSpeed > 0f
                 ? 1f - Mathf.Exp(-beamFadeSpeed * Time.deltaTime)
                 : 1f;
-            BeamIntensity = Mathf.Lerp(BeamIntensity, targetIntensity, fadeT);
+            if (_threatInRange)
+                BeamIntensity = 1f;
+            else
+                BeamIntensity = Mathf.Lerp(BeamIntensity, 0f, fadeT);
             IsBeamActive = BeamIntensity > 0.05f;
 
-            if (BeamIntensity > 0.4f && _scatter != null)
+            if (_scatter != null && shipAnchor != null && _threatInRange)
             {
-                int vaporized = _scatter.VaporizeInCorridor(
-                    lat, lng, headingRad,
-                    vaporizeRangeM,
+                int vaporized = 0;
+                if (_lockedThreat != null && _scatter.TryVaporizeObstacle(_lockedThreat))
+                {
+                    vaporized = 1;
+                    _lockedThreat = null;
+                }
+
+                vaporized += _scatter.VaporizeInCorridorWorld(
+                    beamOrigin,
+                    beamForward,
+                    EffectiveVaporizeRangeM(),
                     corridorHalfWidthNearM,
                     corridorHalfWidthFarM);
                 PlayVaporizeSfx(vaporized);
@@ -175,15 +191,64 @@ namespace RoutesToGlory.Game
             UpdateBeamHaptics();
         }
 
-        private void RunThreatScan(double lat, double lng, float headingRad)
+        private Vector3 ResolveBeamOrigin(Transform shipAnchor)
+        {
+            if (_cockpitMode && useCockpitBeam && _viewCamera != null)
+                return _viewCamera.transform.position + _viewCamera.transform.forward * 3f;
+
+            if (shipAnchor != null)
+                return shipAnchor.position + Vector3.up * beamOriginHeightM;
+
+            return Vector3.zero;
+        }
+
+        private Vector3 ResolveBeamForward(float headingRad, Transform shipAnchor)
+        {
+            if (_cockpitMode && useCockpitBeam && _viewCamera != null)
+            {
+                Vector3 forward = _viewCamera.transform.forward;
+                forward.y = 0f;
+                if (forward.sqrMagnitude > 1e-6f)
+                    return forward.normalized;
+            }
+
+            float sin = Mathf.Sin(headingRad);
+            float cos = Mathf.Cos(headingRad);
+            Vector3 travelForward = new Vector3(sin, 0f, cos);
+            if (travelForward.sqrMagnitude < 1e-6f && shipAnchor != null)
+            {
+                travelForward = shipAnchor.forward;
+                travelForward.y = 0f;
+            }
+
+            return travelForward.sqrMagnitude > 1e-6f ? travelForward.normalized : Vector3.forward;
+        }
+
+        private float EffectiveVaporizeRangeM() =>
+            Mathf.Max(vaporizeRangeM, detectionRangeM);
+
+        private float ResolveBeamVisualReachM()
+        {
+            if (_threatInRange && NearestThreatM < float.MaxValue)
+                return Mathf.Clamp(NearestThreatM, 12f, EffectiveVaporizeRangeM());
+
+            if (_cockpitMode && useCockpitBeam && _viewCamera != null)
+                return Mathf.Max(cockpitBeamLengthM, EffectiveVaporizeRangeM()) * BeamIntensity;
+
+            return EffectiveVaporizeRangeM() * Mathf.Lerp(0.65f, 1f, BeamIntensity);
+        }
+
+        private void RunThreatScan(Vector3 beamOrigin, Vector3 beamForward)
         {
             _threatInRange = false;
+            _lockedThreat = null;
             NearestThreatM = float.MaxValue;
 
-            if (_scatter == null) return;
+            if (_scatter == null || beamForward.sqrMagnitude < 1e-6f) return;
 
-            if (_scatter.TryFindNearestThreat(
-                    lat, lng, headingRad,
+            if (_scatter.TryFindNearestThreatWorld(
+                    beamOrigin,
+                    beamForward,
                     detectionRangeM,
                     corridorHalfWidthNearM,
                     corridorHalfWidthFarM,
@@ -191,7 +256,10 @@ namespace RoutesToGlory.Game
                     out float forwardM))
             {
                 NearestThreatM = forwardM;
-                _threatInRange = forwardM <= detectionRangeM && forwardM > 0.5f;
+                float keepArmedM = nearest != null ? nearest.radiusMeters : 0f;
+                _threatInRange = forwardM <= detectionRangeM && forwardM > -keepArmedM;
+                if (_threatInRange)
+                    _lockedThreat = nearest;
             }
         }
 
@@ -234,7 +302,7 @@ namespace RoutesToGlory.Game
             if (forward.sqrMagnitude > 1e-6f)
                 forward.Normalize();
 
-            float length = vaporizeRangeM * Mathf.Lerp(0.55f, 1f, BeamIntensity);
+            float length = ResolveBeamVisualReachM();
             Vector3 end = origin + forward * length;
 
             ApplyBeamGeometry(origin, end, beamWidthStartM, beamWidthEndRatio, beamGlowWidthMultiplier);
@@ -249,7 +317,7 @@ namespace RoutesToGlory.Game
                 _beamRoot.rotation = camera.transform.rotation;
 
             Vector3 origin = camera.transform.position + camera.transform.forward * 3f;
-            float length = cockpitBeamLengthM * Mathf.Lerp(0.5f, 1f, BeamIntensity);
+            float length = ResolveBeamVisualReachM();
             Vector3 end = origin + camera.transform.forward * length;
 
             ApplyBeamGeometry(
@@ -382,22 +450,30 @@ namespace RoutesToGlory.Game
         {
             if (!enableBeamAudio) return;
 
+            RtgAudioSession.Prepare();
+
             if (_humSource == null)
             {
                 var audioRoot = new GameObject("PathfinderBeamAudio");
                 audioRoot.transform.SetParent(transform, false);
 
-                _humSource = audioRoot.AddComponent<AudioSource>();
+                var humGo = new GameObject("Hum");
+                humGo.transform.SetParent(audioRoot.transform, false);
+                _humSource = humGo.AddComponent<AudioSource>();
                 _humSource.playOnAwake = false;
                 _humSource.loop = true;
                 _humSource.spatialBlend = 0f;
                 _humSource.dopplerLevel = 0f;
+                _humSource.ignoreListenerPause = true;
 
-                _zapSource = audioRoot.AddComponent<AudioSource>();
+                var zapGo = new GameObject("Zap");
+                zapGo.transform.SetParent(audioRoot.transform, false);
+                _zapSource = zapGo.AddComponent<AudioSource>();
                 _zapSource.playOnAwake = false;
                 _zapSource.loop = false;
                 _zapSource.spatialBlend = 0f;
                 _zapSource.dopplerLevel = 0f;
+                _zapSource.ignoreListenerPause = true;
             }
 
             if (_runtimeHumClip == null)
@@ -407,6 +483,12 @@ namespace RoutesToGlory.Game
                     : RtgPathfinderBeamSfx.CreateBeamHumLoop();
                 _ownsRuntimeHumClip = beamHumClip == null;
                 _humSource.clip = _runtimeHumClip;
+            }
+
+            if (_runtimeArmClip == null)
+            {
+                _runtimeArmClip = RtgPathfinderBeamSfx.CreateBeamArmChirp();
+                _ownsRuntimeArmClip = true;
             }
 
             if (_runtimeZapClip == null)
@@ -423,14 +505,19 @@ namespace RoutesToGlory.Game
             if (!enableBeamAudio)
             {
                 StopBeamHum();
+                _wasAudioArmed = false;
                 return;
             }
 
             EnsureBeamAudio();
             if (_humSource == null) return;
 
-            bool shouldHum = BeamIntensity > 0.04f;
-            if (shouldHum)
+            bool armed = BeamIntensity > 0.04f;
+            bool justArmed = armed && !_wasAudioArmed;
+            if (justArmed && _zapSource != null && _runtimeArmClip != null)
+                _zapSource.PlayOneShot(_runtimeArmClip, beamArmVolume);
+
+            if (armed)
             {
                 _humSource.volume = beamHumVolume * BeamIntensity;
                 _humSource.pitch = Mathf.Lerp(0.92f, 1.05f, BeamIntensity);
@@ -444,6 +531,8 @@ namespace RoutesToGlory.Game
             {
                 StopBeamHum();
             }
+
+            _wasAudioArmed = armed;
         }
 
         private void StopBeamHum()
@@ -504,6 +593,7 @@ namespace RoutesToGlory.Game
             DestroyMaterial(_beamMaterial);
             DestroyMaterial(_beamGlowMaterial);
             DestroyRuntimeClip(_runtimeHumClip, _ownsRuntimeHumClip);
+            DestroyRuntimeClip(_runtimeArmClip, _ownsRuntimeArmClip);
             DestroyRuntimeClip(_runtimeZapClip, _ownsRuntimeZapClip);
         }
 

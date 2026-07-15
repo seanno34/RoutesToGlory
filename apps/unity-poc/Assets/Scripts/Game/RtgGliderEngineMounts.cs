@@ -4,7 +4,8 @@ using UnityEngine;
 namespace RoutesToGlory.Game
 {
     /// <summary>
-    /// Three exhaust nozzle anchors in hull contract space (+Z nose, +Y up, -Z aft).
+    /// Three exhaust nozzle anchors in glider mesh local space (+Z nose, +Y up, -Z aft).
+    /// Parent engine transforms to the hull mesh so VFX stay glued across devices.
     /// </summary>
     public struct RtgGliderEngineMounts
     {
@@ -29,12 +30,12 @@ namespace RoutesToGlory.Game
         }
 
         /// <summary>
-        /// Estimate nozzle positions from imported mesh geometry in hull-local space.
+        /// Estimate nozzle positions from imported mesh geometry in mesh-local space.
         /// </summary>
-        public static bool TryEstimateFromMesh(Transform hullRoot, Transform meshRoot, out RtgGliderEngineMounts mounts)
+        public static bool TryEstimateFromMesh(Transform meshRoot, out RtgGliderEngineMounts mounts)
         {
             mounts = default;
-            if (hullRoot == null || meshRoot == null)
+            if (meshRoot == null)
                 return false;
 
             var points = new List<Vector3>(4096);
@@ -48,7 +49,7 @@ namespace RoutesToGlory.Game
                 foreach (Vector3 vertex in mesh.vertices)
                 {
                     Vector3 world = meshTransform.TransformPoint(vertex);
-                    points.Add(hullRoot.InverseTransformPoint(world));
+                    points.Add(meshRoot.InverseTransformPoint(world));
                 }
             }
 
@@ -101,6 +102,13 @@ namespace RoutesToGlory.Game
             return true;
         }
 
+        public static bool HasSavedPositions(RtgGliderEngineMounts mounts)
+        {
+            return mounts.Main.sqrMagnitude > 1e-6f
+                || mounts.Left.sqrMagnitude > 1e-6f
+                || mounts.Right.sqrMagnitude > 1e-6f;
+        }
+
         private static bool TryClusterAverage(
             List<Vector3> points,
             System.Predicate<Vector3> predicate,
@@ -108,7 +116,6 @@ namespace RoutesToGlory.Game
         {
             average = Vector3.zero;
             int count = 0;
-            float bestZ = float.PositiveInfinity;
             foreach (Vector3 point in points)
             {
                 if (!predicate(point))
@@ -116,15 +123,13 @@ namespace RoutesToGlory.Game
 
                 count++;
                 average += point;
-                if (point.z < bestZ)
-                    bestZ = point.z;
             }
 
             if (count < 4)
                 return false;
 
             average /= count;
-            average.z = bestZ;
+            // Use cluster mean Z — not the rearmost vertex (tail fins read as "way behind" the hull).
             return true;
         }
     }

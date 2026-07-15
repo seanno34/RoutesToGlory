@@ -1,0 +1,39 @@
+{
+  "_comment": "Copy to rtg-ship-tuning.json (gitignored) for local editor tuning. Save in Play mode copies to Assets/StreamingAssets/ for device builds. See docs/EXHAUST_VFX_LESSONS.md.",
+  "autoOrientImportedHull": false,
+  "hullEulerOffset": {
+    "x": -39.5,
+    "y": -96.0,
+    "z": -87.0
+  },
+  "headingOffsetDegrees": 90.85,
+  "useCustomEnginePorts": false,
+  "mainEngineLocal": { "x": 0.0, "y": 0.0, "z": 0.0 },
+  "leftEngineLocal": { "x": 0.0, "y": 0.0, "z": 0.0 },
+  "rightEngineLocal": { "x": 0.0, "y": 0.0, "z": 0.0 },
+  "exhaustLengthScale": 1.0,
+  "mainCavity": {
+    "sizeMeters": 0.42,
+    "offsetXMeters": 0.0,
+    "offsetYMeters": 0.0,
+    "depthOffsetMeters": 0.06,
+    "intensity": 1.0,
+    "coreRatio": 0.62
+  },
+  "leftCavity": {
+    "sizeMeters": 0.42,
+    "offsetXMeters": 0.0,
+    "offsetYMeters": 0.0,
+    "depthOffsetMeters": 0.06,
+    "intensity": 1.0,
+    "coreRatio": 0.62
+  },
+  "rightCavity": {
+    "sizeMeters": 0.42,
+    "offsetXMeters": 0.0,
+    "offsetYMeters": 0.0,
+    "depthOffsetMeters": 0.06,
+    "intensity": 1.0,
+    "coreRatio": 0.62
+  }
+}

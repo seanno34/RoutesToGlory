@@ -42,6 +42,36 @@ namespace RoutesToGlory.Game
             return true;
         }
 
+        /// <summary>
+        /// Forward/lateral frame in Unity world space (+X east, +Z north on the ground plane).
+        /// Matches the Pathfinder beam visual so props vaporize on contact, not on pass-over.
+        /// </summary>
+        public static bool TryWorldCorridorFrame(
+            Vector3 playerWorldPos,
+            Vector3 obstacleWorldPos,
+            Vector3 forwardXZ,
+            out float forwardM,
+            out float lateralM)
+        {
+            Vector3 delta = obstacleWorldPos - playerWorldPos;
+            delta.y = 0f;
+
+            Vector3 forward = forwardXZ;
+            forward.y = 0f;
+            if (forward.sqrMagnitude < 1e-6f)
+            {
+                forwardM = 0f;
+                lateralM = 0f;
+                return false;
+            }
+
+            forward.Normalize();
+            Vector3 right = new Vector3(forward.z, 0f, -forward.x);
+            forwardM = Vector3.Dot(delta, forward);
+            lateralM = Vector3.Dot(delta, right);
+            return true;
+        }
+
         public static bool IsInsideWedge(
             float forwardM,
             float lateralM,

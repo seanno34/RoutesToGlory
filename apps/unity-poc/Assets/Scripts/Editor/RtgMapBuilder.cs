@@ -382,6 +382,121 @@ namespace RoutesToGlory.EditorTools
                 "glider_01 = map pin; glider_cockpit_01 / glider_cockpit_portrait_01 = cockpit overlays. Re-export to Xcode after changes.");
         }
 
+        private const string TripoSourceFolder =
+            "Assets/TripoModels/futuristic_fighter_3d_model";
+
+        private const string TripoSourceFbx =
+            TripoSourceFolder + "/futuristic_fighter_3d_model.fbx";
+
+        private const string TripoResourcesFolder =
+            "Assets/Resources/RTG_PlayerShip/TripoGlider";
+
+        [MenuItem("Routes to Glory/8c. Sync Tripo Ship Hull", priority = 29)]
+        public static void SyncTripoShipHull()
+        {
+            string sourcePath = Path.GetFullPath(Path.Combine(Application.dataPath, "..", TripoSourceFbx));
+            if (!File.Exists(sourcePath))
+            {
+                EditorUtility.DisplayDialog(
+                    "Tripo hull missing",
+                    "Import the glider from Tripo first.\n\nExpected:\n" + TripoSourceFbx,
+                    "OK");
+                return;
+            }
+
+            CopyTripoHullDirectory(
+                Path.GetFullPath(Path.Combine(Application.dataPath, "..", TripoSourceFolder)),
+                Path.GetFullPath(Path.Combine(Application.dataPath, "Resources/RTG_PlayerShip/TripoGlider")));
+            AssetDatabase.Refresh();
+
+            GameObject hull = AssetDatabase.LoadAssetAtPath<GameObject>(TripoSourceFbx);
+            if (hull == null)
+            {
+                Debug.LogError("[RTG] Could not load Tripo hull GameObject from " + TripoSourceFbx);
+                return;
+            }
+
+            RtgPlayerLocation player = FindByName<RtgPlayerLocation>(PlayerName);
+            if (player == null)
+            {
+                Debug.LogWarning(
+                    "[RTG] Tripo hull copied to Resources, but no RTG Player was found. " +
+                    "Run 8. Setup Player (GPS) first.");
+                return;
+            }
+
+            Undo.RecordObject(player, "Assign Tripo Ship Hull");
+            player.shipHullPrefab = hull;
+            player.shipSizeMeters = 24f;
+            if (RtgShipTuningConfig.TryLoad(out RtgShipTuningConfig.ShipTuningFile tuning))
+                RtgShipTuningConfig.ApplyTo(player, tuning);
+            else
+                player.shipHullEulerOffset = Vector3.zero;
+            player.RefreshMarkerVisual();
+            EditorUtility.SetDirty(player);
+            MarkDirty(player.GetComponentInParent<CesiumGeoreference>());
+
+            Debug.Log(
+                "[RTG] Tripo hull synced to Resources and assigned on RTG Player. Rebuild for device.");
+        }
+
+        [MenuItem("Routes to Glory/8d. Apply Ship Tuning to Player", priority = 29)]
+        public static void ApplyShipTuningToPlayer()
+        {
+            if (!RtgShipTuningConfig.TryLoad(out RtgShipTuningConfig.ShipTuningFile tuning))
+            {
+                EditorUtility.DisplayDialog(
+                    "Ship tuning missing",
+                    "No rtg-ship-tuning.json found.\n\n" +
+                    "Tune in Play mode (Settings → Hull orientation → Save tuning), or copy " +
+                    "rtg-ship-tuning.json.example to rtg-ship-tuning.json.",
+                    "OK");
+                return;
+            }
+
+            RtgPlayerLocation player = FindByName<RtgPlayerLocation>(PlayerName);
+            if (player == null)
+            {
+                Debug.LogWarning("[RTG] No RTG Player found. Run 8. Setup Player (GPS) first.");
+                return;
+            }
+
+            Undo.RecordObject(player, "Apply Ship Tuning");
+            RtgShipTuningConfig.ApplyTo(player, tuning);
+            if (Application.isPlaying)
+                player.RefreshMarkerVisual();
+            EditorUtility.SetDirty(player);
+            MarkDirty(player.GetComponentInParent<CesiumGeoreference>());
+
+            Debug.Log(
+                $"[RTG] Applied {RtgShipTuningConfig.FileName} to RTG Player — " +
+                $"euler={tuning.hullEulerOffset} heading={tuning.headingOffsetDegrees} " +
+                $"autoOrient={tuning.autoOrientImportedHull} " +
+                $"customPorts={tuning.useCustomEnginePorts}");
+        }
+
+        private static void CopyTripoHullDirectory(string sourceDir, string targetDir)
+        {
+            Directory.CreateDirectory(targetDir);
+
+            foreach (string dir in Directory.GetDirectories(sourceDir, "*", SearchOption.AllDirectories))
+            {
+                string relative = dir.Substring(sourceDir.Length).TrimStart(Path.DirectorySeparatorChar);
+                Directory.CreateDirectory(Path.Combine(targetDir, relative));
+            }
+
+            foreach (string file in Directory.GetFiles(sourceDir, "*", SearchOption.AllDirectories))
+            {
+                if (file.EndsWith(".meta"))
+                    continue;
+
+                string relative = file.Substring(sourceDir.Length).TrimStart(Path.DirectorySeparatorChar);
+                string destination = Path.Combine(targetDir, relative);
+                Directory.CreateDirectory(Path.GetDirectoryName(destination) ?? targetDir);
+                File.Copy(file, destination, true);
+            }
+        }
+
         [MenuItem("Routes to Glory/9. Reset Dev World (routes + claims)", priority = 30)]
         public static void ResetDevWorldProgress()
         {
@@ -626,6 +741,9 @@ namespace RoutesToGlory.EditorTools
             // See CameraFlySpeed: dynamic speed needs terrain colliders we don't bake.
             controller.enableDynamicSpeed = false;
             controller.defaultMaximumSpeed = CameraFlySpeed;
+
+            if (camGo.GetComponent<AudioListener>() == null)
+                camGo.AddComponent<AudioListener>();
 
             anchor.SetPositionLongitudeLatitudeHeight(
                 OriginLongitude, OriginLatitude, OriginHeight + CameraStartAltitude);

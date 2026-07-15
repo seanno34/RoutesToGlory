@@ -16,14 +16,35 @@ namespace RoutesToGlory.Game
             for (int i = 0; i < sampleCount; i++)
             {
                 float t = i / (float)SampleRate;
-                float hum = Mathf.Sin(2f * Mathf.PI * 68f * t) * 0.34f
-                            + Mathf.Sin(2f * Mathf.PI * 136f * t) * 0.16f
-                            + Mathf.Sin(2f * Mathf.PI * 204f * t) * 0.06f;
-                float shimmer = Mathf.Sin(t * 17.3f) * Mathf.Sin(t * 31.7f) * 0.07f;
-                samples[i] = Mathf.Clamp(hum + shimmer, -1f, 1f) * 0.55f;
+                // Emphasize mid-range so phone speakers can actually reproduce the hum.
+                float hum = Mathf.Sin(2f * Mathf.PI * 420f * t) * 0.24f
+                            + Mathf.Sin(2f * Mathf.PI * 840f * t) * 0.14f
+                            + Mathf.Sin(2f * Mathf.PI * 1260f * t) * 0.07f
+                            + Mathf.Sin(2f * Mathf.PI * 95f * t) * 0.05f;
+                float shimmer = Mathf.Sin(t * 17.3f) * Mathf.Sin(t * 31.7f) * 0.05f;
+                samples[i] = Mathf.Clamp(hum + shimmer, -1f, 1f) * 0.72f;
             }
 
             var clip = AudioClip.Create("RTG_PathfinderHum", sampleCount, 1, SampleRate, false);
+            clip.SetData(samples, 0);
+            return clip;
+        }
+
+        public static AudioClip CreateBeamArmChirp()
+        {
+            const float duration = 0.1f;
+            int sampleCount = Mathf.RoundToInt(SampleRate * duration);
+            var samples = new float[sampleCount];
+
+            for (int i = 0; i < sampleCount; i++)
+            {
+                float t = i / (float)SampleRate;
+                float env = Mathf.SmoothStep(1f, 0f, t / duration);
+                float tone = Mathf.Sin(2f * Mathf.PI * Mathf.Lerp(620f, 980f, t / duration) * t);
+                samples[i] = tone * env * 0.65f;
+            }
+
+            var clip = AudioClip.Create("RTG_PathfinderArm", sampleCount, 1, SampleRate, false);
             clip.SetData(samples, 0);
             return clip;
         }
@@ -39,8 +60,8 @@ namespace RoutesToGlory.Game
                 float t = i / (float)SampleRate;
                 float env = Mathf.Exp(-t * 42f);
                 float noise = PseudoNoise(i * 0.37f + t * 900f);
-                float sweep = Mathf.Sin(2f * Mathf.PI * Mathf.Lerp(920f, 180f, t / duration) * t);
-                samples[i] = (noise * 0.55f + sweep * 0.35f) * env;
+                float sweep = Mathf.Sin(2f * Mathf.PI * Mathf.Lerp(1400f, 420f, t / duration) * t);
+                samples[i] = (noise * 0.45f + sweep * 0.45f) * env;
             }
 
             var clip = AudioClip.Create("RTG_PathfinderZap", sampleCount, 1, SampleRate, false);

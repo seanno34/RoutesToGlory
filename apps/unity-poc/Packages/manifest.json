@@ -1,6 +1,7 @@
 {
   "dependencies": {
     "com.cesium.unity": "1.24.0",
+    "com.tripo3d.unitybridge": "file:/Users/seancalderon/Downloads/Tripo3d_Unity_Bridge",
     "com.unity.ai.navigation": "2.0.13",
     "com.unity.collab-proxy": "2.12.4",
     "com.unity.ide.rider": "3.0.40",

@@ -1,0 +1,259 @@
+{
+    "_comment": "Tuned in Play mode (Settings → Exhaust position uses Hull/Attachments socket locals). Copy values into rtg-ship-tuning.json.example for team defaults.",
+    "autoOrientImportedHull": false,
+    "hullEulerOffset": {
+        "x": -45.42453384399414,
+        "y": -180.0,
+        "z": -89.57546997070313
+    },
+    "headingOffsetDegrees": -180.0,
+    "useCustomEnginePorts": true,
+    "enginePortsMeshLocal": true,
+    "mainEngineLocal": {
+        "x": -0.0733942985534668,
+        "y": 3.743119239807129,
+        "z": 2.1834864616394045
+    },
+    "leftEngineLocal": {
+        "x": 4.770642280578613,
+        "y": 3.5229358673095705,
+        "z": 2.6238529682159426
+    },
+    "rightEngineLocal": {
+        "x": -4.697247505187988,
+        "y": 3.5229358673095705,
+        "z": 2.6238529682159426
+    },
+    "mainExhaustAnchor": {
+        "span01": 0.25229358673095705,
+        "height01": 0.5045871734619141,
+        "aftInset01": 0.1651376187801361
+    },
+    "leftExhaustAnchor": {
+        "span01": 0.059633027762174609,
+        "height01": 0.055045872926712039,
+        "aftInset01": 0.1994396299123764
+    },
+    "rightExhaustAnchor": {
+        "span01": 0.3807339370250702,
+        "height01": 0.9495412707328796,
+        "aftInset01": 0.19430527091026307
+    },
+    "exhaustLengthScale": 0.7541273832321167,
+    "exhaustColorStops": [
+        {
+            "speedMph": 4.669810771942139,
+            "cavityOuter": {
+                "r": 1.0,
+                "g": 0.20183485746383668,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "cavityCore": {
+                "r": 1.0,
+                "g": 1.0,
+                "b": 1.0,
+                "a": 1.0
+            },
+            "flame": {
+                "r": 1.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "glow": {
+                "r": 1.0,
+                "g": 1.0,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "plumeOuter": {
+                "r": 1.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "plumeCore": {
+                "r": 1.0,
+                "g": 1.0,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "plumeMaxLengthMeters": 5.9449543952941898,
+            "plumeLengthScale": 0.18233945965766908
+        },
+        {
+            "speedMph": 14.704865455627442,
+            "cavityOuter": {
+                "r": 1.0,
+                "g": 0.5045871734619141,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "cavityCore": {
+                "r": 1.0,
+                "g": 1.0,
+                "b": 1.0,
+                "a": 1.0
+            },
+            "flame": {
+                "r": 1.0,
+                "g": 0.01834862306714058,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "glow": {
+                "r": 1.0,
+                "g": 1.0,
+                "b": 1.0,
+                "a": 1.0
+            },
+            "plumeOuter": {
+                "r": 1.0,
+                "g": 0.01834862306714058,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "plumeCore": {
+                "r": 1.0,
+                "g": 1.0,
+                "b": 1.0,
+                "a": 1.0
+            },
+            "plumeMaxLengthMeters": 8.697248458862305,
+            "plumeLengthScale": 0.30091744661331179
+        },
+        {
+            "speedMph": 50.364166259765628,
+            "cavityOuter": {
+                "r": 1.0,
+                "g": 0.25229358673095705,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "cavityCore": {
+                "r": 1.0,
+                "g": 1.0,
+                "b": 1.0,
+                "a": 1.0
+            },
+            "flame": {
+                "r": 1.0,
+                "g": 0.0,
+                "b": 0.4954128563404083,
+                "a": 1.0
+            },
+            "glow": {
+                "r": 1.0,
+                "g": 1.0,
+                "b": 1.0,
+                "a": 1.0
+            },
+            "plumeOuter": {
+                "r": 1.0,
+                "g": 0.0,
+                "b": 0.4954128563404083,
+                "a": 1.0
+            },
+            "plumeCore": {
+                "r": 1.0,
+                "g": 1.0,
+                "b": 1.0,
+                "a": 1.0
+            },
+            "plumeMaxLengthMeters": 8.697248458862305,
+            "plumeLengthScale": 0.581192672252655
+        },
+        {
+            "speedMph": 80.14151763916016,
+            "cavityOuter": {
+                "r": 1.0,
+                "g": 0.23853211104869843,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "cavityCore": {
+                "r": 1.0,
+                "g": 0.6009174585342407,
+                "b": 0.6146789193153381,
+                "a": 1.0
+            },
+            "flame": {
+                "r": 0.0,
+                "g": 0.0,
+                "b": 1.0,
+                "a": 1.0
+            },
+            "glow": {
+                "r": 1.0,
+                "g": 1.0,
+                "b": 1.0,
+                "a": 1.0
+            },
+            "plumeOuter": {
+                "r": 0.0,
+                "g": 0.0,
+                "b": 1.0,
+                "a": 1.0
+            },
+            "plumeCore": {
+                "r": 1.0,
+                "g": 1.0,
+                "b": 1.0,
+                "a": 1.0
+            },
+            "plumeMaxLengthMeters": 6.0,
+            "plumeLengthScale": 1.149999976158142
+        }
+    ],
+    "exhaustColorMaxMph": 80.14151763916016,
+    "mainCavity": {
+        "sizeMeters": 1.4803669452667237,
+        "offsetXMeters": 0.09633026272058487,
+        "offsetYMeters": 0.06422017514705658,
+        "depthOffsetMeters": 0.5,
+        "intensity": 5.0,
+        "coreRatio": 0.15000000596046449,
+        "plumeMaxLengthMeters": 1.9811322689056397,
+        "plumeLengthPower": 1.149999976158142,
+        "plumeBaseWidthScale": 1.0,
+        "plumeCoreWidthRatio": 0.5799999833106995,
+        "plumeOffsetXMeters": 0.0,
+        "plumeOffsetYMeters": 0.0,
+        "plumeOffsetZMeters": 0.0
+    },
+    "leftCavity": {
+        "sizeMeters": 0.6913208365440369,
+        "offsetXMeters": 0.0,
+        "offsetYMeters": 0.0,
+        "depthOffsetMeters": 0.0,
+        "intensity": 0.20000000298023225,
+        "coreRatio": 0.4632076025009155,
+        "plumeMaxLengthMeters": 2.0377357006073,
+        "plumeLengthPower": 1.149999976158142,
+        "plumeBaseWidthScale": 1.0,
+        "plumeCoreWidthRatio": 0.5799999833106995,
+        "plumeOffsetXMeters": 0.0,
+        "plumeOffsetYMeters": 0.0,
+        "plumeOffsetZMeters": 0.0
+    },
+    "rightCavity": {
+        "sizeMeters": 0.6867923736572266,
+        "offsetXMeters": 0.0,
+        "offsetYMeters": 0.0,
+        "depthOffsetMeters": 0.0,
+        "intensity": 0.20000000298023225,
+        "coreRatio": 0.5536697506904602,
+        "plumeMaxLengthMeters": 1.9811322689056397,
+        "plumeLengthPower": 1.149999976158142,
+        "plumeBaseWidthScale": 1.0,
+        "plumeCoreWidthRatio": 0.5799999833106995,
+        "plumeOffsetXMeters": 0.0,
+        "plumeOffsetYMeters": 0.0,
+        "plumeOffsetZMeters": 0.0
+    },
+    "cavitySizeMeters": 0.41999998688697817,
+    "cavityDepthOffsetMeters": 0.05999999865889549,
+    "cavityIntensity": 1.0,
+    "cavityCoreRatio": 0.6200000047683716
+}

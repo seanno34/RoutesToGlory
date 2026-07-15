@@ -201,6 +201,56 @@ namespace RoutesToGlory.Game
             return true;
         }
 
+        /// <summary>
+        /// Nearest vaporizable obstacle using world-space corridor math (aligned with beam visuals).
+        /// </summary>
+        public bool TryFindNearestThreatWorld(
+            Vector3 originWorld,
+            Vector3 forwardXZ,
+            float maxForwardM,
+            float halfWidthNearM,
+            float halfWidthFarM,
+            out RtgScatterObstacle nearest,
+            out float forwardM)
+        {
+            nearest = null;
+            forwardM = float.MaxValue;
+            float bestForward = float.MaxValue;
+
+            foreach (KeyValuePair<string, List<RtgScatterObstacle>> kv in _obstaclesByTile)
+            {
+                foreach (RtgScatterObstacle obstacle in kv.Value)
+                {
+                    if (obstacle == null) continue;
+                    if (!RtgForwardCorridor.TryWorldCorridorFrame(
+                            originWorld,
+                            obstacle.transform.position,
+                            forwardXZ,
+                            out float f,
+                            out float lateral))
+                    {
+                        continue;
+                    }
+
+                    if (!RtgForwardCorridor.IsInsideWedge(
+                            f, lateral, maxForwardM, halfWidthNearM, halfWidthFarM, obstacle.radiusMeters))
+                    {
+                        continue;
+                    }
+
+                    if (f < bestForward)
+                    {
+                        bestForward = f;
+                        nearest = obstacle;
+                    }
+                }
+            }
+
+            if (nearest == null) return false;
+            forwardM = bestForward;
+            return true;
+        }
+
         /// <summary>Disintegrate vaporizable props inside the active beam wedge.</summary>
         public int VaporizeInCorridor(
             double playerLat,
@@ -234,6 +284,64 @@ namespace RoutesToGlory.Game
                 DisintegrateObstacle(tileId, obstacle);
 
             return toRemove.Count;
+        }
+
+        /// <summary>
+        /// Disintegrate props inside the active beam wedge using world-space contact checks.
+        /// </summary>
+        public int VaporizeInCorridorWorld(
+            Vector3 originWorld,
+            Vector3 forwardXZ,
+            float maxForwardM,
+            float halfWidthNearM,
+            float halfWidthFarM)
+        {
+            var toRemove = new List<(string tileId, RtgScatterObstacle obstacle)>();
+
+            foreach (KeyValuePair<string, List<RtgScatterObstacle>> kv in _obstaclesByTile)
+            {
+                foreach (RtgScatterObstacle obstacle in kv.Value)
+                {
+                    if (obstacle == null) continue;
+                    if (!RtgForwardCorridor.TryWorldCorridorFrame(
+                            originWorld,
+                            obstacle.transform.position,
+                            forwardXZ,
+                            out float f,
+                            out float lateral))
+                    {
+                        continue;
+                    }
+
+                    if (!RtgForwardCorridor.IsInsideWedge(
+                            f, lateral, maxForwardM, halfWidthNearM, halfWidthFarM, obstacle.radiusMeters))
+                    {
+                        continue;
+                    }
+
+                    toRemove.Add((kv.Key, obstacle));
+                }
+            }
+
+            foreach ((string tileId, RtgScatterObstacle obstacle) in toRemove)
+                DisintegrateObstacle(tileId, obstacle);
+
+            return toRemove.Count;
+        }
+
+        /// <summary>Immediately disintegrate one locked-on obstacle (Pathfinder snap kill).</summary>
+        public bool TryVaporizeObstacle(RtgScatterObstacle obstacle)
+        {
+            if (obstacle == null) return false;
+
+            foreach (KeyValuePair<string, List<RtgScatterObstacle>> kv in _obstaclesByTile)
+            {
+                if (!kv.Value.Contains(obstacle)) continue;
+                DisintegrateObstacle(kv.Key, obstacle);
+                return true;
+            }
+
+            return false;
         }
 
         private void DisintegrateObstacle(string tileId, RtgScatterObstacle obstacle)

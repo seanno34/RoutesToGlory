@@ -12,6 +12,8 @@ namespace RoutesToGlory.Game
         private static Mesh _cube;
         private static Mesh _groundQuad;
         private static Mesh _verticalQuad;
+        private static Mesh _disc;
+        private static Mesh _exhaustConeAft;
 
         public static Mesh Sphere => _sphere ??= BuildUvSphere(18, 12);
         public static Mesh Cube => _cube ??= BuildCube();
@@ -19,6 +21,13 @@ namespace RoutesToGlory.Game
         public static Mesh GroundQuad => _groundQuad ??= BuildGroundQuad();
         /// <summary>Vertical quad on the XY plane (normal +Z). UV top = +Y.</summary>
         public static Mesh VerticalQuad => _verticalQuad ??= BuildVerticalQuad();
+        /// <summary>Filled unit disc on the XY plane (normal +Z), diameter = 1.</summary>
+        public static Mesh Disc => _disc ??= BuildDisc(40);
+        /// <summary>
+        /// Exhaust plume cone: base ring on XY at z=0 (radius 0.5), tip at z=+1.
+        /// Scale X/Y for width and Z for length; exhaust extends aft (+Z).
+        /// </summary>
+        public static Mesh ExhaustCone => _exhaustConeAft ??= BuildTruncatedCone(20, 0.5f, 0.04f, 1f);
 
         public static GameObject CreateMeshObject(string name, Mesh mesh, Material material, Transform parent)
         {
@@ -84,6 +93,48 @@ namespace RoutesToGlory.Game
                 Vector3.forward, Vector3.forward, Vector3.forward, Vector3.forward,
             };
             mesh.triangles = new[] { 0, 2, 1, 2, 3, 1 };
+            mesh.RecalculateBounds();
+            return mesh;
+        }
+
+        private static Mesh BuildDisc(int segments)
+        {
+            var mesh = new Mesh { name = "RTG_Disc" };
+            int vertCount = segments + 1;
+            var vertices = new Vector3[vertCount];
+            var normals = new Vector3[vertCount];
+            var uvs = new Vector2[vertCount];
+            var triangles = new int[segments * 3];
+
+            vertices[0] = Vector3.zero;
+            normals[0] = Vector3.forward;
+            uvs[0] = new Vector2(0.5f, 0.5f);
+
+            for (int i = 0; i < segments; i++)
+            {
+                float angle = i / (float)segments * Mathf.PI * 2f;
+                float x = Mathf.Cos(angle) * 0.5f;
+                float y = Mathf.Sin(angle) * 0.5f;
+                int vi = i + 1;
+                vertices[vi] = new Vector3(x, y, 0f);
+                normals[vi] = Vector3.forward;
+                uvs[vi] = new Vector2(x + 0.5f, y + 0.5f);
+            }
+
+            int ti = 0;
+            for (int i = 0; i < segments; i++)
+            {
+                int a = i + 1;
+                int b = i == segments - 1 ? 1 : i + 2;
+                triangles[ti++] = 0;
+                triangles[ti++] = a;
+                triangles[ti++] = b;
+            }
+
+            mesh.vertices = vertices;
+            mesh.normals = normals;
+            mesh.uv = uvs;
+            mesh.triangles = triangles;
             mesh.RecalculateBounds();
             return mesh;
         }
@@ -159,6 +210,62 @@ namespace RoutesToGlory.Game
                     triangles[ti++] = b + 1;
                     triangles[ti++] = a + 1;
                 }
+            }
+
+            mesh.vertices = vertices;
+            mesh.normals = normals;
+            mesh.uv = uvs;
+            mesh.triangles = triangles;
+            mesh.RecalculateBounds();
+            return mesh;
+        }
+
+        private static Mesh BuildTruncatedCone(
+            int segments,
+            float baseRadius,
+            float tipRadius,
+            float height)
+        {
+            var mesh = new Mesh { name = "RTG_ExhaustCone_Aft" };
+            int ringVerts = segments + 1;
+            int vertCount = ringVerts * 2;
+            var vertices = new Vector3[vertCount];
+            var normals = new Vector3[vertCount];
+            var uvs = new Vector2[vertCount];
+            var triangles = new int[segments * 6];
+
+            for (int i = 0; i <= segments; i++)
+            {
+                float t = i / (float)segments;
+                float angle = t * Mathf.PI * 2f;
+                float cos = Mathf.Cos(angle);
+                float sin = Mathf.Sin(angle);
+
+                vertices[i] = new Vector3(cos * baseRadius, sin * baseRadius, 0f);
+                normals[i] = new Vector3(cos, sin, -0.25f).normalized;
+                uvs[i] = new Vector2(t, 0f);
+
+                int tipIndex = ringVerts + i;
+                vertices[tipIndex] = new Vector3(cos * tipRadius, sin * tipRadius, height);
+                normals[tipIndex] = new Vector3(cos, sin, 0.35f).normalized;
+                uvs[tipIndex] = new Vector2(t, 1f);
+            }
+
+            int ti = 0;
+            for (int i = 0; i < segments; i++)
+            {
+                int baseA = i;
+                int baseB = i + 1;
+                int tipA = ringVerts + i;
+                int tipB = ringVerts + i + 1;
+
+                triangles[ti++] = baseA;
+                triangles[ti++] = tipA;
+                triangles[ti++] = baseB;
+
+                triangles[ti++] = baseB;
+                triangles[ti++] = tipA;
+                triangles[ti++] = tipB;
             }
 
             mesh.vertices = vertices;

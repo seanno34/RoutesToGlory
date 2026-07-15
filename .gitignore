@@ -66,3 +66,5 @@ apps/unity-poc/tilesource.local.json
 # Local dev world pointer (per-developer world id / access code from a seeded
 # local MySQL). Local-only; commit rtg-dev-world.json.example instead.
 apps/unity-poc/rtg-dev-world.json
+apps/unity-poc/Assets/StreamingAssets/rtg-dev-world.json
+apps/unity-poc/rtg-ship-tuning.json
