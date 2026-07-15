@@ -1,7 +1,8 @@
 import type { GameConfig, MapResourceNode } from '@empire/shared';
 import {
-  ALIEN_RESOURCE_IDS,
   RESOURCE_MAP_ICONS,
+  classifyTileBiomeProcedural,
+  pickResourceForBiome,
   tileIdToCenter,
   tilesInRadius,
 } from '@empire/shared';
@@ -36,17 +37,20 @@ export async function getMapResourceNodes(worldId: string): Promise<MapResourceN
 
   return result.rows.map((row) => {
     const icon = RESOURCE_MAP_ICONS[row.resource_id as keyof typeof RESOURCE_MAP_ICONS];
+    const lat = Number(row.lat);
+    const lng = Number(row.lng);
     return {
       id: row.id,
       worldId: row.world_id,
       tileId: row.tile_id,
       resourceId: row.resource_id as MapResourceNode['resourceId'],
-      lat: Number(row.lat),
-      lng: Number(row.lng),
+      lat,
+      lng,
       richness: row.richness as MapResourceNode['richness'],
       yieldPerDay: row.yield_per_day,
       ownerEmpireId: row.owner_empire_id ?? undefined,
       routeId: row.route_id ?? undefined,
+      biome: classifyTileBiomeProcedural({ lat, lng }),
       iconSpriteId: icon?.spriteId ?? 'res-xenite',
       glowColor: icon?.glowColor ?? '#f97316',
     };
@@ -203,8 +207,12 @@ async function insertRandomResourceNode(
   tileId: string,
   config: GameConfig,
 ): Promise<string | null> {
-  const resourceId = ALIEN_RESOURCE_IDS[Math.floor(Math.random() * ALIEN_RESOURCE_IDS.length)]!;
   const center = tileIdToCenter(tileId, config.fogOfWar.tileSizeM, 42.63);
+  const biome = classifyTileBiomeProcedural({
+    lat: center.lat,
+    lng: center.lng,
+  });
+  const resourceId = pickResourceForBiome(biome, { roll: Math.random() });
   const richnessRoll = Math.random();
   const richness =
     richnessRoll < 0.2 ? 'sparse' : richnessRoll < 0.7 ? 'moderate' : 'rich';

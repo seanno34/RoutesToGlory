@@ -37,12 +37,21 @@ namespace RoutesToGlory.Game
         [Tooltip("File under Assets/StreamingAssets/ to load when dataSource = SampleFile")]
         public string sampleFileName = "sample-world-map.json";
 
+        [Tooltip("When LiveApi is unreachable, load the sample map so Play mode still works offline.")]
+        public bool fallbackToSampleOnApiFailure = true;
+
+        [Tooltip("In the Editor, retry map fetch via 127.0.0.1 when the configured LAN IP fails.")]
+        public bool editorLocalhostRetry = true;
+
         [Header("Placement")]
         [Tooltip("Approx. ground height (m above ellipsoid) for the POC area near Douglas, WY.")]
         public double groundHeightMeters = 1476.0;
 
-        [Tooltip("Meters above ellipsoid ground height for the marker anchor.")]
+        [Tooltip("Meters above ellipsoid ground height for settlement marker anchors.")]
         public float groundMarkerClearanceM = 6f;
+
+        [Tooltip("When true, resource deposits sample Cesium terrain height and sit flush on the surface.")]
+        public bool anchorDepositsToTerrain = true;
 
         [Tooltip("Label size multiplier for ground-anchored markers.")]
         public float groundLabelSizeFactor = 0.09f;
@@ -79,6 +88,7 @@ namespace RoutesToGlory.Game
         private const string MarkerContainerName = "Markers";
         private int _scatterIndex;
         private string _corridorGoodieId;
+        private readonly List<ResourceAnchorPending> _pendingResourceAnchors = new();
 
         private const double CorridorDLat = 0.012;
 
@@ -88,6 +98,9 @@ namespace RoutesToGlory.Game
         /// reuse the same data without re-fetching.
         /// </summary>
         public RtgWorldMap LastMap { get; private set; }
+
+        /// <summary>True when LiveApi fell back to the sample file (API unreachable).</summary>
+        public bool LoadedFromSampleFallback { get; private set; }
 
         /// <summary>Keep in-memory map routes aligned after incremental API refreshes.</summary>
         public void ApplyRouteSnapshot(RtgRoute[] routes)
@@ -99,6 +112,14 @@ namespace RoutesToGlory.Game
         // Cache runtime-created emissive materials by color so we don't leak one per marker.
         private readonly Dictionary<Color, Material> _materialCache = new();
         private readonly Dictionary<Color, Material> _glowPadCache = new();
+        private readonly Dictionary<Color, Material> _depositGlowCache = new();
+
+        private struct ResourceAnchorPending
+        {
+            public GameObject Root;
+            public double Longitude;
+            public double Latitude;
+        }
 
         private void Awake()
         {
@@ -137,6 +158,7 @@ namespace RoutesToGlory.Game
         private IEnumerator FetchAndSpawn()
         {
             string json = null;
+            LoadedFromSampleFallback = false;
 
             if (dataSource == DataSource.SampleFile)
             {
@@ -144,23 +166,90 @@ namespace RoutesToGlory.Game
             }
             else
             {
-                string url = $"{apiBaseUrl.TrimEnd('/')}/worlds/{worldId}/map";
-                using UnityWebRequest req = UnityWebRequest.Get(url);
-                yield return req.SendWebRequest();
-
-                if (req.result != UnityWebRequest.Result.Success)
-                {
-                    Debug.LogError(
-                        $"[RTG] Echo Site load failed: {req.responseCode} {req.error} ({url}). " +
-                        "Is @empire/api running (pnpm --filter @empire/api dev)? " +
-                        "On iPhone, apiBaseUrl must be your Mac LAN IP, not localhost. " +
-                        "Check rtg-dev-world.json / RTG Echo Sites in the scene.");
-                    yield break;
-                }
-                json = req.downloadHandler.text;
+                yield return FetchLiveMapJson(result => json = result);
             }
 
             if (!string.IsNullOrEmpty(json)) SpawnAll(Parse(json));
+        }
+
+        private IEnumerator FetchLiveMapJson(System.Action<string> done)
+        {
+            string primaryUrl = BuildMapUrl(apiBaseUrl);
+            string json = null;
+            yield return TryFetchMapJson(primaryUrl, result => json = result);
+            if (!string.IsNullOrEmpty(json))
+            {
+                LoadedFromSampleFallback = false;
+                done?.Invoke(json);
+                yield break;
+            }
+
+            if (Application.isEditor && editorLocalhostRetry)
+            {
+                string localBase = LocalhostApiBase(apiBaseUrl);
+                if (!string.Equals(localBase, apiBaseUrl.TrimEnd('/'), System.StringComparison.OrdinalIgnoreCase))
+                {
+                    string localUrl = BuildMapUrl(localBase);
+                    Debug.LogWarning(
+                        $"[RTG] Echo Site load failed ({primaryUrl}). Retrying via editor localhost: {localUrl}");
+                    yield return TryFetchMapJson(localUrl, result => json = result);
+                    if (!string.IsNullOrEmpty(json))
+                    {
+                        apiBaseUrl = localBase;
+                        LoadedFromSampleFallback = false;
+                        done?.Invoke(json);
+                        yield break;
+                    }
+                }
+            }
+
+            if (fallbackToSampleOnApiFailure)
+            {
+                Debug.LogWarning(
+                    $"[RTG] Echo Site load failed ({primaryUrl}). Falling back to {sampleFileName}. " +
+                    "Start @empire/api (pnpm --filter @empire/api dev) or update apiBaseUrl in rtg-dev-world.json.");
+                LoadedFromSampleFallback = true;
+                done?.Invoke(ReadSampleFile());
+                yield break;
+            }
+
+            Debug.LogError(
+                $"[RTG] Echo Site load failed ({primaryUrl}). " +
+                "Is @empire/api running (pnpm --filter @empire/api dev)? " +
+                "On iPhone, apiBaseUrl must be your Mac LAN IP, not localhost. " +
+                "Check rtg-dev-world.json / RTG Echo Sites in the scene.");
+            done?.Invoke(null);
+        }
+
+        private static IEnumerator TryFetchMapJson(string url, System.Action<string> done)
+        {
+            using UnityWebRequest req = UnityWebRequest.Get(url);
+            req.timeout = 8;
+            yield return req.SendWebRequest();
+
+            if (req.result != UnityWebRequest.Result.Success)
+            {
+                Debug.LogWarning($"[RTG] Map fetch failed: {req.responseCode} {req.error} ({url})");
+                done?.Invoke(null);
+                yield break;
+            }
+
+            done?.Invoke(req.downloadHandler.text);
+        }
+
+        private string BuildMapUrl(string baseUrl) =>
+            $"{baseUrl.TrimEnd('/')}/worlds/{worldId}/map";
+
+        private static string LocalhostApiBase(string baseUrl)
+        {
+            if (!System.Uri.TryCreate(baseUrl, System.UriKind.Absolute, out System.Uri uri))
+                return "http://127.0.0.1:3001/api";
+
+            int port = uri.Port > 0 ? uri.Port : 3001;
+            string path = uri.AbsolutePath.TrimEnd('/');
+            if (string.IsNullOrEmpty(path))
+                path = "/api";
+            return $"http://127.0.0.1:{port}{path}";
         }
 
         private string ReadSampleFile()
@@ -192,6 +281,7 @@ namespace RoutesToGlory.Game
             LastMap = map;
             Transform container = ResetContainer();
             _scatterIndex = 0;
+            _pendingResourceAnchors.Clear();
             _corridorGoodieId = SelectCorridorGoodieTarget(map);
             int settlements = 0, resources = 0;
 
@@ -226,6 +316,42 @@ namespace RoutesToGlory.Game
                 SetupFogOfWar(container, map?.routes);
             EnsureAllMarkersVisible(container);
             SetupTerrainScatter();
+
+            if (Application.isPlaying && anchorDepositsToTerrain && _pendingResourceAnchors.Count > 0)
+                StartCoroutine(AnchorResourcesToTerrain());
+        }
+
+        private IEnumerator AnchorResourcesToTerrain()
+        {
+            Cesium3DTileset tileset = RtgTerrainHeightSampler.ResolveTileset();
+            if (tileset == null) yield break;
+
+            var requests = new RtgTerrainHeightSampler.SampleRequest[_pendingResourceAnchors.Count];
+            for (int i = 0; i < _pendingResourceAnchors.Count; i++)
+            {
+                ResourceAnchorPending pending = _pendingResourceAnchors[i];
+                requests[i] = new RtgTerrainHeightSampler.SampleRequest
+                {
+                    Longitude = pending.Longitude,
+                    Latitude = pending.Latitude,
+                    FallbackHeightM = groundHeightMeters,
+                };
+            }
+
+            double[] heights = null;
+            yield return RtgTerrainHeightSampler.SampleHeightsCoroutine(
+                tileset,
+                requests,
+                sampled => heights = sampled);
+
+            if (heights == null) yield break;
+
+            for (int i = 0; i < _pendingResourceAnchors.Count && i < heights.Length; i++)
+            {
+                ResourceAnchorPending pending = _pendingResourceAnchors[i];
+                if (pending.Root == null) continue;
+                AnchorAt(pending.Root, pending.Longitude, pending.Latitude, heights[i]);
+            }
         }
 
         private static void EnsureAllMarkersVisible(Transform container)
@@ -336,15 +462,24 @@ namespace RoutesToGlory.Game
             string tapTag = ApplyTapTestScatter(ref lat, ref lng, false, r.id);
 
             GameObject root = CreateMarkerRoot($"Resource — {r.resource_id} ({r.richness})", container);
-            RtgGroundMarkerVisual.BuildResult visual = RtgGroundMarkerVisual.BuildResource(
+            RtgTerrainDeposit.BuildResult visual = RtgTerrainDeposit.BuildEmbedded(
                 root.transform,
                 r.resource_id,
                 r.richness,
+                r.biome,
                 color,
                 GetEmissiveMaterial(color),
-                GetGlowPadMaterial(color));
-            AnchorAt(root, lng, lat, groundHeightMeters + groundMarkerClearanceM);
-            AddLabel(root.transform, $"{ResourceName(r.resource_id)}\n{r.richness}{tapTag}",
+                GetDepositGlowMaterial(color));
+            AnchorAt(root, lng, lat, groundHeightMeters);
+            _pendingResourceAnchors.Add(new ResourceAnchorPending
+            {
+                Root = root,
+                Longitude = lng,
+                Latitude = lat,
+            });
+
+            string biomeTag = string.IsNullOrEmpty(r.biome) ? "" : $"\n{BiomeLabel(r.biome)}";
+            AddLabel(root.transform, $"{ResourceName(r.resource_id)}\n{r.richness}{biomeTag}{tapTag}",
                 visual.LabelHeightM, groundLabelSizeFactor);
             root.AddComponent<RtgMapMarker>().Configure(
                 RtgMapMarker.Kind.Resource, r.id, ResourceName(r.resource_id), r.richness, lat, lng);
@@ -556,6 +691,35 @@ namespace RoutesToGlory.Game
             return mat;
         }
 
+        private Material GetDepositGlowMaterial(Color color)
+        {
+            if (_depositGlowCache.TryGetValue(color, out Material cached) && cached != null)
+                return cached;
+
+            Shader shader = Shader.Find("Universal Render Pipeline/Unlit");
+            if (shader == null) shader = Shader.Find("Sprites/Default");
+
+            var mat = new Material(shader)
+            {
+                name = $"RTG_DepositGlow_{ColorUtility.ToHtmlStringRGB(color)}"
+            };
+
+            Color glow = color;
+            glow.a = 0.18f;
+            if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", glow);
+            if (mat.HasProperty("_Color")) mat.SetColor("_Color", glow);
+            if (mat.HasProperty("_Surface"))
+            {
+                mat.SetFloat("_Surface", 1f);
+                mat.SetFloat("_Blend", 0f);
+                mat.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+                mat.renderQueue = 3000;
+            }
+
+            _depositGlowCache[color] = mat;
+            return mat;
+        }
+
         private static Color AlignmentColor(string alignment, bool isGoodieHut)
         {
             if (isGoodieHut) return new Color(1.00f, 0.82f, 0.25f);   // gold
@@ -599,6 +763,21 @@ namespace RoutesToGlory.Game
             }
         }
 
+        private static string BiomeLabel(string biome)
+        {
+            switch (biome)
+            {
+                case RtgBiomePalette.Plains: return "Xeno Plains";
+                case RtgBiomePalette.Wasteland: return "Xeno Wasteland";
+                case RtgBiomePalette.Wetland: return "Xeno Wetland";
+                case RtgBiomePalette.FungalForest: return "Fungal Forest";
+                case RtgBiomePalette.Highland: return "Xeno Highland";
+                case RtgBiomePalette.Rift: return "Xeno Rift";
+                case RtgBiomePalette.Water: return "Xeno Water";
+                default: return biome;
+            }
+        }
+
         private static string ResourceName(string resourceId)
         {
             switch (resourceId)
@@ -617,7 +796,7 @@ namespace RoutesToGlory.Game
             }
         }
 
-        private static void DestroyObject(Object obj)
+        private static void DestroyObject(UnityEngine.Object obj)
         {
             if (Application.isPlaying) Destroy(obj);
             else DestroyImmediate(obj);

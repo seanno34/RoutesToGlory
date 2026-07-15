@@ -3,7 +3,11 @@
  * Tuned for Orin Junction, WY play-testing but works at any spawn GPS.
  */
 import type { GameConfig } from '@empire/shared';
-import { ALIEN_RESOURCE_IDS, latLngToTileId } from '@empire/shared';
+import {
+  classifyTileBiomeProcedural,
+  latLngToTileId,
+  pickResourceForBiome,
+} from '@empire/shared';
 import { query, newId } from './client.js';
 import { insertResourceNode } from './exploration-repo.js';
 
@@ -113,7 +117,8 @@ export async function seedPlayArea(
       if (haversineM(lat, lng, centerLat, centerLng) > PLAY_AREA_RADIUS_M) continue;
 
       const tileId = latLngToTileId(lat, lng, tileSize);
-      const resourceId = ALIEN_RESOURCE_IDS[Math.floor(random() * ALIEN_RESOURCE_IDS.length)]!;
+      const biome = classifyTileBiomeProcedural({ lat, lng });
+      const resourceId = pickResourceForBiome(biome, { roll: random() });
       const richnessRoll = random();
       const richness =
         richnessRoll < 0.15 ? 'sparse' : richnessRoll < 0.55 ? 'moderate' : 'rich';

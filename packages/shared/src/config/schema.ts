@@ -16,6 +16,7 @@ import {
   BuildJobStatusSchema,
   BuildComplexityTierSchema,
 } from '../types/enums.js';
+import { TerrainBiomeSchema } from '../map/terrain-biome.js';
 
 /** JSON / JS object keys are strings; explicit 1–5 keys accept both "1" and 1. */
 const ComplexityTierProfileSchema = z.object({
@@ -429,6 +430,8 @@ export const MapResourceNodeSchema = z.object({
   lng: z.number(),
   richness: z.enum(['sparse', 'moderate', 'rich']),
   yieldPerDay: z.number().int().positive(),
+  /** Classified terrain biome at deposit (Phase 2) */
+  biome: TerrainBiomeSchema.optional(),
   /** Set when an empire has claimed this node as an extractor mine */
   ownerEmpireId: z.string().uuid().optional(),
   routeId: z.string().uuid().optional(),

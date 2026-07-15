@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using CesiumForUnity;
 using Unity.Mathematics;
@@ -8,53 +9,47 @@ using UnityEngine;
 namespace RoutesToGlory.Game
 {
     /// <summary>
-    /// Samples Cesium terrain height at the spaceship's lat/lng and returns a smoothed
-    /// ellipsoid height for marker / route placement. Falls back to a constant when
-    /// tiles are not loaded yet.
+    /// Caches Cesium terrain heights for scatter, fog sheet, and player clearance.
+    /// Uses async tile sampling plus a physics raycast fallback for live elevation.
     /// </summary>
+    [DisallowMultipleComponent]
     public class RtgTerrainHeight : MonoBehaviour
     {
-        private const double MetersPerDegreeLat = 111_320.0;
+        private const double LatM = 111_320.0;
+        private const int CacheQuantizeDigits = 4;
+        private const float RaycastProbeHeightM = 6000f;
+        private const float RaycastMaxDistanceM = 12000f;
 
-        [Tooltip("Terrain tileset to sample (Cesium World Terrain). Auto-filled if empty.")]
-        public Cesium3DTileset terrainTileset;
+        [Tooltip("Flat ellipsoid height (m) used before Cesium samples arrive.")]
+        public double fallbackGroundHeightM = 1476.0;
 
-        [Tooltip("Ellipsoid height (m) used until the first successful terrain sample.")]
-        public double fallbackHeightMeters = 1476.0;
+        [Tooltip("Meters above sampled terrain for player / settlement clearance.")]
+        public float markerClearanceM = 6f;
 
-        [Tooltip("Meters above sampled terrain for the spaceship anchor.")]
-        public float markerOffsetMeters = 15f;
+        [Tooltip("Look-ahead distance (m) when sampling terrain under the travel heading.")]
+        public float forwardSampleDistanceM = 28f;
 
-        [Tooltip("Request a new terrain sample after moving this many meters.")]
-        public float resampleMoveMeters = 8f;
+        [Tooltip("Seconds to ease between fallback and sampled terrain heights.")]
+        public float heightBlendSeconds = 0.35f;
 
-        [Tooltip("How quickly sampled height catches up (higher = snappier).")]
-        public float heightSmoothing = 10f;
+        [Tooltip("Use Physics.Raycast against Cesium terrain colliders when async samples are pending.")]
+        public bool useRaycastFallback = true;
 
-        [Header("Forward clearance (hills / mountains)")]
-        [Tooltip("Extra meters above the forward terrain peak.")]
-        public float forwardClearanceMarginM = 6f;
-
-        [Tooltip("How often to batch-sample terrain ahead (Hz).")]
-        public float forwardSampleHz = 3f;
-
-        [Tooltip("Meters ahead to sample along travel heading.")]
-        public float[] forwardSampleDistancesM = { 30f, 80f, 150f, 300f };
-
-        private double _displayTerrainH;
-        private double _targetTerrainH;
-        private double _forwardMaxTerrainH;
-        private bool _hasForwardSample;
-        private float _lastForwardSampleTime;
-        private bool _forwardSampling;
-        private bool _hasSample;
-        private double _lastSampleLat;
-        private double _lastSampleLng;
-        private bool _hasLastSamplePos;
+        private Cesium3DTileset _tileset;
+        private CesiumGlobeAnchor _probeAnchor;
+        private readonly Dictionary<string, double> _heightCache = new();
+        private readonly HashSet<string> _pendingKeys = new();
+        private readonly Queue<SampleJob> _sampleQueue = new();
         private bool _sampling;
-        private double _pendingLat;
-        private double _pendingLng;
-        private bool _hasPending;
+        private double _smoothedClearanceHeight;
+        private bool _hasSmoothedClearanceHeight;
+
+        private struct SampleJob
+        {
+            public double Longitude;
+            public double Latitude;
+            public string Key;
+        }
 
         public static RtgTerrainHeight FindOrCreate()
         {
@@ -65,199 +60,221 @@ namespace RoutesToGlory.Game
 #endif
             if (existing != null) return existing;
 
-#if UNITY_2023_1_OR_NEWER
-            Cesium3DTileset tileset = UnityEngine.Object.FindFirstObjectByType<Cesium3DTileset>();
-#else
-            Cesium3DTileset tileset = UnityEngine.Object.FindObjectOfType<Cesium3DTileset>();
-#endif
-            if (tileset == null) return null;
+            CesiumGeoreference geo = UnityEngine.Object.FindObjectOfType<CesiumGeoreference>();
+            if (geo == null) return null;
 
-            return tileset.gameObject.AddComponent<RtgTerrainHeight>();
+            var go = new GameObject("RTG Terrain Height");
+            go.transform.SetParent(geo.transform, false);
+            return go.AddComponent<RtgTerrainHeight>();
         }
 
-        private void Awake()
+        public void Configure(double groundHeightMeters, float markerHeightMeters)
         {
-            if (terrainTileset == null)
-                terrainTileset = GetComponent<Cesium3DTileset>();
-
-            _displayTerrainH = fallbackHeightMeters;
-            _targetTerrainH = fallbackHeightMeters;
+            fallbackGroundHeightM = groundHeightMeters;
+            markerClearanceM = markerHeightMeters;
+            _smoothedClearanceHeight = groundHeightMeters + markerHeightMeters;
+            _hasSmoothedClearanceHeight = true;
         }
 
-        public void Configure(double fallbackMeters, float markerOffset)
-        {
-            fallbackHeightMeters = fallbackMeters;
-            markerOffsetMeters = markerOffset;
-            if (!_hasSample)
-            {
-                _displayTerrainH = fallbackHeightMeters;
-                _targetTerrainH = fallbackHeightMeters;
-            }
-        }
-
-        /// <summary>Ellipsoid height for CesiumGlobeAnchor (terrain + marker offset).</summary>
-        public double GetPlacementHeight(double lat, double lng) =>
-            GetGroundHeight(lat, lng) + markerOffsetMeters;
-
-        /// <summary>
-        /// Placement height using the max of local ground and forward terrain samples
-        /// (glide over hills — geological substrate is not vaporized).
-        /// </summary>
-        public double GetClearancePlacementHeight(double lat, double lng, float headingRad)
-        {
-            QueueForwardSamplesIfNeeded(lat, lng, headingRad);
-            double localGround = GetGroundHeight(lat, lng);
-            double peak = _hasForwardSample
-                ? Math.Max(localGround, _forwardMaxTerrainH)
-                : localGround;
-            return peak + markerOffsetMeters + forwardClearanceMarginM;
-        }
-
-        /// <summary>Sampled terrain height (m above ellipsoid), without marker offset.</summary>
         public double GetGroundHeight(double lat, double lng)
         {
-            QueueSampleIfNeeded(lat, lng);
-            return _hasSample ? _displayTerrainH : fallbackHeightMeters;
+            string key = CacheKey(lat, lng);
+            if (_heightCache.TryGetValue(key, out double cached))
+                return cached;
+
+            if (useRaycastFallback && TryRaycastGroundHeight(lat, lng, out double rayHeight))
+            {
+                _heightCache[key] = rayHeight;
+                return rayHeight;
+            }
+
+            return fallbackGroundHeightM;
         }
 
         public void QueueSampleIfNeeded(double lat, double lng)
         {
-            if (terrainTileset == null) return;
-
-            if (!_hasLastSamplePos || DistanceMeters(_lastSampleLat, _lastSampleLng, lat, lng) >= resampleMoveMeters)
-            {
-                _pendingLat = lat;
-                _pendingLng = lng;
-                _hasPending = true;
-                _lastSampleLat = lat;
-                _lastSampleLng = lng;
-                _hasLastSamplePos = true;
-
-                if (!_sampling)
-                    StartCoroutine(SampleLoop());
-            }
+            QueueSample(lat, lng);
         }
 
         public void QueueForwardSamplesIfNeeded(double lat, double lng, float headingRad)
         {
-            if (terrainTileset == null || forwardSampleDistancesM == null || forwardSampleDistancesM.Length == 0)
-                return;
+            QueueSample(lat, lng);
 
-            float interval = forwardSampleHz > 0.01f ? 1f / forwardSampleHz : 0.35f;
-            if (Time.time - _lastForwardSampleTime < interval)
-                return;
+            double northM = Math.Cos(headingRad) * forwardSampleDistanceM * 0.5;
+            double eastM = Math.Sin(headingRad) * forwardSampleDistanceM * 0.5;
+            OffsetMeters(lat, lng, northM, eastM, out double midLat, out double midLng);
+            QueueSample(midLat, midLng);
 
-            _lastForwardSampleTime = Time.time;
-            if (!_forwardSampling)
-                StartCoroutine(ForwardSampleRoutine(lat, lng, headingRad));
+            northM = Math.Cos(headingRad) * forwardSampleDistanceM;
+            eastM = Math.Sin(headingRad) * forwardSampleDistanceM;
+            OffsetMeters(lat, lng, northM, eastM, out double aheadLat, out double aheadLng);
+            QueueSample(aheadLat, aheadLng);
         }
 
-        private IEnumerator ForwardSampleRoutine(double lat, double lng, float headingRad)
+        public double GetClearancePlacementHeight(double lat, double lng, float headingRad)
         {
-            _forwardSampling = true;
-
-            float[] distances = forwardSampleDistancesM;
-            var positions = new double3[distances.Length];
-            for (int i = 0; i < distances.Length; i++)
+            double target = ResolveClearanceTarget(lat, lng, headingRad);
+            if (!_hasSmoothedClearanceHeight)
             {
-                RtgForwardCorridor.OffsetMeters(
-                    lat, lng, headingRad, distances[i], 0f,
-                    out double sLat, out double sLng);
-                positions[i] = new double3(sLng, sLat, 0.0);
+                _smoothedClearanceHeight = target;
+                _hasSmoothedClearanceHeight = true;
+                return target;
             }
 
-            Task<CesiumSampleHeightResult> task =
-                terrainTileset.SampleHeightMostDetailed(positions);
+            float blend = heightBlendSeconds > 0f
+                ? 1f - Mathf.Exp(-Time.deltaTime / heightBlendSeconds)
+                : 1f;
+            _smoothedClearanceHeight += (target - _smoothedClearanceHeight) * blend;
+            return _smoothedClearanceHeight;
+        }
 
-            while (!task.IsCompleted)
-                yield return null;
+        private double ResolveClearanceTarget(double lat, double lng, float headingRad)
+        {
+            double best = GetGroundHeight(lat, lng);
 
-            if (!task.IsFaulted && !task.IsCanceled && task.Result.longitudeLatitudeHeightPositions != null)
+            double northM = Math.Cos(headingRad) * forwardSampleDistanceM * 0.5;
+            double eastM = Math.Sin(headingRad) * forwardSampleDistanceM * 0.5;
+            OffsetMeters(lat, lng, northM, eastM, out double midLat, out double midLng);
+            best = Math.Max(best, GetGroundHeight(midLat, midLng));
+
+            northM = Math.Cos(headingRad) * forwardSampleDistanceM;
+            eastM = Math.Sin(headingRad) * forwardSampleDistanceM;
+            OffsetMeters(lat, lng, northM, eastM, out double aheadLat, out double aheadLng);
+            best = Math.Max(best, GetGroundHeight(aheadLat, aheadLng));
+
+            return best + markerClearanceM;
+        }
+
+        private void Awake()
+        {
+            _tileset = RtgTerrainHeightSampler.ResolveTileset();
+            EnsureProbeAnchor();
+        }
+
+        private void OnEnable()
+        {
+            if (_tileset == null)
+                _tileset = RtgTerrainHeightSampler.ResolveTileset();
+            EnsureProbeAnchor();
+        }
+
+        private void EnsureProbeAnchor()
+        {
+            if (_probeAnchor != null) return;
+
+            var probeGo = new GameObject("RTG_HeightProbe");
+            probeGo.hideFlags = HideFlags.HideInHierarchy;
+            probeGo.transform.SetParent(transform, false);
+            _probeAnchor = probeGo.AddComponent<CesiumGlobeAnchor>();
+        }
+
+        private bool TryRaycastGroundHeight(double lat, double lng, out double heightM)
+        {
+            heightM = fallbackGroundHeightM;
+            if (_probeAnchor == null) return false;
+
+            _probeAnchor.SetPositionLongitudeLatitudeHeight(lng, lat, fallbackGroundHeightM + RaycastProbeHeightM);
+            Vector3 origin = _probeAnchor.transform.position;
+            if (Physics.Raycast(origin, Vector3.down, out RaycastHit hit, RaycastMaxDistanceM))
             {
-                double maxH = _hasSample ? _displayTerrainH : fallbackHeightMeters;
-                foreach (double3 pos in task.Result.longitudeLatitudeHeightPositions)
-                {
-                    if (!double.IsNaN(pos.z) && !double.IsInfinity(pos.z))
-                        maxH = Math.Max(maxH, pos.z);
-                }
-
-                _forwardMaxTerrainH = maxH;
-                _hasForwardSample = true;
+                _probeAnchor.transform.position = hit.point;
+                heightM = _probeAnchor.height;
+                return true;
             }
 
-            _forwardSampling = false;
+            return false;
         }
 
-        private void Update()
+        private void QueueSample(double lat, double lng)
         {
-            if (!_hasSample) return;
+            string key = CacheKey(lat, lng);
+            if (_heightCache.ContainsKey(key) || _pendingKeys.Contains(key))
+                return;
 
-            double t = heightSmoothing > 0f
-                ? 1.0 - Math.Exp(-heightSmoothing * Time.deltaTime)
-                : 1.0;
-            _displayTerrainH += (_targetTerrainH - _displayTerrainH) * t;
+            _pendingKeys.Add(key);
+            _sampleQueue.Enqueue(new SampleJob
+            {
+                Longitude = lng,
+                Latitude = lat,
+                Key = key,
+            });
+
+            if (!_sampling && isActiveAndEnabled)
+                StartCoroutine(ProcessSampleQueue());
         }
 
-        private IEnumerator SampleLoop()
+        private IEnumerator ProcessSampleQueue()
         {
             _sampling = true;
 
-            while (_hasPending)
+            while (_sampleQueue.Count > 0)
             {
-                double lat = _pendingLat;
-                double lng = _pendingLng;
-                _hasPending = false;
+                if (_tileset == null)
+                {
+                    _tileset = RtgTerrainHeightSampler.ResolveTileset();
+                    if (_tileset == null)
+                        break;
+                }
 
-                yield return SampleAt(lat, lng);
+                int batchSize = Math.Min(16, _sampleQueue.Count);
+                var jobs = new SampleJob[batchSize];
+                var positions = new double3[batchSize];
+
+                for (int i = 0; i < batchSize; i++)
+                {
+                    jobs[i] = _sampleQueue.Dequeue();
+                    positions[i] = new double3(
+                        jobs[i].Longitude,
+                        jobs[i].Latitude,
+                        fallbackGroundHeightM);
+                }
+
+                Task task = _tileset.SampleHeightMostDetailed(positions);
+                yield return new WaitForTask(task);
+
+                if (RtgTerrainHeightSampler.TryGetSampleHeightResult(task, out CesiumSampleHeightResult sample))
+                {
+                    for (int i = 0; i < batchSize; i++)
+                    {
+                        double height = fallbackGroundHeightM;
+                        if (sample.sampleSuccess != null &&
+                            i < sample.sampleSuccess.Length &&
+                            sample.sampleSuccess[i] &&
+                            sample.longitudeLatitudeHeightPositions != null &&
+                            i < sample.longitudeLatitudeHeightPositions.Length)
+                        {
+                            height = sample.longitudeLatitudeHeightPositions[i].z;
+                        }
+
+                        _heightCache[jobs[i].Key] = height;
+                        _pendingKeys.Remove(jobs[i].Key);
+                    }
+                }
+
+                for (int i = 0; i < batchSize; i++)
+                    _pendingKeys.Remove(jobs[i].Key);
             }
 
             _sampling = false;
         }
 
-        private IEnumerator SampleAt(double lat, double lng)
+        private static string CacheKey(double lat, double lng)
         {
-            if (terrainTileset == null) yield break;
-
-            // Cesium: X = longitude (deg), Y = latitude (deg), Z = height (ignored).
-            var positions = new[] { new double3(lng, lat, 0.0) };
-
-            Task<CesiumSampleHeightResult> task =
-                terrainTileset.SampleHeightMostDetailed(positions);
-
-            while (!task.IsCompleted)
-                yield return null;
-
-            if (task.IsFaulted || task.IsCanceled)
-            {
-                Debug.LogWarning($"[RTG] Terrain sample failed at {lat:F5}, {lng:F5}: {task.Exception?.Message}");
-                yield break;
-            }
-
-            CesiumSampleHeightResult result = task.Result;
-            if (result.longitudeLatitudeHeightPositions == null ||
-                result.longitudeLatitudeHeightPositions.Length == 0)
-            {
-                Debug.LogWarning($"[RTG] Terrain sample returned no data at {lat:F5}, {lng:F5}.");
-                yield break;
-            }
-
-            double sampled = result.longitudeLatitudeHeightPositions[0].z;
-            if (double.IsNaN(sampled) || double.IsInfinity(sampled))
-                yield break;
-
-            _targetTerrainH = sampled;
-            if (!_hasSample)
-                _displayTerrainH = sampled;
-            _hasSample = true;
+            double q = Math.Pow(10, CacheQuantizeDigits);
+            return $"{Math.Round(lat * q) / q}:{Math.Round(lng * q) / q}";
         }
 
-        private static double DistanceMeters(double lat1, double lng1, double lat2, double lng2)
+        private static void OffsetMeters(
+            double lat,
+            double lng,
+            double northM,
+            double eastM,
+            out double outLat,
+            out double outLng)
         {
-            double avgLatRad = (lat1 + lat2) * 0.5 * Math.PI / 180.0;
-            double metersPerDegLng = MetersPerDegreeLat * Math.Cos(avgLatRad);
-            double dLat = (lat2 - lat1) * MetersPerDegreeLat;
-            double dLng = (lng2 - lng1) * metersPerDegLng;
-            return Math.Sqrt(dLat * dLat + dLng * dLng);
+            double lngM = LatM * Math.Cos(lat * Math.PI / 180.0);
+            outLat = lat + northM / LatM;
+            outLng = lng + eastM / lngM;
         }
     }
 }

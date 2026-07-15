@@ -49,7 +49,7 @@ namespace RoutesToGlory.Game
             _camera.cullingMask = main.cullingMask;
         }
 
-        public void Render(Transform marker, Vector3 travelForward)
+        public void Render(Transform marker, Transform travelRig, Vector3 travelForward)
         {
             if (!_active || marker == null) return;
 
@@ -63,9 +63,21 @@ namespace RoutesToGlory.Game
             else
                 forward.Normalize();
 
-            Vector3 eye = marker.position + Vector3.up * eyeHeightMeters;
-            Quaternion rot = Quaternion.LookRotation(-forward, Vector3.up)
-                * Quaternion.Euler(-lookDownDegrees, 0f, 0f);
+            Vector3 eye;
+            Quaternion rot;
+            if (travelRig != null)
+            {
+                eye = travelRig.position + travelRig.rotation * new Vector3(0f, eyeHeightMeters, 0f);
+                rot = travelRig.rotation
+                    * Quaternion.Euler(-lookDownDegrees, 180f, 0f);
+            }
+            else
+            {
+                eye = marker.position + Vector3.up * eyeHeightMeters;
+                rot = Quaternion.LookRotation(-forward, Vector3.up)
+                    * Quaternion.Euler(-lookDownDegrees, 0f, 0f);
+            }
+
             _camera.transform.SetPositionAndRotation(eye, rot);
             _camera.Render();
         }

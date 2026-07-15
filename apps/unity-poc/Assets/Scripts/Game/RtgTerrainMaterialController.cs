@@ -31,6 +31,10 @@ namespace RoutesToGlory.Game
         [Tooltip("Remove any CesiumUrlTemplateRasterOverlay — Earth imagery is not the art path.")]
         public bool disableRasterOverlays = true;
 
+        [Header("Palette")]
+        [Tooltip("Push locked taxonomy colors from RtgBiomePalette onto the material at apply time.")]
+        public bool applyTaxonomyPalette = true;
+
         private bool _applied;
 
         private void Awake()
@@ -86,6 +90,9 @@ namespace RoutesToGlory.Game
                 return;
 
             RebindShader(material);
+
+            if (applyTaxonomyPalette)
+                RtgBiomePalette.ApplyToMaterial(material);
 
             if (disableRasterOverlays)
                 DisableRasterOverlays();
@@ -146,7 +153,7 @@ namespace RoutesToGlory.Game
         private static bool ValidateShader(Material material)
         {
             Shader shader = material.shader;
-            if (shader == null)
+            if (shader == null || string.IsNullOrEmpty(shader.name))
             {
                 Debug.LogError("[RTG] Terrain material — material has no shader assigned.");
                 return false;

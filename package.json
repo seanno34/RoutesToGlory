@@ -2,7 +2,7 @@
   "name": "routes-to-glory",
   "private": true,
   "scripts": {
-    "dev": "pnpm --filter @empire/api dev",
+    "dev": "pnpm --filter @empire/shared build && pnpm --filter @empire/api dev",
     "dev:field": "bash scripts/field-test-server.sh",
     "dev:field:all": "bash scripts/field-test-server.sh all",
     "dev:web": "pnpm --filter @empire/web dev",

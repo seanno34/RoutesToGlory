@@ -2,9 +2,10 @@
 
 **Project:** `routestoglory/apps/unity-poc`  
 **Date:** July 2026  
-**Status:** **Active POC** — **shader-based alien biomes** (not Earth raster tiles)
+**Status:** **Active POC** — Phase 1 shader biomes shipped; **Phase 2 embedded resources in progress**
 
-**Authoritative architecture:** [CESIUM_ALIEN_WORLD_ARCHITECTURE.md](CESIUM_ALIEN_WORLD_ARCHITECTURE.md)
+**Authoritative architecture:** [CESIUM_ALIEN_WORLD_ARCHITECTURE.md](CESIUM_ALIEN_WORLD_ARCHITECTURE.md)  
+**Biome taxonomy (locked):** [TERRAIN_BIOME_TAXONOMY.md](TERRAIN_BIOME_TAXONOMY.md)
 
 **Vision:** **Civilization-grade terrain readability** — while the glider passes near or over ground, terrain type is **obvious** without reading UI. Alien resources are **embedded into world tiles** in Phase 2 (not floating pins on flat ground).
 
@@ -53,8 +54,8 @@ Civ terrain works because each type has **large, homogeneous, color-coded region
 
 | Phase | Goal | Deliverable |
 |-------|------|-------------|
-| **Phase 1 (now)** | Civ-rival terrain types obvious at glider pass-over | Raster tile pipeline + alien biome textures (ground texture leads) |
-| **Phase 2 (next)** | Alien resources embedded in world tiles | Terrain-classified spawn + deposit meshes blended into ground |
+| **Phase 1 (done)** | Civ-rival terrain types obvious at glider pass-over | Macro Voronoi shader + `RtgTerrainMaterialController` |
+| **Phase 2 (active)** | Alien resources embedded in world tiles | Biome spawn rules + `RtgTerrainDeposit` + Cesium height anchoring |
 | **Phase 3 (later)** | Realistic environmental objects | Replace amateur scatter props (laser-test trees/rocks) + Pathfinder beam targets |
 
 Phase 2 does **not** start until Phase 1 pass-over test passes on device.
@@ -116,22 +117,12 @@ GPS → backend routes → Cesium World Terrain (elevation mesh only)
 
 ---
 
-## Alien Terrain Type Taxonomy (Proposed)
+## Alien Terrain Type Taxonomy (Locked)
 
-Map real-world geography (via OSM) into **alien-readable** terrain types. Start with 6–8 types:
+See **[TERRAIN_BIOME_TAXONOMY.md](TERRAIN_BIOME_TAXONOMY.md)** for Earth signal → alien type mapping, shader priority stack, and Phase 2 resource hooks.
 
-| Alien type | Real-world signal (OSM / elevation) | Visual language |
-|------------|-------------------------------------|-----------------|
-| `xeno_lowland` | Low elevation, open land | Smooth purple-teal plains, subtle noise |
-| `xeno_highland` | High elevation quantile | Rocky ridges, lighter emissive edges |
-| `xeno_forest` | `landuse=forest`, `natural=wood` | Dense alien canopy texture + tall scatter |
-| `xeno_wetland` | Water adjacency, marsh tags | Dark reflective pools, reeds |
-| `xeno_wasteland` | Sparse/barren, desert tags | Cracked ochre-violet, low scatter |
-| `xeno_water` | `natural=water`, coastlines | Deep violet water, shoreline foam |
-| `xeno_urban_echo` | `landuse=residential/commercial` | Grid-like alien settlement scar (subtle) |
-| `xeno_rift` | Steep slope / cliff (elevation derivative) | Glowing fracture lines |
-
-Names are fiction-facing; production can refine. POC needs **distinguishable textures**, not final art.
+Shared types: `packages/shared/src/map/terrain-biome.ts`  
+Unity palette: `RtgBiomePalette.cs`
 
 ---
 
@@ -152,20 +143,26 @@ Names are fiction-facing; production can refine. POC needs **distinguishable tex
 
 ### Step 1 — Alien terrain shader (active)
 
-**Status:** `AlienTerrainBiome.shader` + `RtgTerrainMaterialController` on `RTG Terrain` in `SampleScene.unity`.
+**Status:** `AlienTerrainBiome.shader` v2 + `RtgTerrainMaterialController` + `RtgBiomePalette` on `RTG Terrain`.
 
-Cesium provides elevation mesh only. Unity shader classifies biomes from **height + slope + noise** — no Earth satellite tiles.
+**v2 enhancements (2026-07-15):**
+- **7 active biomes:** plains (default), wasteland, wetland, fungal forest, highland, rift, water
+- **Macro Voronoi regions** (~4 km cells) — large continents of one biome type; fixes leopard-spot noise
+- **Wet basins** — marsh/water only inside designated macro wet zones + low elevation
+- **Locked palette** from `TERRAIN_BIOME_TAXONOMY.md` applied at runtime via `RtgBiomePalette`
+
+Cesium provides elevation mesh only. Macro zones from Voronoi cells; meso from height/slope; micro detail is texture only.
 
 **Play mode console:**
 ```
 [RTG] Alien terrain biome material applied (shader-based, no Earth raster).
 ```
 
-**Look for:** Ochre plains, green fungal patches, blue crystal highlands, orange volcanic rifts on steep slopes. **Not** flat lavender or Earth map imagery.
+**Look for:** Ochre plains, tan wasteland patches, blue-green marsh (localized), bright green forest blobs, crystal blue ridges, orange rifts, dark violet water pockets.
 
-**Tuning:** Select `RTG Terrain` → `RTG_AlienTerrainBiome` material → adjust colors, `_HeightScaleM`, `_NoiseScale`.
+**Tuning:** `RTG_AlienTerrainBiome` material → `_MacroRegionSizeM` (patch size), `_MacroBorderSoftM` (edge blend), `_WetBasinFraction`.
 
-**Architecture:** [CESIUM_ALIEN_WORLD_ARCHITECTURE.md](CESIUM_ALIEN_WORLD_ARCHITECTURE.md)
+**Architecture:** [CESIUM_ALIEN_WORLD_ARCHITECTURE.md](CESIUM_ALIEN_WORLD_ARCHITECTURE.md) · [TERRAIN_BIOME_TAXONOMY.md](TERRAIN_BIOME_TAXONOMY.md)
 
 ---
 
@@ -188,11 +185,11 @@ MapLibre/Planetiler OSM styling deferred. Shader biomes prove pass-over readabil
 **Minimal schema:**
 
 ```ts
-// packages/shared — new type
+// packages/shared/src/map/terrain-biome.ts
 type TerrainBiome =
-  | 'xeno_lowland' | 'xeno_highland' | 'xeno_forest'
-  | 'xeno_wetland' | 'xeno_wasteland' | 'xeno_water'
-  | 'xeno_urban_echo' | 'xeno_rift';
+  | 'xeno_plains' | 'xeno_wasteland' | 'xeno_wetland'
+  | 'xeno_fungal_forest' | 'xeno_highland' | 'xeno_rift'
+  | 'xeno_water' | 'xeno_frost' | 'xeno_urban_echo';
 
 interface TerrainTile {
   tileId: string;      // same 400 m fog tile id
@@ -248,23 +245,23 @@ infra/tiles/
 
 ---
 
-## Phase 2 — Embedded Alien Resources (Next After Terrain)
-
-**Start only after Phase 1 pass-over test passes on device.**
+## Phase 2 — Embedded Alien Resources (Active)
 
 Resources should read like Civ strategic resources — **part of the tile**, not a glowing pin hovering above it.
 
-| Work | Description |
-|------|-------------|
-| Terrain-classified spawn | Each `AlienResourceId` → required/preferred `biome[]` + elevation bands (e.g. ferracite → highland, lumin_spring → wetland) |
-| Tile-embedded visuals | Deposit geometry **flush with terrain** — crystal veins, ore outcrops, glowing pools, mushroom colonies baked into ground mesh or decal clusters |
-| Replace floating markers | Retire primitive `RtgGroundMarkerVisual` pins for resources; keep minimal UI label on tap only |
-| Scatter integration | Clear biome-appropriate scatter around deposits; rich nodes get larger exclusion zones |
-| Server alignment | `map_resource_nodes` stores `biome` + `tileId`; spawn rules use terrain classification from Phase 1 |
+| Work | Status | Description |
+|------|--------|-------------|
+| Terrain-classified spawn | **Done** | `RESOURCE_BIOME_PREFERENCES` (10/10 resources) + `pickResourceForBiome()` in `packages/shared`; wired in `spawn-seed.ts` + `exploration-repo.ts` |
+| Procedural tile classifier | **Done** | `classifyTileBiomeProcedural()` mirrors macro Voronoi shader; `biome` on `MapResourceNode` API response |
+| Tile-embedded visuals | **Done** | `RtgTerrainDeposit.cs` — flush deposits, subtle glow ring, per-resource geometry |
+| Terrain height anchoring | **Done** | `RtgTerrainHeight.cs` batches `Cesium3DTileset.SampleHeightMostDetailed` after spawn |
+| Replace floating markers | **Done** | `RtgEchoSiteLoader` uses deposits for resources; settlements still use `RtgGroundMarkerVisual` |
+| Scatter integration | Deferred | Biome-aware exclusion zones around deposits — Phase 2b |
+| DB `biome` column | Deferred | Classified at read/spawn time; optional MySQL column later |
 
 **Phase 2 pass-over test:** Flying over a ferracite deposit in highland, player sees ore **in** the rocky ground before tapping — same readability bar as terrain types.
 
-**Files:** `spawn-seed.ts`, `exploration.ts`, `alien-resources.ts`, `RtgGroundMarkerVisual.cs`, new `RtgTerrainDeposit.cs`
+**Files:** `resource-biome-rules.ts`, `tile-biome-classifier.ts`, `spawn-seed.ts`, `exploration-repo.ts`, `RtgTerrainDeposit.cs`, `RtgTerrainHeight.cs`, `RtgEchoSiteLoader.cs`
 
 ---
 
@@ -278,12 +275,12 @@ Resources should read like Civ strategic resources — **part of the tile**, not
 - [ ] FPS/memory improved or unchanged vs pre-fog-removal baseline
 - [ ] Documented tile pipeline path (Stadia spike → custom Maputnik style)
 
-### Phase 2 — Embedded resources (after Phase 1)
+### Phase 2 — Embedded resources (active)
 
-- [ ] ≥6/10 resources have terrain preference rules in data
-- [ ] Deposits render **in** terrain surface, not floating pins
+- [x] 10/10 resources have terrain preference rules in `RESOURCE_BIOME_PREFERENCES`
+- [x] Deposits render **in** terrain surface via `RtgTerrainDeposit` (not floating glow pins)
 - [ ] Pass-over test: player spots resource type from flight before tap
-- [ ] Spawn distribution geographically plausible on classified biomes
+- [x] Spawn distribution uses `classifyTileBiomeProcedural` + `pickResourceForBiome`
 
 ---
 
@@ -310,7 +307,10 @@ Resources should read like Civ strategic resources — **part of the tile**, not
 | Terrain raster overlay | `apps/unity-poc/Assets/Scripts/Game/RtgTerrainRasterOverlay.cs` |
 | Terrain material | `apps/unity-poc/Assets/Materials/RTG_AlienTerrain.mat` |
 | Scene | `apps/unity-poc/Assets/Scenes/SampleScene.unity` |
-| Resources (Phase 2) | `packages/shared/src/resources/alien-resources.ts` |
+| Resources (Phase 2) | `packages/shared/src/resources/resource-biome-rules.ts` |
+| Tile classifier | `packages/shared/src/map/tile-biome-classifier.ts` |
+| Unity deposits | `apps/unity-poc/Assets/Scripts/Game/RtgTerrainDeposit.cs` |
+| Terrain height | `apps/unity-poc/Assets/Scripts/Game/RtgTerrainHeight.cs` |
 
 ---
 
@@ -323,3 +323,4 @@ Resources should read like Civ strategic resources — **part of the tile**, not
 | 2026-07-14 | **Raster overlay spike** — `RtgTerrainRasterOverlay` + API tile proxy (`terrain-tiles.ts`) |
 | 2026-07-14 | Goal sharpened: **Civ-rival pass-over readability** at glider altitude; Phase 2 = **tile-embedded** resources |
 | 2026-07-14 | Scatter props noted as **laser-test placeholders** — realistic environmental art deferred to Phase 3 |
+| 2026-07-15 | **Phase 2 started** — biome spawn rules, `RtgTerrainDeposit`, Cesium height anchoring, API `biome` on map nodes |

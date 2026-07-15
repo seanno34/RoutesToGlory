@@ -1,18 +1,13 @@
 using System.Collections.Generic;
+using CesiumForUnity;
 using UnityEngine;
 
 namespace RoutesToGlory.Game
 {
     /// <summary>
     /// Draws a glowing "Light Road" polyline that grows behind a moving target
-    /// (the player marker). This is the game's signature mechanic made visible:
-    /// real-world movement lays down a route. It samples the target's world
-    /// position whenever it has moved at least <see cref="pointSpacingMeters"/>,
-    /// so the trail is smooth regardless of frame rate or travel speed.
-    ///
-    /// The trail lives in world space, which is stable while the follow camera is
-    /// active (that path disables Cesium's origin shift). For free-fly with origin
-    /// shift enabled, a future version would re-anchor points via the georeference.
+    /// (the player marker). Points are stored as lat/lng and re-projected onto
+    /// Cesium terrain each frame so the ribbon stays above hills as samples arrive.
     /// </summary>
     [RequireComponent(typeof(LineRenderer))]
     public class RtgLightRoad : MonoBehaviour
@@ -26,8 +21,8 @@ namespace RoutesToGlory.Game
         [Tooltip("Road width in meters.")]
         public float widthMeters = 8f;
 
-        [Tooltip("Meters to raise/lower each sampled point (the marker floats above ground, so this drops the road toward it).")]
-        public float verticalOffset = 0f;
+        [Tooltip("Meters above sampled terrain for each road point.")]
+        public float roadClearanceMeters = 3f;
 
         [Tooltip("Cap on recorded points; oldest are dropped past this so the road stays bounded.")]
         public int maxPoints = 8000;
@@ -35,19 +30,37 @@ namespace RoutesToGlory.Game
         [Tooltip("Glowing road color (bright reads as energy against the dark alien map).")]
         public Color roadColor = new Color(0.45f, 0.95f, 1.00f);
 
+        [Tooltip("How often to re-project all trail points onto terrain (seconds).")]
+        public float terrainRefreshIntervalSeconds = 0.12f;
+
         // Recording is off until the owner confirms a real position fix, so we
         // never draw a stray segment from the origin to the first GPS point.
         private bool _recording;
 
         private LineRenderer _line;
-        private readonly List<Vector3> _points = new();
+        private RtgTerrainHeight _terrainHeight;
+        private CesiumGlobeAnchor _targetAnchor;
+        private CesiumGlobeAnchor _probeAnchor;
+        private readonly List<GeoPoint> _points = new();
         private bool _hasLast;
-        private Vector3 _last;
+        private Vector3 _lastWorld;
+        private float _nextTerrainRefreshTime;
+
+        private struct GeoPoint
+        {
+            public double Lat;
+            public double Lng;
+        }
 
         private void Awake()
         {
             _line = GetComponent<LineRenderer>();
             ConfigureLine();
+        }
+
+        private void OnEnable()
+        {
+            EnsureTerrainRefs();
         }
 
         /// <summary>Begin tracing (call once the target holds a valid position).</summary>
@@ -68,45 +81,89 @@ namespace RoutesToGlory.Game
         {
             if (!_recording || target == null) return;
 
-            Vector3 pos = target.position + Vector3.up * verticalOffset;
+            EnsureTerrainRefs();
+            if (_targetAnchor == null)
+                _targetAnchor = target.GetComponent<CesiumGlobeAnchor>();
+            if (_targetAnchor == null) return;
 
+            double lat = _targetAnchor.latitude;
+            double lng = _targetAnchor.longitude;
+            Vector3 worldPos = WorldPosAt(lat, lng);
+
+            if (_terrainHeight != null)
+                _terrainHeight.QueueSampleIfNeeded(lat, lng);
+
+            bool appended = false;
             if (!_hasLast)
             {
-                AppendPoint(pos);
-                _last = pos;
+                AppendGeoPoint(lat, lng);
+                _lastWorld = worldPos;
                 _hasLast = true;
-                return;
+                appended = true;
+            }
+            else if (Vector3.Distance(worldPos, _lastWorld) >= Mathf.Max(0.5f, pointSpacingMeters))
+            {
+                AppendGeoPoint(lat, lng);
+                _lastWorld = worldPos;
+                appended = true;
             }
 
-            if (Vector3.Distance(pos, _last) >= Mathf.Max(0.5f, pointSpacingMeters))
+            if (appended || Time.time >= _nextTerrainRefreshTime)
             {
-                AppendPoint(pos);
-                _last = pos;
+                RefreshLinePositions();
+                _nextTerrainRefreshTime = Time.time + Mathf.Max(0.03f, terrainRefreshIntervalSeconds);
             }
         }
 
-        private void AppendPoint(Vector3 worldPoint)
+        private void EnsureTerrainRefs()
         {
-            _points.Add(worldPoint);
-            bool droppedOldest = false;
-            if (_points.Count > Mathf.Max(2, maxPoints))
-            {
-                _points.RemoveAt(0);
-                droppedOldest = true;
-            }
+            if (_terrainHeight == null)
+                _terrainHeight = RtgTerrainHeight.FindOrCreate();
 
-            if (droppedOldest)
+            if (_probeAnchor != null) return;
+
+            var probeGo = new GameObject("RTG_RoadProbe");
+            probeGo.hideFlags = HideFlags.HideInHierarchy;
+            probeGo.transform.SetParent(transform, false);
+            _probeAnchor = probeGo.AddComponent<CesiumGlobeAnchor>();
+        }
+
+        private void AppendGeoPoint(double lat, double lng)
+        {
+            _points.Add(new GeoPoint { Lat = lat, Lng = lng });
+            if (_points.Count > Mathf.Max(2, maxPoints))
+                _points.RemoveAt(0);
+        }
+
+        private void RefreshLinePositions()
+        {
+            if (_line == null || _probeAnchor == null) return;
+
+            int count = _points.Count;
+            if (count == 0)
             {
-                _line.positionCount = _points.Count;
-                for (int i = 0; i < _points.Count; i++)
-                    _line.SetPosition(i, _points[i]);
+                _line.positionCount = 0;
                 return;
             }
 
-            int index = _points.Count - 1;
-            if (_line.positionCount < _points.Count)
-                _line.positionCount = _points.Count;
-            _line.SetPosition(index, worldPoint);
+            _line.positionCount = count;
+            for (int i = 0; i < count; i++)
+            {
+                GeoPoint p = _points[i];
+                if (_terrainHeight != null)
+                    _terrainHeight.QueueSampleIfNeeded(p.Lat, p.Lng);
+                _line.SetPosition(i, WorldPosAt(p.Lat, p.Lng));
+            }
+        }
+
+        private Vector3 WorldPosAt(double lat, double lng)
+        {
+            double heightM = roadClearanceMeters;
+            if (_terrainHeight != null)
+                heightM = _terrainHeight.GetGroundHeight(lat, lng) + roadClearanceMeters;
+
+            _probeAnchor.SetPositionLongitudeLatitudeHeight(lng, lat, heightM);
+            return _probeAnchor.transform.position;
         }
 
         private void ConfigureLine()
@@ -121,7 +178,6 @@ namespace RoutesToGlory.Game
             _line.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
             _line.receiveShadows = false;
             _line.sortingOrder = 1;
-            // of the scene's alien lighting.
             Shader shader = Shader.Find("Universal Render Pipeline/Unlit");
             if (shader == null) shader = Shader.Find("Sprites/Default");
             var mat = new Material(shader) { name = "RTG_LightRoad" };
@@ -129,7 +185,6 @@ namespace RoutesToGlory.Game
             if (mat.HasProperty("_Color")) mat.SetColor("_Color", roadColor);
             _line.material = mat;
 
-            // Slight fade along the trail: brightest at the head (player), softer tail.
             var gradient = new Gradient();
             gradient.SetKeys(
                 new[]

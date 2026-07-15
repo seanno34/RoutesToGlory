@@ -107,7 +107,8 @@
       "richness": "rich",
       "yield_per_day": 42,
       "lat": 42.7638,
-      "lng": -105.3762
+      "lng": -105.3762,
+      "biome": "xeno_rift"
     },
     {
       "id": "r-solari-1",
@@ -116,7 +117,8 @@
       "richness": "moderate",
       "yield_per_day": 24,
       "lat": 42.7561,
-      "lng": -105.3883
+      "lng": -105.3883,
+      "biome": "xeno_plains"
     },
     {
       "id": "r-lumin-1",
@@ -125,7 +127,8 @@
       "richness": "rich",
       "yield_per_day": 40,
       "lat": 42.7702,
-      "lng": -105.3851
+      "lng": -105.3851,
+      "biome": "xeno_wetland"
     },
     {
       "id": "r-void-1",
@@ -134,7 +137,8 @@
       "richness": "sparse",
       "yield_per_day": 12,
       "lat": 42.7489,
-      "lng": -105.3907
+      "lng": -105.3907,
+      "biome": "xeno_highland"
     },
     {
       "id": "r-quant-1",
@@ -143,7 +147,8 @@
       "richness": "moderate",
       "yield_per_day": 28,
       "lat": 42.7619,
-      "lng": -105.3681
+      "lng": -105.3681,
+      "biome": "xeno_highland"
     }
   ]
 }

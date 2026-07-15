@@ -275,13 +275,8 @@ namespace RoutesToGlory.Game
                 _beamGlowLine.enabled = show;
             if (!show) return;
 
-            if (_cockpitMode && useCockpitBeam && _viewCamera != null)
-                UpdateCockpitBeamVisual(_viewCamera);
-            else
-            {
-                if (shipAnchor == null) return;
-                UpdateMapBeamVisual(shipAnchor, headingRad);
-            }
+            if (shipAnchor == null) return;
+            UpdateMapBeamVisual(shipAnchor, headingRad);
         }
 
         private void UpdateMapBeamVisual(Transform shipAnchor, float headingRad)

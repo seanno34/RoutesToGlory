@@ -1,0 +1,149 @@
+import { z } from 'zod';
+
+/** Canonical terrain biome ids — keep in sync with RtgBiomePalette.cs and AlienTerrainBiome.shader. */
+export const TERRAIN_BIOMES = [
+  'xeno_plains',
+  'xeno_wasteland',
+  'xeno_wetland',
+  'xeno_fungal_forest',
+  'xeno_highland',
+  'xeno_rift',
+  'xeno_water',
+  'xeno_frost',
+  'xeno_urban_echo',
+] as const;
+
+export const TerrainBiomeSchema = z.enum(TERRAIN_BIOMES);
+export type TerrainBiome = z.infer<typeof TerrainBiomeSchema>;
+
+export interface TerrainBiomeDefinition {
+  id: TerrainBiome;
+  displayName: string;
+  earthSignals: string[];
+  /** sRGB hex for docs, UI, and shader authoring */
+  colorHex: string;
+  /** Active in Phase 1 procedural shader */
+  shaderActive: boolean;
+}
+
+export const TERRAIN_BIOME_DEFINITIONS: Record<TerrainBiome, TerrainBiomeDefinition> = {
+  xeno_plains: {
+    id: 'xeno_plains',
+    displayName: 'Alien Plains',
+    earthSignals: ['grassland', 'open plain', 'low slope mid elevation'],
+    colorHex: '#B88C38',
+    shaderActive: true,
+  },
+  xeno_wasteland: {
+    id: 'xeno_wasteland',
+    displayName: 'Dust Expanse',
+    earthSignals: ['desert', 'barren', 'sparse scrub'],
+    colorHex: '#8C6B4A',
+    shaderActive: true,
+  },
+  xeno_wetland: {
+    id: 'xeno_wetland',
+    displayName: 'Fungal Marsh',
+    earthSignals: ['marsh', 'wetland', 'water adjacency'],
+    colorHex: '#2D5A6B',
+    shaderActive: true,
+  },
+  xeno_fungal_forest: {
+    id: 'xeno_fungal_forest',
+    displayName: 'Fungal Forest',
+    earthSignals: ['forest', 'woodland', 'tree cover'],
+    colorHex: '#1E9A4A',
+    shaderActive: true,
+  },
+  xeno_highland: {
+    id: 'xeno_highland',
+    displayName: 'Crystal Highland',
+    earthSignals: ['mountains', 'high elevation', 'rocky ridge'],
+    colorHex: '#9EC8EB',
+    shaderActive: true,
+  },
+  xeno_rift: {
+    id: 'xeno_rift',
+    displayName: 'Volcanic Rift',
+    earthSignals: ['steep slope', 'cliff', 'canyon wall'],
+    colorHex: '#EB6020',
+    shaderActive: true,
+  },
+  xeno_water: {
+    id: 'xeno_water',
+    displayName: 'Deep Violet Sea',
+    earthSignals: ['river', 'lake', 'ocean', 'coast'],
+    colorHex: '#1A2848',
+    shaderActive: true,
+  },
+  xeno_frost: {
+    id: 'xeno_frost',
+    displayName: 'Frost Expanse',
+    earthSignals: ['arctic', 'snow', 'tundra'],
+    colorHex: '#C8E8F0',
+    shaderActive: false,
+  },
+  xeno_urban_echo: {
+    id: 'xeno_urban_echo',
+    displayName: 'Settlement Scar',
+    earthSignals: ['urban', 'residential', 'commercial'],
+    colorHex: '#6A5A7A',
+    shaderActive: false,
+  },
+};
+
+export interface TerrainTileRecord {
+  tileId: string;
+  biome: TerrainBiome;
+  elevationM: number;
+  waterFraction: number;
+}
+
+/** POC heuristic classifier — mirrors AlienTerrainBiome.shader priority order. */
+export function classifyTerrainBiomeHeuristic(input: {
+  /** Normalized height relative to local reference, same units as shader heightBand */
+  heightBand: number;
+  /** 0 = flat, 1 = vertical */
+  slope: number;
+  /** 0–1 wetness channel */
+  wetness: number;
+  /** 0–1 large-scale region noise */
+  regionNoise: number;
+  slopeRiftStart?: number;
+  wetlandHeightCutoff?: number;
+  waterHeightCutoff?: number;
+  highlandHeightCutoff?: number;
+  forestRegionThreshold?: number;
+  wastelandRegionThreshold?: number;
+  waterWetnessMin?: number;
+  wetlandWetnessMin?: number;
+}): TerrainBiome {
+  const slopeRiftStart = input.slopeRiftStart ?? 0.38;
+  const wetlandHeightCutoff = input.wetlandHeightCutoff ?? -0.12;
+  const waterHeightCutoff = input.waterHeightCutoff ?? -0.28;
+  const highlandHeightCutoff = input.highlandHeightCutoff ?? 0.22;
+  const forestRegionThreshold = input.forestRegionThreshold ?? 0.62;
+  const wastelandRegionThreshold = input.wastelandRegionThreshold ?? 0.28;
+  const waterWetnessMin = input.waterWetnessMin ?? 0.58;
+  const wetlandWetnessMin = input.wetlandWetnessMin ?? 0.52;
+
+  if (input.slope >= slopeRiftStart) return 'xeno_rift';
+  if (
+    input.heightBand <= waterHeightCutoff &&
+    input.slope < 0.12 &&
+    input.wetness >= waterWetnessMin
+  ) {
+    return 'xeno_water';
+  }
+  if (input.heightBand <= wetlandHeightCutoff && input.wetness >= wetlandWetnessMin) {
+    return 'xeno_wetland';
+  }
+  if (input.heightBand >= highlandHeightCutoff) return 'xeno_highland';
+  if (input.regionNoise >= forestRegionThreshold) return 'xeno_fungal_forest';
+  if (input.regionNoise <= wastelandRegionThreshold) return 'xeno_wasteland';
+  return 'xeno_plains';
+}
+
+export const ACTIVE_SHADER_BIOMES = TERRAIN_BIOMES.filter(
+  (id) => TERRAIN_BIOME_DEFINITIONS[id].shaderActive,
+);

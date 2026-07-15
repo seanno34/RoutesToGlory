@@ -65,5 +65,7 @@ namespace RoutesToGlory.Game
         public double lat;
         public double lng;
         public string owner_empire_id;
+        /// <summary>Classified terrain biome at deposit (Phase 2). Optional in sample JSON.</summary>
+        public string biome;
     }
 }

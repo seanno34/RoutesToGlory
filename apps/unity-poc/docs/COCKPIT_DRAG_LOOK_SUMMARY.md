@@ -2,7 +2,9 @@
 
 **Project:** `routestoglory/apps/unity-poc`  
 **Date:** July 2026  
-**Status:** POC in progress — blocking `apps/game` kickoff (with hostile ordnance)
+**Status:** **ON HOLD (deferred)** — nice-to-have for POC; not blocking go/no-go or `apps/game` kickoff
+
+**Next active POC item:** [HOSTILE_ORDNANCE_POC.md](HOSTILE_ORDNANCE_POC.md)
 
 ---
 
@@ -18,23 +20,67 @@ First-person **cockpit mode** where:
 
 ---
 
+## Where We Left Off (2026-07-14)
+
+### What works (code + debug HUD confirmed)
+
+| Behavior | Status |
+|----------|--------|
+| Cockpit mode entry/exit | Works |
+| `RtgCameraManager` — Chase vs Cockpit ownership | Works |
+| `CockpitCamera` renders; fly camera GO deactivated in cockpit | Works |
+| Map pan blocked in cockpit (`panned=false`) | Works |
+| Look yaw/pitch update on drag (`lookYaw`, `lookPitch` change) | Works |
+| Camera translation locked (`markerΔ=0`, `camΔ=0`) | Works |
+| Reverse flight heading | Reportedly fixed via `cockpitHeadingOffsetDegrees` |
+| Rear inset camera scaffold | Wired (`RtgCockpitRearCamera`) |
+| Open-glass IMGUI overlay | Implemented (`RtgCockpitView`) |
+| Duplicate AudioListener warnings | Fixed (`RtgAudioSession.SetActiveListener`) |
+
+### What does **not** meet user acceptance (reason for deferral)
+
+**Symptom (user-confirmed):** On drag, the **ship dashboard / whole view still appears to move** with the finger — as if the scene is sliding, not just the world rotating behind a fixed HUD.
+
+**Debug HUD at time of deferral:**
+
+- `cam=CockpitCamera` ✓
+- `lookYaw` / `lookPitch` change on drag ✓
+- `markerΔ = 0` ✓
+- `camΔ = 0` ✓
+- `panned = false` ✓
+
+**Interpretation:** The code path is doing **rotation-only head look**, not map pan. The remaining issue is likely **visual/UX**:
+
+1. IMGUI dashboard may not feel truly screen-locked while the 3D camera rotates (world rotation reads as “dashboard sliding”)
+2. Ship/dashboard art may still be visible or moving (`SetShipVisible(false)` may be incomplete)
+3. Cesium rendering artifact or parallax mismatch between 2D overlay and 3D world
+4. User perception of world rotation as “dragging the ship” rather than head swivel
+
+**Decision:** Not critical for user play/function in POC. Park until production (`apps/game`) or a dedicated polish pass.
+
+---
+
 ## Architecture (Current)
 
 | Layer | Implementation |
 |--------|----------------|
 | **World** | Cesium globe + `CesiumGlobeAnchor` on player marker |
-| **Camera** | `Camera.main` — shared with Cesium tile streaming |
-| **Normal mode** | Chase cam: `DesiredCameraPosition(_focus)` + `LookAt(_focus)`; drag pans `_focusTarget` in world space (Google Maps style) |
+| **Camera** | `RtgCameraManager` — `ChaseCamera` / `CockpitCamera` on pivots; `CockpitCamera` renders in cockpit |
+| **Normal mode** | Chase cam: `DesiredCameraPosition(_focus)` + `LookAt(_focus)`; drag pans `_focusTarget` in world space |
 | **Cockpit overlay** | IMGUI full-screen art from `RtgCockpitView` (`glider_cockpit_01.png`) |
-| **Cockpit camera** | `ApplyCockpitCamera()` — eye at `marker.position + up * 3.5m`, rotation from travel heading + drag offsets |
+| **Cockpit camera** | `CockpitPivot` at eye height; rotation from travel heading + drag offsets; no `LookAt`, no pan |
 | **Rear inset** | `RtgCockpitRearCamera` — render texture drawn on dashboard |
 
 **Key files:**
 
-- `Assets/Scripts/Game/RtgPlayerLocation.cs` — main logic
+- `Assets/Scripts/Game/RtgCameraManager.cs` — mode ownership, mirror pattern
+- `Assets/Scripts/Game/RtgPlayerLocation.cs` — cockpit entry, look input, pan blocking, debug HUD
 - `Assets/Scripts/Game/RtgCockpitView.cs` — overlay
 - `Assets/Scripts/Game/RtgCockpitRearCamera.cs` — rear inset
-- `Assets/Scripts/Game/RtgCockpitCameraLock.cs` — end-of-frame pose lock
+- `Assets/Scripts/Game/RtgAudioSession.cs` — single AudioListener
+- `Assets/Scripts/Game/RtgPathfinderBeam.cs` — world-fixed beam in cockpit (not camera-locked)
+
+**Removed:** `RtgCockpitCameraLock.cs` — superseded by `RtgCameraManager`
 
 ---
 
@@ -58,61 +104,42 @@ First-person **cockpit mode** where:
 
 7. **World-space euler at eye** — `Quaternion.Euler(pitch, heading + lookYaw, 0)` with position snapped to eye each frame (no parenting).
 
-8. **`RtgCockpitCameraLock`** — Re-applies `ApplyCockpitCamera()` in `LateUpdate` + `OnPreCull` on the camera object to override Cesium/fly-camera writes after `RtgPlayerLocation.LateUpdate`.
+8. **`RtgCockpitCameraLock`** — Re-applies pose in `LateUpdate` + `OnPreCull`. **Superseded** by `RtgCameraManager`.
 
-9. **Disable Cesium controllers in cockpit** — `CesiumCameraController.enabled = false`, `CesiumOriginShift.enabled = false`; `_focus` locked to marker.
+9. **Disable Cesium controllers in cockpit** — `CesiumCameraController`, `CesiumOriginShift`, `CesiumGlobeAnchor` on `Camera.main` disabled during gameplay ownership.
 
-10. **Tuning** — Cockpit FOV 90°, yaw max ±135°, pitch up to 42°, ship hidden via `SetShipVisible(false)`.
+10. **`RtgCameraManager` mirror pattern** — Separate `ChaseCamera` / `CockpitCamera`; `CockpitCamera` renders; fly camera GO deactivated in cockpit.
 
----
+11. **Early suppression in `FixedUpdate`** — Order -32000 before Cesium `FixedUpdate`.
 
-## Current Bugs
+12. **Yaw-before-pitch rotation order** — Standard FPS order on `CockpitPivot`.
 
-| # | Symptom | Likely causes we haven't ruled out |
-|---|---------|-------------------------------------|
-| **1** | **Ship moves in reverse** in cockpit | Camera heading 180° off from travel direction (`shipHeadingOffsetDegrees`, `Atan2(forward.x, forward.z)` vs glider nose); view faces aft while marker still advances along route |
-| **2** | **Drag still pans entire ship/scene** | Map pan still leaking; Cesium overwriting camera after our lock; drag-look not applying (hit-test / `_gameUiRects` timing); user perceiving route motion + wrong rotation as “pan”; single shared camera fighting Cesium's globe-relative updates |
+13. **Pathfinder beam world-fixed** — No longer camera-locked in cockpit.
 
----
-
-## Suspected Root Issues (For Reviewer)
-
-1. **One camera for everything** — `Camera.main` drives both Cesium streaming and cockpit FPV. Cesium may assume it controls pose for globe precision / origin shift.
-
-2. **Screen-fixed overlay vs world-rotating camera** — Overlay doesn't move; only the world behind the glass should rotate. Any **translation** of the camera or focus reads as “the whole ship sliding.”
-
-3. **Heading / forward vector** — `_travelHeadingRad` from GPS delta; cockpit applies `Mathf.Atan2(forward.x, forward.z) + shipHeadingOffsetDegrees + lookYaw`. A 180° mismatch would explain **reverse** motion feel.
-
-4. **Input / hit-test timing** — `_gameUiRects` built in `OnGUI` (after `LateUpdate`); drag uses **previous frame's** UI rects. May block or mis-route drags.
-
-5. **Art vs behavior** — `glider_cockpit_01.png` is a closed-canopy interior; open glass is approximated by selective UV draws. Production likely needs a **glass-masked overlay** or **3D cockpit mesh** aligned to the Tripo model.
+14. **Debug HUD** — `cockpitLookDebugHud` showing yaw/pitch, markerΔ, camΔ, panned.
 
 ---
 
-## What “Success” Looks Like
+## Resume Checklist (when re-prioritized)
+
+1. **Reproduce with debug HUD on device** — Confirm `markerΔ=0`, `camΔ=0`, `panned=false` while user still sees slide.
+2. **IMGUI vs 3D split** — Decide if overlay must be screen-fixed while only world rotates (current) vs true split rendering / render layers.
+3. **Ship visibility** — Verify `SetShipVisible(false)` hides all dashboard/ship mesh that could move with camera.
+4. **Disable pathfinder beam in cockpit** — Rule out beam VFX as slide perception.
+5. **URP `UniversalAdditionalCameraData`** — Verify runtime-created `CockpitCamera` stack settings match `Camera.main`.
+6. **3D cockpit mesh** — Architecture review step 7; likely production path for correct parallax.
+7. **Prefab forward axis** — `ShipRoot` / `ModelOffset` (180°) instead of runtime `cockpitHeadingOffsetDegrees`.
+8. **Manual mode stationary test** — Drag with ship not moving; isolates route motion from look motion.
+
+See also: [CURSOR_CAMERA_ARCHITECTURE_REVIEW.md](CURSOR_CAMERA_ARCHITECTURE_REVIEW.md)
+
+---
+
+## What “Success” Looks Like (acceptance criteria — not yet met)
 
 - **Manual mode, stationary:** drag left/right/up/down → horizon/world rotates inside fixed frame; **zero** lateral translation; no `Center` button / `_panned` flag
 - **Auto Pilot:** ship advances along route; view stays forward-relative; drag adds look offset only
-- **Visual:** open top/sides matching Tripo 270° glass; dashboard opaque; no stray bars/lines
-
----
-
-## Questions for External Opinion
-
-1. Should cockpit use a **dedicated child camera** (or Cinemachine VC) instead of fighting over `Camera.main`?
-2. Is **parenting an eye-height pivot** (rotate at eye, not marker origin) the right fix, or stay world-space?
-3. How should this interact with **CesiumGlobeAnchor / origin shift** at georeferenced scale?
-4. **2D IMGUI overlay + rotating main camera** vs **3D cockpit interior mesh** — which path for POC → production?
-5. Best practice for **touch drag-look** with IMGUI dead zones (joystick, buttons, rear inset)?
-
----
-
-## Related Context
-
-- **Completed:** Socket exhaust VFX, Tripo hero glider (Phase B)
-- **POC remaining:** Cockpit drag-look (this doc), hostile ordnance
-- **Cockpit art assets:** `Assets/Resources/RTG_PlayerShip/glider_cockpit_01.png`, `glider_cockpit_portrait_01.png`
-- **Glider reference:** Tripo model with 270° reinforced glass canopy (open top/sides, pilot view except rear)
+- **Visual:** dashboard/HUD feels **fixed on screen**; open top/sides matching Tripo 270° glass; no stray bars/lines
 
 ---
 
@@ -128,4 +155,15 @@ First-person **cockpit mode** where:
 | `cockpitLookYawSensitivity` | 0.16 | Degrees per pixel (horizontal drag) |
 | `cockpitLookPitchSensitivity` | 0.12 | Degrees per pixel (vertical drag) |
 | `cockpitLookSmoothing` | 16 | Look lag smoothing |
-| `shipHeadingOffsetDegrees` | 0 (tunable) | Nose alignment — suspect for reverse view |
+| `cockpitHeadingOffsetDegrees` | 0 (often 180) | Nose alignment |
+| `cockpitLookDebugHud` | true | Debug overlay for resume work |
+
+---
+
+## Related Context
+
+- **Completed:** Socket exhaust VFX, Tripo hero glider (Phase B), camera manager refactor
+- **Deferred:** Cockpit drag-look visual acceptance (this doc)
+- **Next POC:** Hostile ordnance — [HOSTILE_ORDNANCE_POC.md](HOSTILE_ORDNANCE_POC.md)
+- **Cockpit art assets:** `Assets/Resources/RTG_PlayerShip/glider_cockpit_01.png`, `glider_cockpit_portrait_01.png`
+- **Glider reference:** Tripo model with 270° reinforced glass canopy (open top/sides, pilot view except rear)

@@ -61,6 +61,9 @@ namespace RoutesToGlory.Game
         [Tooltip("Run one-time server cleanup for messy saved routes after the map loads.")]
         public bool cleanupRoutesOnMapLoad = false;
 
+        [Tooltip("In the Editor, retry POST via 127.0.0.1 when the configured LAN IP fails.")]
+        public bool editorLocalhostRetry = true;
+
         private const int MaxBatch = 20;
 
         public bool IsActive => _state == State.Active;
@@ -82,6 +85,8 @@ namespace RoutesToGlory.Game
         private readonly List<GpsPoint> _queue = new();
         private readonly List<PathPoint> _fullPath = new();
         private Coroutine _flushLoop;
+        private bool _flushInFlight;
+        private int _flushEpoch;
 
         // After an auto-connect, hold off starting the next leg until the player has
         // left the connected site's geofence (see resumeAfterMeters).
@@ -95,6 +100,8 @@ namespace RoutesToGlory.Game
         private bool _skipGeofenceConnect;
         private bool _autopilotTestMode;
         private float _autoBeginBlockedUntil;
+        private float _apiUnreachableBlockedUntil;
+        private bool _beginInFlight;
         private RtgRoute[] _cachedSnapRoutes;
         private List<IReadOnlyList<RtgRouteGeometry.LatLng>> _cachedSnapPaths;
         private bool _corridorSnapEngaged;
@@ -172,6 +179,8 @@ namespace RoutesToGlory.Game
                 _flushLoop = null;
             }
 
+            _flushEpoch++;
+            _flushInFlight = false;
             _queue.Clear();
             _fullPath.Clear();
             _state = State.Idle;
@@ -338,7 +347,15 @@ namespace RoutesToGlory.Game
         private void TryAutoBegin()
         {
             if (Time.time < _autoBeginBlockedUntil) return;
+            if (Time.time < _apiUnreachableBlockedUntil) return;
+            if (_beginInFlight) return;
             if (!_hasCur) return;
+            SyncConfigFromEchoLoader();
+            if (_echoLoader != null && _echoLoader.LoadedFromSampleFallback)
+            {
+                StatusText = "Route: offline (sample map)";
+                return;
+            }
             if (string.IsNullOrWhiteSpace(worldId) || string.IsNullOrWhiteSpace(empireId))
             {
                 StatusText = "Route: needs live world (run '6b. Connect Echo Sites to Live API')";
@@ -355,8 +372,14 @@ namespace RoutesToGlory.Game
 
         public void Begin()
         {
-            if (_state == State.Active) return;
+            if (_state == State.Active || _beginInFlight) return;
             if (!_hasCur) { StatusText = "Route: waiting for GPS fix…"; return; }
+            SyncConfigFromEchoLoader();
+            if (_echoLoader != null && _echoLoader.LoadedFromSampleFallback)
+            {
+                StatusText = "Route: offline (sample map)";
+                return;
+            }
             if (string.IsNullOrWhiteSpace(worldId) || string.IsNullOrWhiteSpace(empireId))
             {
                 StatusText = "Route: needs live world (run '6b. Connect Echo Sites to Live API')";
@@ -522,11 +545,13 @@ namespace RoutesToGlory.Game
 
         private IEnumerator BeginRoutine(double lat, double lng)
         {
-            _state = State.Active;
+            _beginInFlight = true;
             StatusText = "Route: starting…";
             _cumulativeDistanceM = 0;
             _hasLast = false;
             _hasLastRaw = false;
+            _flushEpoch++;
+            _flushInFlight = false;
             _queue.Clear();
             _fullPath.Clear();
             _startUtc = DateTime.UtcNow;
@@ -539,6 +564,7 @@ namespace RoutesToGlory.Game
             {
                 if (ok && code == 200)
                 {
+                    _state = State.Active;
                     var resp = JsonUtility.FromJson<BeginResp>(text);
                     _sessionId = resp.sessionId;
                     _lastLat = lat;
@@ -555,10 +581,25 @@ namespace RoutesToGlory.Game
                 else
                 {
                     _state = State.Idle;
-                    StatusText = $"Route: begin failed ({code})";
-                    Debug.LogError($"[RTG] Begin route failed: {code} {text}");
+                    if (code == 0)
+                    {
+                        _apiUnreachableBlockedUntil = Time.time + 12f;
+                        StatusText = "Route: API unreachable";
+                        Debug.LogError(
+                            $"[RTG] Begin route failed: API unreachable at {apiBaseUrl.TrimEnd('/')}/sessions. " +
+                            $"Is @empire/api running (pnpm --filter @empire/api dev)? " +
+                            $"On device, apiBaseUrl must be your Mac LAN IP, not localhost. " +
+                            $"Detail: {text}");
+                    }
+                    else
+                    {
+                        StatusText = $"Route: begin failed ({code})";
+                        Debug.LogError($"[RTG] Begin route failed: {code} {text}");
+                    }
                 }
             });
+
+            _beginInFlight = false;
         }
 
         private IEnumerator FlushLoop()
@@ -573,9 +614,12 @@ namespace RoutesToGlory.Game
 
         private IEnumerator FlushOnce()
         {
+            if (_flushInFlight) yield break;
             if (_state != State.Active || string.IsNullOrEmpty(_sessionId)) yield break;
             if (_queue.Count == 0) yield break;
 
+            _flushInFlight = true;
+            int flushEpoch = _flushEpoch;
             int take = Mathf.Min(MaxBatch, _queue.Count);
             var batch = _queue.GetRange(0, take);
 
@@ -593,32 +637,53 @@ namespace RoutesToGlory.Game
 
             yield return Post($"/sessions/{_sessionId}/points", sb.ToString(), (code, text, ok) =>
             {
-                if (!ok)
+                try
                 {
-                    Debug.LogWarning($"[RTG] Points flush failed ({code}) — will retry.");
-                    return; // keep queued points for next attempt
+                    if (!ok)
+                    {
+                        Debug.LogWarning($"[RTG] Points flush failed ({code}) — will retry.");
+                        return;
+                    }
+
+                    if (flushEpoch != _flushEpoch)
+                    {
+                        Debug.Log("[RTG] Points flush ack ignored — route session was reset.");
+                        return;
+                    }
+
+                    int removeCount = Mathf.Min(take, _queue.Count);
+                    if (removeCount > 0)
+                        _queue.RemoveRange(0, removeCount);
+                    else if (take > 0)
+                        Debug.LogWarning(
+                            $"[RTG] Points flush ack but queue empty (take={take}) — skipping remove.");
+
+                    var resp = JsonUtility.FromJson<PointsResp>(text);
+                    NotifyExplorationDelta(resp?.exploration);
+                    if (resp != null && resp.connected)
+                    {
+                        string name = resp.settlement != null ? resp.settlement.name : "settlement";
+                        Debug.Log($"[RTG] Node connected at {name} — leg saved (route {resp.routeId}). Bonuses TBD.");
+                        _state = State.Idle;
+                        RefreshPersistedRoutes();
+
+                        _resumeLat = _curLat;
+                        _resumeLng = _curLng;
+                        _hasResumeGate = true;
+                        StatusText = autoRecord
+                            ? $"Route: node connected → {name}"
+                            : $"Route: connected → {name}";
+                    }
                 }
-
-                _queue.RemoveRange(0, take);
-
-                var resp = JsonUtility.FromJson<PointsResp>(text);
-                NotifyExplorationDelta(resp?.exploration);
-                if (resp != null && resp.connected)
+                finally
                 {
-                    string name = resp.settlement != null ? resp.settlement.name : "settlement";
-                    Debug.Log($"[RTG] Node connected at {name} — leg saved (route {resp.routeId}). Bonuses TBD.");
-                    _state = State.Idle; // server completed the session
-                    RefreshPersistedRoutes();
-
-                    // Gate the next auto-started leg until we leave this site.
-                    _resumeLat = _curLat;
-                    _resumeLng = _curLng;
-                    _hasResumeGate = true;
-                    StatusText = autoRecord
-                        ? $"Route: node connected → {name}"
-                        : $"Route: connected → {name}";
+                    _flushInFlight = false;
                 }
             });
+
+            // Post invokes the callback before returning; guard if callback was skipped.
+            if (_flushInFlight)
+                _flushInFlight = false;
         }
 
         private IEnumerator EndRoutine()
@@ -692,17 +757,109 @@ namespace RoutesToGlory.Game
 
         private IEnumerator Post(string path, string json, Action<long, string, bool> done)
         {
-            string url = apiBaseUrl.TrimEnd('/') + path;
-            using var req = new UnityWebRequest(url, "POST");
+            SyncConfigFromEchoLoader();
+
+            string primaryBase = apiBaseUrl.TrimEnd('/');
+            long code = 0;
+            string text = null;
+            bool ok = false;
+
+            yield return PostOnce(primaryBase + path, json, (c, t, o) =>
+            {
+                code = c;
+                text = t;
+                ok = o;
+            });
+
+            if (ok)
+            {
+                done?.Invoke(code, text, true);
+                yield break;
+            }
+
+            if (code == 0 && Application.isEditor && editorLocalhostRetry)
+            {
+                string localBase = LocalhostApiBase(apiBaseUrl).TrimEnd('/');
+                if (!string.Equals(localBase, primaryBase, StringComparison.OrdinalIgnoreCase))
+                {
+                    Debug.LogWarning(
+                        $"[RTG] API POST failed ({primaryBase}{path}). Retrying via editor localhost: {localBase}{path}");
+                    yield return PostOnce(localBase + path, json, (c, t, o) =>
+                    {
+                        code = c;
+                        text = t;
+                        ok = o;
+                    });
+                    if (ok)
+                    {
+                        apiBaseUrl = localBase;
+                        if (_echoLoader != null)
+                            _echoLoader.apiBaseUrl = localBase;
+                        done?.Invoke(code, text, true);
+                        yield break;
+                    }
+                }
+            }
+
+            done?.Invoke(code, text, ok);
+        }
+
+        private static IEnumerator PostOnce(string path, string json, Action<long, string, bool> done)
+        {
+            using var req = new UnityWebRequest(path, "POST");
             req.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(json));
             req.downloadHandler = new DownloadHandlerBuffer();
             req.SetRequestHeader("Content-Type", "application/json");
+            req.timeout = 8;
 
             yield return req.SendWebRequest();
 
             bool ok = req.result == UnityWebRequest.Result.Success;
-            string text = ok ? req.downloadHandler.text : (req.downloadHandler?.text ?? req.error);
+            string text = ok
+                ? req.downloadHandler.text
+                : string.IsNullOrEmpty(req.error)
+                    ? req.downloadHandler?.text ?? "request failed"
+                    : req.error;
             done?.Invoke(req.responseCode, text, ok);
+        }
+
+        /// <summary>Keep api/world/empire ids aligned with the Echo Site loader after localhost retry.</summary>
+        public void SyncConfigFromEchoLoader()
+        {
+            if (_echoLoader == null)
+            {
+#if UNITY_2023_1_OR_NEWER
+                _echoLoader = UnityEngine.Object.FindFirstObjectByType<RtgEchoSiteLoader>();
+#else
+                _echoLoader = UnityEngine.Object.FindObjectOfType<RtgEchoSiteLoader>();
+#endif
+            }
+
+            if (_echoLoader == null) return;
+
+            if (!string.IsNullOrWhiteSpace(_echoLoader.apiBaseUrl) &&
+                !string.Equals(_echoLoader.apiBaseUrl, apiBaseUrl, StringComparison.OrdinalIgnoreCase))
+            {
+                apiBaseUrl = _echoLoader.apiBaseUrl;
+                _apiUnreachableBlockedUntil = 0f;
+            }
+
+            if (!string.IsNullOrWhiteSpace(_echoLoader.worldId))
+                worldId = _echoLoader.worldId;
+            if (!string.IsNullOrWhiteSpace(_echoLoader.empireId))
+                empireId = _echoLoader.empireId;
+        }
+
+        private static string LocalhostApiBase(string baseUrl)
+        {
+            if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out Uri uri))
+                return "http://127.0.0.1:3001/api";
+
+            int port = uri.Port > 0 ? uri.Port : 3001;
+            string path = uri.AbsolutePath.TrimEnd('/');
+            if (string.IsNullOrEmpty(path))
+                path = "/api";
+            return $"http://127.0.0.1:{port}{path}";
         }
 
         private void MaybeCheckpointLeg()
@@ -930,7 +1087,7 @@ namespace RoutesToGlory.Game
 
         private static void NotifyExplorationDelta(ExplorationDelta delta)
         {
-            if (delta == null) return;
+            if (delta == null || RtgWorldScanSettings.PreSurveyedWorld) return;
             RtgFogOfWar fog = RtgFogOfWar.Find();
             if (fog == null) return;
             fog.ApplyExplorationDelta(delta.newlyRevealedTileIds, delta.newResourceNodeIds);

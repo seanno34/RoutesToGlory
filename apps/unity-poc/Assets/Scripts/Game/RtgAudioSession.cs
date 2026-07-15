@@ -33,17 +33,37 @@ namespace RoutesToGlory.Game
 #endif
         }
 
+        /// <summary>Legacy alias — prefer <see cref="SetActiveListener"/>.</summary>
         public static void EnsureListener(Camera camera)
+        {
+            SetActiveListener(camera);
+        }
+
+        /// <summary>Keep exactly one enabled AudioListener on the active camera.</summary>
+        public static void SetActiveListener(Camera camera)
         {
             if (camera == null) return;
 
             Prepare();
 
-            if (camera.GetComponent<AudioListener>() == null)
+#if UNITY_2023_1_OR_NEWER
+            AudioListener[] listeners = Object.FindObjectsByType<AudioListener>(FindObjectsSortMode.None);
+#else
+            AudioListener[] listeners = Object.FindObjectsOfType<AudioListener>();
+#endif
+            foreach (AudioListener listener in listeners)
             {
-                camera.gameObject.AddComponent<AudioListener>();
-                Debug.Log("[RTG] Added AudioListener to main camera.");
+                if (listener == null)
+                    continue;
+
+                if (listener.gameObject == camera.gameObject)
+                    continue;
+
+                Object.Destroy(listener);
             }
+
+            if (camera.GetComponent<AudioListener>() == null)
+                camera.gameObject.AddComponent<AudioListener>();
         }
     }
 }

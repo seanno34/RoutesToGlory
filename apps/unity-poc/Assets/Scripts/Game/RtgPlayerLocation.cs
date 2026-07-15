@@ -252,15 +252,22 @@ namespace RoutesToGlory.Game
         [Tooltip("Zoom smoothing while the cockpit button animates to max zoom-in.")]
         public float cockpitZoomSmoothing = 28f;
 
+        [Tooltip("Extra yaw (degrees) added to cockpit rig alignment if the view faces backward.")]
+        public float cockpitHeadingOffsetDegrees = 0f;
+
         [Header("Cockpit look-around")]
-        [Tooltip("Max yaw (degrees) left/right from the travel heading while drag-looking.")]
-        public float cockpitLookYawMaxDegrees = 85f;
+        [Tooltip("Horizontal FOV while in cockpit (wider ≈ more glass-canopy immersion).")]
+        [Range(55f, 110f)]
+        public float cockpitFieldOfView = 90f;
+
+        [Tooltip("Max yaw (degrees) left/right from travel heading (135° ≈ 270° canopy arc).")]
+        public float cockpitLookYawMaxDegrees = 135f;
 
         [Tooltip("Extra pitch down (degrees) when drag-looking.")]
         public float cockpitLookPitchMinDegrees = -12f;
 
-        [Tooltip("Extra pitch up (degrees) when drag-looking.")]
-        public float cockpitLookPitchMaxDegrees = 28f;
+        [Tooltip("Extra pitch up (degrees) when drag-looking (sky through open glass top).")]
+        public float cockpitLookPitchMaxDegrees = 42f;
 
         [Tooltip("Yaw degrees per screen pixel while drag-looking.")]
         public float cockpitLookYawSensitivity = 0.16f;
@@ -270,6 +277,9 @@ namespace RoutesToGlory.Game
 
         [Tooltip("How quickly drag-look catches up (higher = snappier).")]
         public float cockpitLookSmoothing = 16f;
+
+        [Tooltip("Show look-yaw / marker-movement debug readout while in cockpit.")]
+        public bool cockpitLookDebugHud = true;
 
         [Header("Pathfinder beam")]
         [Tooltip("Beam arms when scatter props enter this distance (m).")]
@@ -300,6 +310,12 @@ namespace RoutesToGlory.Game
         private float _cockpitLookPitchTargetDeg;
         private bool _cockpitLookPointerDown;
         private Vector2 _cockpitLookLastPointer;
+        private Vector3 _cockpitDebugLastMarkerPos;
+        private Vector3 _cockpitDebugLastCamPos;
+        private bool _cockpitDebugHasMarkerPos;
+        private bool _cockpitDebugHasCamPos;
+        private float _savedCameraFov = 60f;
+        private RtgCameraManager _cameraManager;
 
         [Tooltip("Scale pan speed on phones/tablets.")]
         [Range(0.2f, 1f)]
@@ -421,7 +437,7 @@ namespace RoutesToGlory.Game
             EnsureCockpitView();
             EnsureCockpitRearCamera();
             EnsurePathfinderBeam();
-            CacheCamera();
+            EnsureCameraManager();
 
             _destinationDraft = autopilotDestinationCity;
 
@@ -450,9 +466,23 @@ namespace RoutesToGlory.Game
             _provider?.End();
         }
 
+        private void FixedUpdate()
+        {
+            if (IsCockpitCameraActive() && _cameraManager != null)
+                _cameraManager.SetGameplayCameraOwnership(true);
+        }
+
         private void Update()
         {
             if (_provider == null) return;
+
+            if (IsCockpitCameraActive() && _cameraManager != null)
+            {
+                _cameraManager.SetMode(RtgCameraManager.CameraMode.Cockpit);
+                _cameraManager.SetGameplayCameraOwnership(true);
+                HandleCockpitLookInput();
+                SmoothCockpitLook();
+            }
 
             _provider.Tick(Time.deltaTime);
             if (_routeSession != null && _activeSource == LocationSource.AutoPilot)
@@ -468,6 +498,9 @@ namespace RoutesToGlory.Game
                 ApplySmoothedDisplayPosition(targetLat, targetLng, out double displayLat, out double displayLng);
 
                 double heightM;
+                if (_terrainHeight == null)
+                    EnsureTerrainHeight();
+
                 if (_terrainHeight != null)
                 {
                     _terrainHeight.QueueForwardSamplesIfNeeded(
@@ -493,6 +526,9 @@ namespace RoutesToGlory.Game
                 // Record the same smoothed position shown on the map so the trail
                 // and camera do not diverge from the persisted route geometry.
                 if (_routeSession != null) _routeSession.NotifyPosition(displayLat, displayLng);
+
+                if (_routeSession != null)
+                    _routeSession.SyncConfigFromEchoLoader();
             }
         }
 
@@ -630,11 +666,10 @@ namespace RoutesToGlory.Game
             if (_pathfinderBeam == null || _marker == null) return;
             if (!TryGetPlayerLatLng(out double lat, out double lng)) return;
 
-            Transform beamAnchor = _shipVisual != null && _shipVisual.IsReady
-                ? _shipVisual.transform
-                : _marker;
-
             bool cockpit = _cockpitView != null && _cockpitView.IsActive;
+            Transform beamAnchor = cockpit || _shipVisual == null || !_shipVisual.IsReady
+                ? _marker
+                : _shipVisual.transform;
             _pathfinderBeam.Tick(
                 lat,
                 lng,
@@ -1159,9 +1194,7 @@ namespace RoutesToGlory.Game
             road.widthMeters = roadWidth;
             road.pointSpacingMeters = roadPointSpacing;
             road.roadColor = roadColor;
-            // The marker floats markerHeight above ground; drop the road so it sits
-            // roadHeightMeters above the terrain instead of level with the pin.
-            road.verticalOffset = roadHeightMeters - markerHeight;
+            road.roadClearanceMeters = roadHeightMeters;
 
             go.SetActive(true);
             _lightRoad = road;
@@ -1170,9 +1203,10 @@ namespace RoutesToGlory.Game
         private void EnsureTerrainHeight()
         {
             if (!Application.isPlaying) return;
-            if (_terrainHeight != null) return;
 
-            _terrainHeight = RtgTerrainHeight.FindOrCreate();
+            if (_terrainHeight == null)
+                _terrainHeight = RtgTerrainHeight.FindOrCreate();
+
             if (_terrainHeight == null)
             {
                 Debug.LogWarning("[RTG] No Cesium3DTileset found — spaceship will use flat ground height.");
@@ -1241,6 +1275,7 @@ namespace RoutesToGlory.Game
                 _cockpitView.cockpitTexture = cockpitTexture;
             if (cockpitPortraitTexture != null)
                 _cockpitView.cockpitPortraitTexture = cockpitPortraitTexture;
+            _cockpitView.useGlassCanopyOverlay = true;
         }
 
         private void EnsureCockpitRearCamera()
@@ -1336,6 +1371,7 @@ namespace RoutesToGlory.Game
                 DestroyImmediateSafe(shipGo);
                 _shipVisual = null;
                 BuildGoldPinVisual(root);
+                return;
             }
         }
 
@@ -1632,11 +1668,18 @@ namespace RoutesToGlory.Game
         // Camera follow
         // ------------------------------------------------------------------ //
 
-        private void CacheCamera()
+        private void EnsureCameraManager()
         {
-            _camera = Camera.main;
+            if (!Application.isPlaying) return;
+
+            _cameraManager = GetComponent<RtgCameraManager>();
+            if (_cameraManager == null)
+                _cameraManager = gameObject.AddComponent<RtgCameraManager>();
+
+            _cameraManager.EnsureInitialized(_marker);
+            _camera = _cameraManager.CesiumCamera;
             if (_camera == null) return;
-            RtgAudioSession.EnsureListener(_camera);
+
             _cameraController = _camera.GetComponent<CesiumCameraController>();
             _cameraOriginShift = _camera.GetComponent<CesiumOriginShift>();
             _georeference = _camera.GetComponentInParent<CesiumGeoreference>();
@@ -1652,7 +1695,38 @@ namespace RoutesToGlory.Game
 
         private void UpdateCameraFollow()
         {
-            if (_camera == null || _marker == null) return;
+            if (_marker == null) return;
+            if (_cameraManager == null)
+                EnsureCameraManager();
+            if (_cameraManager == null) return;
+
+            _camera = _cameraManager.ActiveGameplayCamera ?? _cameraManager.CesiumCamera;
+            if (_camera == null) return;
+
+            UpdateZoom();
+            SmoothZoom();
+            TryCompleteCockpitEntry();
+
+            bool cockpitCamera = IsCockpitCameraActive();
+
+            if (cockpitCamera)
+            {
+                _cameraManager.SetMode(RtgCameraManager.CameraMode.Cockpit);
+                _cameraManager.SetGameplayCameraOwnership(true);
+
+                _panned = false;
+                _focusTarget = _marker.position;
+                _focus = _marker.position;
+
+                ApplyCockpitCamera();
+                TickCockpitRearCamera();
+                return;
+            }
+
+            bool blockMapPan = BlocksMapPan();
+            HandlePanInput(blockMapPan);
+
+            _cameraManager.SetMode(RtgCameraManager.CameraMode.Chase);
 
             if (!followWithCamera)
             {
@@ -1662,23 +1736,8 @@ namespace RoutesToGlory.Game
 
             if (!_followActive) SetFollowActive(true);
 
-            bool cockpitActive = _cockpitView != null && _cockpitView.IsActive;
-
-            UpdateZoom();
-            SmoothZoom();
-            TryCompleteCockpitEntry();
-            HandlePanInput();
-
-            if (cockpitActive)
-            {
-                ApplyCockpitCamera();
-                return;
-            }
-
-            // Focus tracks the player unless the user has dragged the map away.
             if (!_panned) _focusTarget = _marker.position;
 
-            // Smooth the focus so both normal tracking and re-centering glide.
             if (followSmoothing > 0f)
             {
                 float t = 1f - Mathf.Exp(-followSmoothing * Time.deltaTime);
@@ -1689,13 +1748,25 @@ namespace RoutesToGlory.Game
                 _focus = _focusTarget;
             }
 
-            _camera.transform.position = DesiredCameraPosition(_focus);
-            _camera.transform.LookAt(_focus, Vector3.up);
+            _cameraManager.ApplyChaseLookAt(DesiredCameraPosition(_focus), _focus);
         }
 
-        private void HandlePanInput()
+        private bool IsCockpitCameraActive()
         {
-            if (_cockpitView != null && _cockpitView.IsActive)
+            if (_cockpitView == null)
+                return false;
+
+            return _cockpitView.IsActive || _cockpitView.Blend > 0.02f;
+        }
+
+        private bool BlocksMapPan()
+        {
+            return _cockpitEntryPending || IsCockpitCameraActive();
+        }
+
+        private void HandlePanInput(bool blockMapPan = false)
+        {
+            if (IsCockpitCameraActive() || blockMapPan || BlocksMapPan())
             {
                 _wasPointerDown = false;
                 return;
@@ -1882,6 +1953,17 @@ namespace RoutesToGlory.Game
 
             _cockpitView?.DrawOverlay();
 
+            bool inCockpit = _cockpitView != null && _cockpitView.IsActive;
+            if (inCockpit && cockpitLookDebugHud && _marker != null)
+                DrawCockpitLookDebugHud();
+
+            if (inCockpit && _cockpitRearCamera != null)
+            {
+                _cockpitRearCamera.DrawInset(_cockpitView, _cockpitView.Blend);
+                if (_cockpitRearCamera.LastScreenRect.width > 1f)
+                    _gameUiRects.Add(_cockpitRearCamera.LastScreenRect);
+            }
+
             DrawMovementControls();
 
             if (_activeSource == LocationSource.AutoPilot)
@@ -1899,7 +1981,6 @@ namespace RoutesToGlory.Game
                 if (GUI.Button(rightButtons.View, viewLabel))
                     TogglePerspective();
 
-                bool inCockpit = _cockpitView != null && _cockpitView.IsActive;
                 string cockpitLabel = inCockpit ? "Exit Cockpit" : "Cockpit";
                 if (GUI.Button(rightButtons.Cockpit, cockpitLabel))
                     RequestCockpit(fastZoom: true);
@@ -1928,7 +2009,6 @@ namespace RoutesToGlory.Game
 
             if (_activeSource == LocationSource.AutoPilot)
             {
-                bool inCockpit = _cockpitView != null && _cockpitView.IsActive;
                 if (inCockpit
                     && _cockpitView.TryMapAnchorToScreen(
                         RtgCockpitView.JoystickAnchor(Screen.height > Screen.width),
@@ -3667,11 +3747,8 @@ namespace RoutesToGlory.Game
                 ? CameraPerspective.LowAngle
                 : CameraPerspective.Map;
 
-            if (_followActive && _camera != null)
-            {
-                _camera.transform.position = DesiredCameraPosition(_focus);
-                _camera.transform.LookAt(_focus, Vector3.up);
-            }
+            if (_followActive && _cameraManager != null)
+                _cameraManager.ApplyChaseLookAt(DesiredCameraPosition(_focus), _focus);
         }
 
         private void RequestCockpit(bool fastZoom)
@@ -3698,6 +3775,14 @@ namespace RoutesToGlory.Game
             _cockpitFastZoom = false;
             _zoom = minZoom;
             _zoomTarget = minZoom;
+            ResetCockpitLook();
+            _savedCameraFov = _camera != null ? _camera.fieldOfView : 60f;
+            _cameraManager?.SetCockpitFieldOfView(cockpitFieldOfView);
+
+            _cameraManager?.SetMode(RtgCameraManager.CameraMode.Cockpit);
+            _cameraManager?.SetGameplayCameraOwnership(true);
+            Debug.Log("[RTG] Cockpit mode — CockpitCamera renders; fly camera stack suppressed.");
+            _cockpitView.useGlassCanopyOverlay = true;
             _cockpitView.SetActive(true, immediate: false);
             SetShipVisible(false);
             ApplyCockpitCamera();
@@ -3709,7 +3794,13 @@ namespace RoutesToGlory.Game
 
             _cockpitEntryPending = false;
             _cockpitFastZoom = false;
+            ResetCockpitLook();
+            _cameraManager?.RestoreChaseFieldOfView(_savedCameraFov);
+
+            _cameraManager?.SetMode(RtgCameraManager.CameraMode.Chase);
+            _cameraManager?.SetGameplayCameraOwnership(_followActive);
             _cockpitView.SetActive(false, immediate);
+            _cockpitRearCamera?.SetActive(false);
             SetShipVisible(true);
 
             if (!immediate)
@@ -3725,22 +3816,163 @@ namespace RoutesToGlory.Game
                 beacon.gameObject.SetActive(visible);
         }
 
+        private void HandleCockpitLookInput()
+        {
+            if (!IsCockpitCameraActive() || _cockpitView == null)
+                return;
+
+            if (IsMultiTouchActive())
+            {
+                _cockpitLookPointerDown = false;
+                return;
+            }
+
+            if (!ReadPointer(out Vector2 pos, out bool isDown))
+            {
+                _cockpitLookPointerDown = false;
+                return;
+            }
+
+            if (IsOverGameUi(pos))
+            {
+                _cockpitLookPointerDown = false;
+                return;
+            }
+
+            if (!_cockpitView.IsPointerOverGlassViewport(pos))
+            {
+                _cockpitLookPointerDown = false;
+                return;
+            }
+
+            if (isDown && !_cockpitLookPointerDown)
+            {
+                _cockpitLookLastPointer = pos;
+                _cockpitLookPointerDown = true;
+                return;
+            }
+
+            if (!isDown || !_cockpitLookPointerDown)
+            {
+                _cockpitLookPointerDown = false;
+                return;
+            }
+
+            Vector2 delta = pos - _cockpitLookLastPointer;
+            _cockpitLookLastPointer = pos;
+
+            const float minDragPixels = 6f;
+            if (delta.sqrMagnitude < minDragPixels * minDragPixels)
+                return;
+
+            _cockpitLookYawTargetDeg = Mathf.Clamp(
+                _cockpitLookYawTargetDeg + delta.x * cockpitLookYawSensitivity,
+                -cockpitLookYawMaxDegrees,
+                cockpitLookYawMaxDegrees);
+            _cockpitLookPitchTargetDeg = Mathf.Clamp(
+                _cockpitLookPitchTargetDeg - delta.y * cockpitLookPitchSensitivity,
+                cockpitLookPitchMinDegrees,
+                cockpitLookPitchMaxDegrees);
+        }
+
+        private void SmoothCockpitLook()
+        {
+            float t = cockpitLookSmoothing > 0f
+                ? 1f - Mathf.Exp(-cockpitLookSmoothing * Time.deltaTime)
+                : 1f;
+            _cockpitLookYawDeg = Mathf.Lerp(_cockpitLookYawDeg, _cockpitLookYawTargetDeg, t);
+            _cockpitLookPitchDeg = Mathf.Lerp(_cockpitLookPitchDeg, _cockpitLookPitchTargetDeg, t);
+        }
+
+        private void DrawCockpitLookDebugHud()
+        {
+            Vector3 markerPos = _marker.position;
+            float markerDelta = 0f;
+            if (_cockpitDebugHasMarkerPos)
+                markerDelta = (markerPos - _cockpitDebugLastMarkerPos).magnitude;
+            _cockpitDebugLastMarkerPos = markerPos;
+            _cockpitDebugHasMarkerPos = true;
+
+            Camera cam = _cameraManager != null
+                ? _cameraManager.ActiveGameplayCamera
+                : _camera;
+            string camName = cam != null ? cam.name : "none";
+
+            float camDelta = 0f;
+            if (cam != null)
+            {
+                Vector3 camPos = cam.transform.position;
+                if (_cockpitDebugHasCamPos)
+                    camDelta = (camPos - _cockpitDebugLastCamPos).magnitude;
+                _cockpitDebugLastCamPos = camPos;
+                _cockpitDebugHasCamPos = true;
+            }
+
+            string modeHint = camDelta < 0.001f && markerDelta < 0.001f
+                ? "head-rotate (world should spin, HUD fixed)"
+                : "slide-check";
+
+            var rect = new Rect(12f, 12f, 520f, 118f);
+            GUI.color = new Color(0f, 0f, 0f, 0.55f);
+            GUI.DrawTexture(rect, Texture2D.whiteTexture);
+            GUI.color = Color.white;
+            GUI.Label(
+                new Rect(rect.x + 8f, rect.y + 6f, rect.width - 16f, rect.height - 12f),
+                $"COCKPIT DBG  cam={camName}\n" +
+                $"lookYaw={_cockpitLookYawDeg:F1}  lookPitch={_cockpitLookPitchDeg:F1}\n" +
+                $"markerΔ={markerDelta * 100f:F2}cm  camΔ={camDelta * 100f:F2}cm  panned={_panned}\n" +
+                modeHint);
+        }
+
+        private void ResetCockpitLook()
+        {
+            _cockpitLookYawDeg = 0f;
+            _cockpitLookPitchDeg = 0f;
+            _cockpitLookYawTargetDeg = 0f;
+            _cockpitLookPitchTargetDeg = 0f;
+            _cockpitLookPointerDown = false;
+            _cockpitDebugHasMarkerPos = false;
+            _cockpitDebugHasCamPos = false;
+        }
+
+        private void TickCockpitRearCamera()
+        {
+            if (_cockpitRearCamera == null || _marker == null || _camera == null)
+                return;
+
+            bool showRear = _cockpitView != null && _cockpitView.Blend > 0.35f;
+            _cockpitRearCamera.SetActive(showRear);
+            if (!showRear)
+                return;
+
+            _cockpitRearCamera.SyncFromMainCamera(_camera);
+            _cockpitRearCamera.Render(
+                _marker,
+                _cameraManager != null ? _cameraManager.CameraRig : null,
+                TravelDirectionXZ());
+        }
+
         private void ApplyCockpitCamera()
         {
-            if (_camera == null || _marker == null) return;
+            if (_cameraManager == null || _marker == null)
+                return;
 
-            Vector3 eye = _marker.position + Vector3.up * cockpitEyeHeightMeters;
             Vector3 forward = TravelDirectionXZ();
             if (forward.sqrMagnitude < 1e-6f)
-                forward = _camera.transform.forward;
+                forward = Vector3.forward;
+
+            if (Mathf.Abs(cockpitHeadingOffsetDegrees) > 0.01f)
+                forward = Quaternion.Euler(0f, cockpitHeadingOffsetDegrees, 0f) * forward;
 
             bool portrait = Screen.height > Screen.width;
-            float pitch = portrait ? cockpitPortraitPitchDegrees : cockpitLandscapePitchDegrees;
+            float basePitch = portrait ? cockpitPortraitPitchDegrees : cockpitLandscapePitchDegrees;
 
-            // Portrait windshield sits high on screen; pitch down so the glass shows terrain ahead, not sky.
-            Quaternion yaw = Quaternion.LookRotation(forward, Vector3.up);
-            _camera.transform.position = eye;
-            _camera.transform.rotation = yaw * Quaternion.Euler(pitch, 0f, 0f);
+            _cameraManager.ApplyCockpitPose(
+                forward,
+                cockpitEyeHeightMeters,
+                basePitch,
+                _cockpitLookYawDeg,
+                _cockpitLookPitchDeg);
         }
 
         private void TryCompleteCockpitEntry()
@@ -3940,19 +4172,17 @@ namespace RoutesToGlory.Game
         private void SetFollowActive(bool active)
         {
             _followActive = active;
-            if (_cameraController != null) _cameraController.enabled = !active;
-            if (_cameraOriginShift != null) _cameraOriginShift.enabled = !active;
+            if (_cameraManager != null)
+                _cameraManager.SetGameplayCameraOwnership(active);
 
-            // Snap immediately on the first follow frame (ignore smoothing) so we don't
-            // slowly drift in from wherever the fly camera was.
-            if (active && _marker != null)
+            if (active && _marker != null && _cameraManager != null)
             {
                 _panned = false;
                 _focusTarget = _marker.position;
                 _focus = _focusTarget;
                 _hasHeadingSample = false;
-                _camera.transform.position = DesiredCameraPosition(_focus);
-                _camera.transform.LookAt(_focus, Vector3.up);
+                _cameraManager.SetMode(RtgCameraManager.CameraMode.Chase);
+                _cameraManager.ApplyChaseLookAt(DesiredCameraPosition(_focus), _focus);
             }
         }
 
