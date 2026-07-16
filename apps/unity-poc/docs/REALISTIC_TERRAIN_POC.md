@@ -247,6 +247,8 @@ infra/tiles/
 
 ## Phase 2 — Embedded Alien Resources (Active)
 
+**Xenite v1 design brief:** [XENITE_DEPOSIT_DESIGN_BRIEF.md](XENITE_DEPOSIT_DESIGN_BRIEF.md) — first full deposit art pass; other resources stay on placeholders until Xenite passes pass-over.
+
 Resources should read like Civ strategic resources — **part of the tile**, not a glowing pin hovering above it.
 
 | Work | Status | Description |

@@ -9,8 +9,19 @@ using UnityEngine;
 namespace RoutesToGlory.Game
 {
     /// <summary>
-    /// Caches Cesium terrain heights for scatter, fog sheet, and player clearance.
-    /// Uses async tile sampling plus a physics raycast fallback for live elevation.
+    /// Cesium terrain height cache + glider corridor commitment.
+    ///
+    /// <para><b>Regression guardrails</b> (see <see cref="RtgTerrainElevationGuards"/>):</para>
+    /// <list type="bullet">
+    /// <item>Glider: <see cref="GetClearancePlacementHeight"/> only — blends
+    /// <c>_committedGroundHeight</c> when corridor ahead is consistent.</item>
+    /// <item>Corridor samples: <see cref="GetCorridorSampleHeight"/> — cached Cesium only;
+    /// never raycast (frame-volatile tile noise caused bounce).</item>
+    /// <item>Light Road: <see cref="GetTrailReferenceGroundHeight"/> + <see cref="TryGetCachedGroundHeight"/>
+    /// read-only; do not mutate <c>_committedGroundHeight</c> from trail code.</item>
+    /// <item><see cref="GetGroundHeight"/> may raycast — OK for deposits/scatter, not glider/trail.</item>
+    /// <item>Do not cache raycast results; do not snap committed height instantly per frame.</item>
+    /// </list>
     /// </summary>
     [DisallowMultipleComponent]
     public class RtgTerrainHeight : MonoBehaviour
@@ -19,30 +30,59 @@ namespace RoutesToGlory.Game
         private const int CacheQuantizeDigits = 4;
         private const float RaycastProbeHeightM = 6000f;
         private const float RaycastMaxDistanceM = 12000f;
+        private const int MaxCorridorSamples = 16;
 
         [Tooltip("Flat ellipsoid height (m) used before Cesium samples arrive.")]
         public double fallbackGroundHeightM = 1476.0;
 
-        [Tooltip("Meters above sampled terrain for player / settlement clearance.")]
+        [Tooltip("Meters above committed corridor ground for player clearance.")]
         public float markerClearanceM = 6f;
 
-        [Tooltip("Look-ahead distance (m) when sampling terrain under the travel heading.")]
-        public float forwardSampleDistanceM = 28f;
+        [Tooltip("Spacing (m) between terrain samples along the travel corridor.")]
+        public float corridorSampleSpacingM = 12f;
 
-        [Tooltip("Seconds to ease between fallback and sampled terrain heights.")]
-        public float heightBlendSeconds = 0.35f;
+        [Tooltip("How far ahead (m) to sample the corridor.")]
+        public float corridorLookAheadM = 72f;
 
-        [Tooltip("Use Physics.Raycast against Cesium terrain colliders when async samples are pending.")]
+        [Tooltip("Max height spread (m) in a sample run to count as a flat plateau.")]
+        public float consistencyBandM = 1.25f;
+
+        [Tooltip("Flat/monotone corridor must span this distance (m) at low speed before height changes.")]
+        public float minConsistentDistanceSlowM = 36f;
+
+        [Tooltip("Flat/monotone corridor span (m) required at high speed.")]
+        public float minConsistentDistanceFastM = 18f;
+
+        [Tooltip("Ground speed (m/s) where fast min-distance fully applies.")]
+        public float consistencyFullSpeedMps = 25f;
+
+        [Tooltip("Minimum change (m) in committed ground before blending toward a new plateau.")]
+        public float minLevelChangeM = 1.25f;
+
+        [Tooltip("Seconds to ease committed ground upward.")]
+        public float committedBlendUpSeconds = 0.4f;
+
+        [Tooltip("Seconds to ease committed ground downward.")]
+        public float committedBlendDownSeconds = 0.55f;
+
+        [Tooltip("Use Physics.Raycast when async samples are pending (not cached — volatile). " +
+                 "OK for deposits/scatter via GetGroundHeight. NEVER use for corridor/glider/trail.")]
         public bool useRaycastFallback = true;
+
+        // Glider-only committed corridor ground. Light Road reads via GetTrailReferenceGroundHeight;
+        // trail code must not write this field.
+        private double _committedGroundHeight;
+        private bool _hasCommittedGroundHeight;
 
         private Cesium3DTileset _tileset;
         private CesiumGlobeAnchor _probeAnchor;
+        // Cesium SampleHeightMostDetailed only — never store raycast results (volatile → bounce).
         private readonly Dictionary<string, double> _heightCache = new();
         private readonly HashSet<string> _pendingKeys = new();
         private readonly Queue<SampleJob> _sampleQueue = new();
+        private readonly double[] _corridorHeights = new double[MaxCorridorSamples];
+        private int _corridorCount;
         private bool _sampling;
-        private double _smoothedClearanceHeight;
-        private bool _hasSmoothedClearanceHeight;
 
         private struct SampleJob
         {
@@ -72,10 +112,16 @@ namespace RoutesToGlory.Game
         {
             fallbackGroundHeightM = groundHeightMeters;
             markerClearanceM = markerHeightMeters;
-            _smoothedClearanceHeight = groundHeightMeters + markerHeightMeters;
-            _hasSmoothedClearanceHeight = true;
+            _committedGroundHeight = groundHeightMeters;
+            _hasCommittedGroundHeight = true;
         }
 
+        public void ResetHeightSmoothing()
+        {
+            _hasCommittedGroundHeight = false;
+        }
+
+        /// <summary>Raw height for deposits/scatter — may raycast. Not for glider or Light Road.</summary>
         public double GetGroundHeight(double lat, double lng)
         {
             string key = CacheKey(lat, lng);
@@ -83,12 +129,27 @@ namespace RoutesToGlory.Game
                 return cached;
 
             if (useRaycastFallback && TryRaycastGroundHeight(lat, lng, out double rayHeight))
-            {
-                _heightCache[key] = rayHeight;
                 return rayHeight;
-            }
 
             return fallbackGroundHeightM;
+        }
+
+        /// <summary>
+        /// Best static ground height for embedded deposit anchors — max of Cesium sample,
+        /// cache, and one-shot raycast. Does not use corridor smoothing.
+        /// </summary>
+        public double ResolveDepositGroundHeight(double lat, double lng, double cesiumSampleM)
+        {
+            QueueSample(lat, lng);
+            double best = cesiumSampleM;
+
+            if (TryGetCachedGroundHeight(lat, lng, out double cached))
+                best = Math.Max(best, cached);
+
+            if (useRaycastFallback && TryRaycastGroundHeight(lat, lng, out double rayHeight))
+                best = Math.Max(best, rayHeight);
+
+            return best;
         }
 
         public void QueueSampleIfNeeded(double lat, double lng)
@@ -96,53 +157,249 @@ namespace RoutesToGlory.Game
             QueueSample(lat, lng);
         }
 
+        public void QueueCorridorSamplesIfNeeded(double lat, double lng, float headingRad)
+        {
+            FillCorridorSamples(lat, lng, headingRad);
+        }
+
+        /// <summary>Legacy hook — queues corridor samples along heading.</summary>
         public void QueueForwardSamplesIfNeeded(double lat, double lng, float headingRad)
         {
-            QueueSample(lat, lng);
-
-            double northM = Math.Cos(headingRad) * forwardSampleDistanceM * 0.5;
-            double eastM = Math.Sin(headingRad) * forwardSampleDistanceM * 0.5;
-            OffsetMeters(lat, lng, northM, eastM, out double midLat, out double midLng);
-            QueueSample(midLat, midLng);
-
-            northM = Math.Cos(headingRad) * forwardSampleDistanceM;
-            eastM = Math.Sin(headingRad) * forwardSampleDistanceM;
-            OffsetMeters(lat, lng, northM, eastM, out double aheadLat, out double aheadLng);
-            QueueSample(aheadLat, aheadLng);
+            QueueCorridorSamplesIfNeeded(lat, lng, headingRad);
         }
 
-        public double GetClearancePlacementHeight(double lat, double lng, float headingRad)
+        /// <summary>Player corridor ground (read-only). Light road anchors here — does not mutate glider state.</summary>
+        public double GetTrailReferenceGroundHeight()
         {
-            double target = ResolveClearanceTarget(lat, lng, headingRad);
-            if (!_hasSmoothedClearanceHeight)
+            return _hasCommittedGroundHeight ? _committedGroundHeight : fallbackGroundHeightM;
+        }
+
+        /// <summary>Stable cached Cesium sample only (no raycast). False when not sampled yet.</summary>
+        public bool TryGetCachedGroundHeight(double lat, double lng, out double heightM)
+        {
+            return _heightCache.TryGetValue(CacheKey(lat, lng), out heightM);
+        }
+
+        /// <summary>
+        /// <b>Glider placement API.</b> Updates committed corridor and returns ellipsoid height.
+        /// Called from <see cref="RtgPlayerLocation"/> LateUpdate only — do not call from Light Road.
+        /// </summary>
+        public double GetClearancePlacementHeight(
+            double lat,
+            double lng,
+            float headingRad,
+            float groundSpeedMps = 0f)
+        {
+            UpdateCommittedCorridor(lat, lng, headingRad, groundSpeedMps);
+            return _committedGroundHeight + markerClearanceM;
+        }
+
+        /// <summary>
+        /// One-shot corridor evaluation for non-trail consumers (e.g. pathfinder clearance).
+        /// <b>Do not use for Light Road</b> — trail must use <see cref="GetTrailReferenceGroundHeight"/>.
+        /// </summary>
+        public double EvaluateCorridorGroundHeight(
+            double lat,
+            double lng,
+            float headingRad,
+            float groundSpeedMps,
+            double holdGroundM)
+        {
+            FillCorridorSamples(lat, lng, headingRad);
+            if (TryResolveCorridorPlateau(groundSpeedMps, out double plateau))
+                return plateau;
+            return holdGroundM;
+        }
+
+        public double GetGroundClearanceHeight(double lat, double lng, float headingRad, float clearanceM)
+        {
+            double hold = _hasCommittedGroundHeight ? _committedGroundHeight : fallbackGroundHeightM;
+            return EvaluateCorridorGroundHeight(lat, lng, headingRad, consistencyFullSpeedMps, hold) + clearanceM;
+        }
+
+        private void UpdateCommittedCorridor(
+            double lat,
+            double lng,
+            float headingRad,
+            float groundSpeedMps)
+        {
+            if (!_hasCommittedGroundHeight)
             {
-                _smoothedClearanceHeight = target;
-                _hasSmoothedClearanceHeight = true;
-                return target;
+                _committedGroundHeight = GetGroundHeight(lat, lng);
+                _hasCommittedGroundHeight = true;
+                return;
             }
 
-            float blend = heightBlendSeconds > 0f
-                ? 1f - Mathf.Exp(-Time.deltaTime / heightBlendSeconds)
-                : 1f;
-            _smoothedClearanceHeight += (target - _smoothedClearanceHeight) * blend;
-            return _smoothedClearanceHeight;
+            FillCorridorSamples(lat, lng, headingRad);
+            if (!TryResolveCorridorPlateau(groundSpeedMps, out double plateau))
+                return;
+
+            BlendCommittedToward(plateau);
         }
 
-        private double ResolveClearanceTarget(double lat, double lng, float headingRad)
+        private void BlendCommittedToward(double targetGround)
         {
-            double best = GetGroundHeight(lat, lng);
+            // REGRESSION: exponential blend only — no instant snap (caused visible bounce).
+            double delta = targetGround - _committedGroundHeight;
+            if (Math.Abs(delta) < minLevelChangeM)
+                return;
 
-            double northM = Math.Cos(headingRad) * forwardSampleDistanceM * 0.5;
-            double eastM = Math.Sin(headingRad) * forwardSampleDistanceM * 0.5;
-            OffsetMeters(lat, lng, northM, eastM, out double midLat, out double midLng);
-            best = Math.Max(best, GetGroundHeight(midLat, midLng));
+            float blendSeconds = delta > 0 ? committedBlendUpSeconds : committedBlendDownSeconds;
+            float blend = blendSeconds > 0f
+                ? 1f - Mathf.Exp(-Time.deltaTime / blendSeconds)
+                : 1f;
+            _committedGroundHeight += delta * blend;
+        }
 
-            northM = Math.Cos(headingRad) * forwardSampleDistanceM;
-            eastM = Math.Sin(headingRad) * forwardSampleDistanceM;
-            OffsetMeters(lat, lng, northM, eastM, out double aheadLat, out double aheadLng);
-            best = Math.Max(best, GetGroundHeight(aheadLat, aheadLng));
+        private enum CorridorPlateauKind
+        {
+            None,
+            Flat,
+            Climb,
+            Descent,
+        }
 
-            return best + markerClearanceM;
+        private void FillCorridorSamples(double lat, double lng, float headingRad)
+        {
+            float spacing = Mathf.Max(4f, corridorSampleSpacingM);
+            float lookAhead = Mathf.Max(spacing, corridorLookAheadM);
+            _corridorCount = 0;
+
+            for (float distanceM = 0f;
+                 distanceM <= lookAhead + 0.01f && _corridorCount < MaxCorridorSamples;
+                 distanceM += spacing)
+            {
+                double northM = Math.Cos(headingRad) * distanceM;
+                double eastM = Math.Sin(headingRad) * distanceM;
+                OffsetMeters(lat, lng, northM, eastM, out double sampleLat, out double sampleLng);
+                QueueSample(sampleLat, sampleLng);
+                _corridorHeights[_corridorCount++] = GetCorridorSampleHeight(sampleLat, sampleLng);
+            }
+        }
+
+        /// <summary>
+        /// Corridor height sample — cached Cesium only. REGRESSION: do not call GetGroundHeight
+        /// or raycast here; see <see cref="RtgTerrainElevationGuards"/>.
+        /// </summary>
+        private double GetCorridorSampleHeight(double lat, double lng)
+        {
+            string key = CacheKey(lat, lng);
+            bool hasCached = _heightCache.TryGetValue(key, out double cached);
+            double hold = _hasCommittedGroundHeight ? _committedGroundHeight : double.MinValue;
+            return RtgTerrainElevationGuards.CorridorSampleHeightOrHold(
+                cached,
+                hasCached,
+                hold,
+                fallbackGroundHeightM);
+        }
+
+        private bool TryResolveCorridorPlateau(float groundSpeedMps, out double plateauHeight)
+        {
+            plateauHeight = 0;
+            if (_corridorCount <= 0)
+                return false;
+
+            float minDistanceM = ResolveMinConsistentDistance(groundSpeedMps);
+            int bestEnd = -1;
+            CorridorPlateauKind bestKind = CorridorPlateauKind.None;
+
+            for (int end = 0; end < _corridorCount; end++)
+            {
+                float spanM = end * Mathf.Max(4f, corridorSampleSpacingM);
+                if (spanM < minDistanceM)
+                    continue;
+
+                if (IsFlatPrefix(end))
+                {
+                    bestEnd = end;
+                    bestKind = CorridorPlateauKind.Flat;
+                }
+                else if (IsMonotonicClimbPrefix(end))
+                {
+                    bestEnd = end;
+                    bestKind = CorridorPlateauKind.Climb;
+                }
+                else if (IsMonotonicDescentPrefix(end))
+                {
+                    bestEnd = end;
+                    bestKind = CorridorPlateauKind.Descent;
+                }
+            }
+
+            if (bestEnd < 0 || bestKind == CorridorPlateauKind.None)
+                return false;
+
+            plateauHeight = ResolvePlateauHeight(bestEnd, bestKind);
+            return true;
+        }
+
+        private double ResolvePlateauHeight(int end, CorridorPlateauKind kind)
+        {
+            if (kind == CorridorPlateauKind.Flat)
+                return _corridorHeights[0];
+
+            double extreme = kind == CorridorPlateauKind.Climb ? double.MinValue : double.MaxValue;
+            for (int i = 0; i <= end; i++)
+            {
+                if (kind == CorridorPlateauKind.Climb)
+                    extreme = Math.Max(extreme, _corridorHeights[i]);
+                else
+                    extreme = Math.Min(extreme, _corridorHeights[i]);
+            }
+
+            return extreme;
+        }
+
+        private float ResolveMinConsistentDistance(float groundSpeedMps)
+        {
+            float t = consistencyFullSpeedMps > 0f
+                ? Mathf.Clamp01(groundSpeedMps / consistencyFullSpeedMps)
+                : 1f;
+            return Mathf.Lerp(minConsistentDistanceSlowM, minConsistentDistanceFastM, t);
+        }
+
+        private bool IsFlatPrefix(int end)
+        {
+            double min = double.MaxValue;
+            double max = double.MinValue;
+            for (int i = 0; i <= end; i++)
+            {
+                double h = _corridorHeights[i];
+                if (h < min) min = h;
+                if (h > max) max = h;
+            }
+
+            return max - min <= consistencyBandM;
+        }
+
+        private bool IsMonotonicClimbPrefix(int end)
+        {
+            if (end < 1)
+                return false;
+
+            const double dipToleranceM = 0.35;
+            for (int i = 1; i <= end; i++)
+            {
+                if (_corridorHeights[i] + dipToleranceM < _corridorHeights[i - 1])
+                    return false;
+            }
+
+            return _corridorHeights[end] - _corridorHeights[0] >= minLevelChangeM;
+        }
+
+        private bool IsMonotonicDescentPrefix(int end)
+        {
+            if (end < 1)
+                return false;
+
+            const double bumpToleranceM = 0.35;
+            for (int i = 1; i <= end; i++)
+            {
+                if (_corridorHeights[i] - bumpToleranceM > _corridorHeights[i - 1])
+                    return false;
+            }
+
+            return _corridorHeights[0] - _corridorHeights[end] >= minLevelChangeM;
         }
 
         private void Awake()
@@ -170,6 +427,8 @@ namespace RoutesToGlory.Game
 
         private bool TryRaycastGroundHeight(double lat, double lng, out double heightM)
         {
+            // REGRESSION: raycasts are frame-volatile — only for GetGroundHeight (deposits/scatter).
+            // Corridor, glider commitment, and Light Road must never call this path.
             heightM = fallbackGroundHeightM;
             if (_probeAnchor == null) return false;
 

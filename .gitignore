@@ -68,3 +68,5 @@ apps/unity-poc/tilesource.local.json
 apps/unity-poc/rtg-dev-world.json
 apps/unity-poc/Assets/StreamingAssets/rtg-dev-world.json
 apps/unity-poc/rtg-ship-tuning.json
+apps/unity-poc/rtg-terrain-clearance-tuning.json
+apps/unity-poc/rtg-xenite-deposit-tuning.json

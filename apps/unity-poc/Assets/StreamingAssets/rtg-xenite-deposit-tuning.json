@@ -1,0 +1,8 @@
+{
+    "_comment": "Tuned in Play mode (Settings → Xenite deposit). Applied when xenite deposits spawn.",
+    "depositEulerOffset": {
+        "x": -89.15093994140625,
+        "y": 7.641511917114258,
+        "z": -107.83019256591797
+    }
+}

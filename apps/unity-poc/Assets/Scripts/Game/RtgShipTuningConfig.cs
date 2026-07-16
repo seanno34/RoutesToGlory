@@ -94,6 +94,17 @@ namespace RoutesToGlory.Game
             }
         }
 
+        /// <summary>
+        /// Applies exhaust, cavity, and engine-port tuning only — does not touch hull
+        /// orientation fields. Use <see cref="ApplyTo"/> when loading full ship tuning.
+        /// </summary>
+        public static void ApplyExhaustTo(RtgPlayerLocation player, ShipTuningFile tuning)
+        {
+            if (player == null || tuning == null) return;
+
+            ApplyExhaustFields(player, tuning);
+        }
+
         public static void ApplyTo(RtgPlayerLocation player, ShipTuningFile tuning)
         {
             if (player == null || tuning == null) return;
@@ -101,6 +112,12 @@ namespace RoutesToGlory.Game
             player.shipAutoOrientImportedHull = tuning.autoOrientImportedHull;
             player.shipHullEulerOffset = tuning.hullEulerOffset;
             player.shipHeadingOffsetDegrees = tuning.headingOffsetDegrees;
+
+            ApplyExhaustFields(player, tuning);
+        }
+
+        private static void ApplyExhaustFields(RtgPlayerLocation player, ShipTuningFile tuning)
+        {
             player.shipEnginePortsMeshLocal = true;
             player.shipMainExhaustAnchor = ResolveAnchor(
                 tuning.mainExhaustAnchor,

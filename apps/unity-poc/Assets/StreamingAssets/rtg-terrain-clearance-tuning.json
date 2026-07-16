@@ -1,0 +1,12 @@
+{
+    "_comment": "Tuned in Play mode (Settings → Terrain clearance → Save tuning). Copy into rtg-terrain-clearance-tuning.json.example for team defaults.",
+    "heightDeadbandM": 0.10000000149011612,
+    "climbSnapThresholdSlowM": 1.0,
+    "climbSnapThresholdFastM": 4.0,
+    "climbSnapFullSpeedMps": 10.0,
+    "forwardAnticipationMinSpeedMps": 0.0,
+    "forwardSampleDistanceM": 8.0,
+    "heightBlendUpSeconds": 0.05000000074505806,
+    "heightBlendDownSeconds": 0.10000000149011612,
+    "useRaycastFallback": true
+}

@@ -1,0 +1,13 @@
+{
+    "_comment": "Glider corridor tuning (see RtgTerrainElevationGuards). Light Road follows glider committed ground — not these sliders directly. Copy to rtg-terrain-clearance-tuning.json or StreamingAssets for builds.",
+    "corridorSampleSpacingM": 12.0,
+    "corridorLookAheadM": 72.0,
+    "consistencyBandM": 1.25,
+    "minConsistentDistanceSlowM": 36.0,
+    "minConsistentDistanceFastM": 18.0,
+    "consistencyFullSpeedMps": 25.0,
+    "minLevelChangeM": 1.25,
+    "committedBlendUpSeconds": 0.4,
+    "committedBlendDownSeconds": 0.55,
+    "useRaycastFallback": true
+}

@@ -8,14 +8,106 @@ namespace RoutesToGlory.Game
     /// <summary>
     /// Player glider presentation: Tripo imported hull (preferred) or procedural blockout,
     /// blob shadow, and particle exhaust.
+    ///
+    /// TRIPO HULL GUARDRAILS (Jul 2026 — do not regress):
+    /// • Editor Play uses <c>Assets/TripoModels/.../futuristic_fighter_3d_model.fbx</c> (embedded
+    ///   Tripo PBR textures). Device builds MUST NOT rely on that path — it is not in the player.
+    /// • Device loads <see cref="ResourcesTripoHullPrefabPath"/> or <see cref="ResourcesTripoHullLoadPath"/>
+    ///   from Resources. Mesh + material refs must stay under <c>Assets/Resources/RTG_PlayerShip/TripoGlider/</c>.
+    /// • <see cref="IsDeviceReadyHullPrefab"/> requires non-null materials on the baked prefab.
+    ///   A Renderer alone is not enough — null materials or missing mesh refs look “fine” in logs but
+    ///   render nothing on device.
+    /// • Textured hull on device requires an albedo in Resources (<see cref="ResourcesTripoAlbedoPath"/>
+    ///   or PNGs in <see cref="ResourcesTripoTextureFolder"/>). URP/Lit without _BaseMap is NOT usable;
+    ///   see <see cref="IsUsableTripoMaterial"/>.
+    /// • Always run <see cref="FitImportedHullScale"/> after instantiate (device prefab scale is reset to
+    ///   one on the Model root before fit). Do not skip for “baked” prefabs.
+    /// • Hull orientation comes from <c>rtg-ship-tuning.json</c> — do not force zero euler or auto-orient
+    ///   over saved tuning in <see cref="RtgPlayerLocation.BuildShipVisual"/>.
+    /// • Re-bake via Routes to Glory → Regenerate Playable World or the mobile build preprocessor after
+    ///   changing Tripo assets. See <c>RtgPlayerShipAssetSync</c>.
     /// </summary>
     public class RtgPlayerShipVisual : MonoBehaviour
     {
         private const string DefaultTripoHullAssetPath =
             "Assets/TripoModels/futuristic_fighter_3d_model/futuristic_fighter_3d_model.fbx";
 
-        private const string ResourcesTripoHullPath =
+        public const string ResourcesTripoHullLoadPath =
             "RTG_PlayerShip/TripoGlider/futuristic_fighter_3d_model";
+        public const string ResourcesTripoHullPrefabPath =
+            "RTG_PlayerShip/TripoGlider/TripoGlider";
+        public const string ResourcesTripoTextureFolder =
+            "RTG_PlayerShip/TripoGlider";
+        public const string ResourcesTripoAlbedoPath =
+            "RTG_PlayerShip/TripoGlider/TripoHull_Albedo";
+
+        public const string ResourcesGliderTexturePath = "RTG_PlayerShip/glider_01";
+        public const string ResourcesCockpitTexturePath = "RTG_PlayerShip/glider_cockpit_01";
+        public const string ResourcesCockpitPortraitTexturePath =
+            "RTG_PlayerShip/glider_cockpit_portrait_01";
+
+        /// <summary>True when the device-safe Tripo hull is present in Resources.</summary>
+        public static bool HasResourcesHull()
+        {
+            return IsValidHullPrefab(LoadResourcesHullPrefab());
+        }
+
+        /// <summary>
+        /// Device runtime load order: baked prefab first, then Resources FBX fallback.
+        /// REGRESSION: preferring raw FBX over prefab in editor is OK; on device only Resources paths work.
+        /// </summary>
+        public static GameObject LoadResourcesHullPrefab()
+        {
+            GameObject hull = Resources.Load<GameObject>(ResourcesTripoHullPrefabPath);
+            if (IsDeviceReadyHullPrefab(hull))
+                return hull;
+
+            hull = Resources.Load<GameObject>(ResourcesTripoHullLoadPath);
+            if (IsValidHullPrefab(hull))
+                return hull;
+
+            return null;
+        }
+
+        public static bool IsValidHullPrefab(GameObject prefab)
+        {
+            if (prefab == null)
+                return false;
+
+            Renderer renderer = prefab.GetComponentInChildren<Renderer>(true);
+            if (renderer == null)
+                return false;
+
+            MeshFilter meshFilter = renderer.GetComponent<MeshFilter>()
+                ?? renderer.GetComponentInChildren<MeshFilter>(true);
+            return meshFilter == null || meshFilter.sharedMesh != null;
+        }
+
+        /// <summary>
+        /// Baked <c>TripoGlider.prefab</c> gate for builds. REGRESSION: do not weaken to IsValidHullPrefab only —
+        /// we repeatedly shipped prefabs with fileID:0 materials or TripoModels mesh guids outside Resources.
+        /// </summary>
+        public static bool IsDeviceReadyHullPrefab(GameObject prefab)
+        {
+            if (!IsValidHullPrefab(prefab))
+                return false;
+
+            Renderer renderer = prefab.GetComponentInChildren<Renderer>(true);
+            if (renderer == null)
+                return false;
+
+            Material[] materials = renderer.sharedMaterials;
+            if (materials.Length == 0)
+                return false;
+
+            foreach (Material material in materials)
+            {
+                if (material == null)
+                    return false;
+            }
+
+            return true;
+        }
 
         [Tooltip("Optional concept-art texture (legacy; not used for imported Tripo hull).")]
         public Texture2D texture;
@@ -52,7 +144,7 @@ namespace RoutesToGlory.Game
         private Transform _hullRoot;
         private Transform _attachmentsRoot;
         private RtgGliderExhaustSockets.SocketSet _exhaustSockets;
-        private MeshRenderer _renderer;
+        private Renderer _renderer;
         private Material _hullMaterial;
         private RtgGliderBlobShadow _blobShadow;
         private RtgGliderAfterburner _afterburner;
@@ -100,8 +192,15 @@ namespace RoutesToGlory.Game
             texture = tex;
             sizeMeters = sizeM;
             headingOffsetDegrees = headingOffsetDeg;
-            if (hullPrefab != null)
+            if (RtgPlayerShipVisual.IsValidHullPrefab(hullPrefab))
                 importedHullPrefab = hullPrefab;
+            else if (hullPrefab != null)
+            {
+                importedHullPrefab = null;
+                Debug.LogWarning(
+                    "[RTG] Ignoring invalid shipHullPrefab — no Renderer found. " +
+                    "Falling back to Resources/RTG_PlayerShip/TripoGlider.");
+            }
             hullLocalEulerOffset = hullEulerOffset;
             autoOrientImportedHull = autoOrientHull;
             if (RtgGliderEngineMounts.HasSavedPositions(engineMounts))
@@ -485,6 +584,11 @@ namespace RoutesToGlory.Game
             ReconfigureAfterburner();
         }
 
+        /// <summary>
+        /// Instantiates Tripo hull under the Hull root. REGRESSION notes: (1) localScale reset to one is
+        /// intentional — <see cref="FitImportedHullScale"/> always runs after; (2) log “using Tripo imported hull”
+        /// only means a Renderer was found, not that textures are visible — check albedo= in the follow-up log.
+        /// </summary>
         private bool TryBuildImportedHull(Transform hullParent)
         {
             GameObject source = ResolveImportedHullPrefab();
@@ -495,7 +599,8 @@ namespace RoutesToGlory.Game
             meshGo.transform.localPosition = Vector3.zero;
             meshGo.transform.localRotation = Quaternion.identity;
             meshGo.transform.localScale = Vector3.one;
-            FlattenImportedHierarchy(meshGo.transform);
+            meshGo.SetActive(true);
+            PrepareImportedHullInstance(meshGo);
 
             Quaternion baseRotation = autoOrientImportedHull
                 ? ComputeImportedHullRotation(meshGo.transform)
@@ -505,30 +610,27 @@ namespace RoutesToGlory.Game
             ApplyHullTilt();
 
             FitImportedHullScale(meshGo.transform);
-            ConfigureImportedRenderers(meshGo);
-            _renderer = meshGo.GetComponentInChildren<MeshRenderer>();
+            _renderer = meshGo.GetComponentInChildren<Renderer>(true);
 
             if (_renderer != null)
             {
+                Material hullMaterial = _renderer.sharedMaterial;
+                string albedoName = hullMaterial != null && hullMaterial.mainTexture != null
+                    ? hullMaterial.mainTexture.name
+                    : "none";
                 Debug.Log(
                     $"[RTG] Tripo hull rotation auto={baseRotation.eulerAngles} " +
-                    $"fine-tune={hullLocalEulerOffset}");
+                    $"fine-tune={hullLocalEulerOffset} renderer={_renderer.GetType().Name} " +
+                    $"albedo={albedoName}");
+            }
+            else
+            {
+                Debug.LogError(
+                    "[RTG] Tripo hull instantiated but no Renderer found on children. " +
+                    "Check Resources/RTG_PlayerShip/TripoGlider import.");
             }
 
             return _renderer != null;
-        }
-
-        /// <summary>
-        /// Tripo FBX files often keep mesh pose on child nodes; fold that into root auto-orient.
-        /// </summary>
-        private static void FlattenImportedHierarchy(Transform root)
-        {
-            foreach (Transform child in root)
-            {
-                child.localRotation = Quaternion.identity;
-                child.localPosition = Vector3.zero;
-                FlattenImportedHierarchy(child);
-            }
         }
 
         /// <summary>
@@ -896,26 +998,81 @@ namespace RoutesToGlory.Game
             ApplyHullTilt();
         }
 
+        /// <summary>
+        /// Normalizes a Tripo hull instance for rendering (flatten nested mesh, enable renderers).
+        /// Preserves native Tripo PBR/URP materials when already valid.
+        /// </summary>
+        public static void PrepareImportedHullInstance(GameObject hullRoot)
+        {
+            if (hullRoot == null)
+                return;
+
+            hullRoot.SetActive(true);
+            FlattenImportedHierarchy(hullRoot.transform);
+            ConfigureImportedRenderers(hullRoot);
+        }
+
+        /// <summary>
+        /// One-time editor bake: fit wingspan before saving TripoGlider.prefab for device builds.
+        /// </summary>
+        public static void BakeHullScaleForDevice(Transform hullTransform, float wingspanMeters)
+        {
+            if (hullTransform == null)
+                return;
+
+            Bounds bounds = CalculateLocalBounds(hullTransform);
+            float span = Mathf.Max(
+                bounds.extents.x * 2f,
+                bounds.extents.z * 2f,
+                0.001f);
+            float uniformScale = wingspanMeters / span;
+            hullTransform.localScale = Vector3.one * uniformScale;
+        }
+
         private GameObject ResolveImportedHullPrefab()
         {
-            if (importedHullPrefab != null)
+            if (IsValidHullPrefab(importedHullPrefab))
                 return importedHullPrefab;
 
-            GameObject resourcesHull = Resources.Load<GameObject>(ResourcesTripoHullPath);
-            if (resourcesHull != null)
-                return resourcesHull;
+            importedHullPrefab = null;
 
 #if UNITY_EDITOR
-            return AssetDatabase.LoadAssetAtPath<GameObject>(DefaultTripoHullAssetPath);
-#else
-            return null;
+            GameObject editorHull = AssetDatabase.LoadAssetAtPath<GameObject>(DefaultTripoHullAssetPath);
+            if (IsValidHullPrefab(editorHull))
+            {
+                importedHullPrefab = editorHull;
+                return editorHull;
+            }
 #endif
+
+            GameObject resourcesHull = LoadResourcesHullPrefab();
+            if (IsValidHullPrefab(resourcesHull))
+            {
+                importedHullPrefab = resourcesHull;
+                return resourcesHull;
+            }
+
+#if UNITY_EDITOR
+            editorHull = AssetDatabase.LoadAssetAtPath<GameObject>(
+                "Assets/Resources/RTG_PlayerShip/TripoGlider/TripoGlider.prefab");
+            if (IsValidHullPrefab(editorHull))
+                return editorHull;
+
+            editorHull = AssetDatabase.LoadAssetAtPath<GameObject>(
+                "Assets/Resources/RTG_PlayerShip/TripoGlider/futuristic_fighter_3d_model.fbx");
+            if (IsValidHullPrefab(editorHull))
+                return editorHull;
+#endif
+            return null;
         }
 
         private void FitImportedHullScale(Transform hullTransform)
         {
             Bounds bounds = CalculateLocalBounds(hullTransform);
-            float span = Mathf.Max(bounds.extents.x * 2f, 0.001f);
+            float span = Mathf.Max(
+                bounds.extents.x * 2f,
+                bounds.extents.z * 2f,
+                0.001f);
             float uniformScale = sizeMeters / span * hullScaleMultiplier;
             hullTransform.localScale = Vector3.one * uniformScale;
         }
@@ -937,25 +1094,200 @@ namespace RoutesToGlory.Game
             return bounds;
         }
 
+        private static void FlattenImportedHierarchy(Transform root)
+        {
+            // Tripo FBX imports may include cameras/lights that clutter the hierarchy.
+            foreach (Camera camera in root.GetComponentsInChildren<Camera>(true))
+                DestroyImmediate(camera.gameObject);
+            foreach (Light light in root.GetComponentsInChildren<Light>(true))
+                DestroyImmediate(light.gameObject);
+
+            if (root.GetComponent<Renderer>() != null)
+                return;
+
+            Renderer[] renderers = root.GetComponentsInChildren<Renderer>(true);
+            if (renderers.Length != 1)
+                return;
+
+            Transform meshNode = renderers[0].transform;
+            if (meshNode == root)
+                return;
+
+            MeshFilter meshFilter = meshNode.GetComponent<MeshFilter>();
+            MeshRenderer meshRenderer = meshNode.GetComponent<MeshRenderer>();
+            if (meshFilter == null || meshRenderer == null || meshFilter.sharedMesh == null)
+                return;
+
+            MeshFilter rootFilter = root.GetComponent<MeshFilter>();
+            if (rootFilter == null)
+                rootFilter = root.gameObject.AddComponent<MeshFilter>();
+            rootFilter.sharedMesh = meshFilter.sharedMesh;
+
+            MeshRenderer rootRenderer = root.GetComponent<MeshRenderer>();
+            if (rootRenderer == null)
+                rootRenderer = root.gameObject.AddComponent<MeshRenderer>();
+            rootRenderer.sharedMaterials = meshRenderer.sharedMaterials;
+
+            root.localRotation = root.localRotation * meshNode.localRotation;
+            root.localPosition = root.localPosition + root.localRotation * meshNode.localPosition;
+            root.localScale = Vector3.Scale(root.localScale, meshNode.localScale);
+
+            DestroyImmediate(meshNode.gameObject);
+        }
+
         private static void ConfigureImportedRenderers(GameObject hullRoot)
         {
-            Shader urpLit = Shader.Find("Universal Render Pipeline/Lit");
-            foreach (Renderer renderer in hullRoot.GetComponentsInChildren<Renderer>())
+            foreach (Renderer renderer in hullRoot.GetComponentsInChildren<Renderer>(true))
             {
+                renderer.enabled = true;
+                renderer.gameObject.SetActive(true);
                 renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
                 renderer.receiveShadows = false;
 
-                if (urpLit == null) continue;
-                foreach (Material material in renderer.sharedMaterials)
+                Material[] sourceMaterials = renderer.sharedMaterials;
+                Material[] runtimeMaterials = new Material[sourceMaterials.Length];
+                for (int i = 0; i < sourceMaterials.Length; i++)
+                    runtimeMaterials[i] = CreateVisibleHullMaterial(sourceMaterials[i]);
+                renderer.materials = runtimeMaterials;
+            }
+        }
+
+        private static Material CreateVisibleHullMaterial(Material source)
+        {
+            Texture albedo = ExtractAlbedoTexture(source);
+            if (albedo == null)
+                albedo = TryLoadHullAlbedoFromResources();
+
+            if (IsUsableTripoMaterial(source))
+                return new Material(source);
+
+            Shader urpLit = Shader.Find("Universal Render Pipeline/Lit");
+            if (urpLit == null)
+                return source != null ? new Material(source) : null;
+
+            Material runtime = source != null
+                ? new Material(source)
+                : new Material(urpLit);
+            runtime.name = "RTG_TripoHull_Runtime";
+            runtime.shader = urpLit;
+
+            ApplyAlbedoToMaterial(runtime, albedo);
+
+            Color baseColor = Color.white;
+            if (source != null)
+            {
+                if (source.HasProperty("_BaseColor"))
+                    baseColor = source.GetColor("_BaseColor");
+                else if (source.HasProperty("_Color"))
+                    baseColor = source.GetColor("_Color");
+            }
+
+            baseColor.a = 1f;
+            if (runtime.HasProperty("_BaseColor"))
+                runtime.SetColor("_BaseColor", baseColor);
+
+            if (runtime.HasProperty("_Surface"))
+                runtime.SetFloat("_Surface", 0f);
+
+            return runtime;
+        }
+
+        /// <summary>
+        /// Device fallback when TripoHull.mat has no embedded albedo (common after prefab bake).
+        /// REGRESSION: IsUsableTripoMaterial requires a real albedo — do not treat bare URP/Lit as usable.
+        /// </summary>
+        public static Texture2D TryLoadHullAlbedoFromResources()
+        {
+            Texture2D named = Resources.Load<Texture2D>(ResourcesTripoAlbedoPath);
+            if (named != null)
+                return named;
+
+            Texture2D[] textures = Resources.LoadAll<Texture2D>(ResourcesTripoTextureFolder);
+            Texture2D fallback = null;
+            foreach (Texture2D texture in textures)
+            {
+                if (texture == null)
+                    continue;
+
+                string lower = texture.name.ToLowerInvariant();
+                if (lower.Contains("normal")
+                    || lower.Contains("rough")
+                    || lower.Contains("metallic")
+                    || lower.Contains("ao")
+                    || lower.Contains("height")
+                    || lower.Contains("mask"))
                 {
-                    if (material == null || material.shader == null) continue;
-                    if (material.shader.name.Contains("Hidden/InternalErrorShader")
-                        || material.shader.name == "Standard")
-                    {
-                        material.shader = urpLit;
-                    }
+                    continue;
+                }
+
+                fallback = texture;
+                if (lower.Contains("base")
+                    || lower.Contains("color")
+                    || lower.Contains("albedo")
+                    || lower.Contains("diffuse"))
+                {
+                    return texture;
                 }
             }
+
+            return fallback;
+        }
+
+        public static void ApplyAlbedoToMaterial(Material material, Texture albedo)
+        {
+            if (material == null || albedo == null)
+                return;
+
+            if (material.HasProperty("_BaseMap"))
+                material.SetTexture("_BaseMap", albedo);
+            if (material.HasProperty("_MainTex"))
+                material.SetTexture("_MainTex", albedo);
+        }
+
+        private static bool IsUsableTripoMaterial(Material source)
+        {
+            if (source == null || source.shader == null)
+                return false;
+            if (!source.shader.isSupported)
+                return false;
+            if (source.shader.name.Contains("Hidden/InternalErrorShader"))
+                return false;
+            if (source.shader.name == "Standard")
+                return false;
+            // REGRESSION: URP/Lit with empty _BaseMap passed here and shipped a gray/invisible hull on device.
+            if (ExtractAlbedoTexture(source) == null)
+                return false;
+
+            return source.shader.name.Contains("Universal Render Pipeline");
+        }
+
+        public static Texture ExtractAlbedoTexture(Material source)
+        {
+            if (source == null)
+                return null;
+
+            if (source.mainTexture != null)
+                return source.mainTexture;
+
+            string[] texturePropertyNames =
+            {
+                "_BaseMap",
+                "_MainTex",
+                "_BaseColorMap",
+                "_DiffuseMap",
+            };
+
+            foreach (string propertyName in texturePropertyNames)
+            {
+                if (!source.HasProperty(propertyName))
+                    continue;
+
+                Texture texture = source.GetTexture(propertyName);
+                if (texture != null)
+                    return texture;
+            }
+
+            return null;
         }
 
         private void ApplyHullMaterial()
@@ -985,8 +1317,7 @@ namespace RoutesToGlory.Game
         {
             Transform existing = transform.Find(childName);
             if (existing == null) return;
-            if (Application.isPlaying) Destroy(existing.gameObject);
-            else DestroyImmediate(existing.gameObject);
+            DestroyImmediate(existing.gameObject);
         }
 
         private void OnDestroy()

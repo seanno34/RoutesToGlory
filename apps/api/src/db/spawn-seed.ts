@@ -3,17 +3,16 @@
  * Tuned for Orin Junction, WY play-testing but works at any spawn GPS.
  */
 import type { GameConfig } from '@empire/shared';
-import {
-  classifyTileBiomeProcedural,
-  latLngToTileId,
-  pickResourceForBiome,
-} from '@empire/shared';
+import { latLngToTileId } from '@empire/shared';
 import { query, newId } from './client.js';
 import { insertResourceNode } from './exploration-repo.js';
 
 const PLAY_AREA_RADIUS_M = 12_000;
 const GOODIE_HUT_COUNT = 16;
 const RESOURCE_NODE_COUNT = 48;
+
+/** Unity POC — only these ids get embedded deposit art; seed matches RtgTerrainDepositGuards. */
+const POC_ACTIVE_DEPOSIT_RESOURCE_IDS = ['xenite'] as const;
 
 function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): number {
   const R = 6_371_000;
@@ -117,8 +116,7 @@ export async function seedPlayArea(
       if (haversineM(lat, lng, centerLat, centerLng) > PLAY_AREA_RADIUS_M) continue;
 
       const tileId = latLngToTileId(lat, lng, tileSize);
-      const biome = classifyTileBiomeProcedural({ lat, lng });
-      const resourceId = pickResourceForBiome(biome, { roll: random() });
+      const resourceId = POC_ACTIVE_DEPOSIT_RESOURCE_IDS[0];
       const richnessRoll = random();
       const richness =
         richnessRoll < 0.15 ? 'sparse' : richnessRoll < 0.55 ? 'moderate' : 'rich';

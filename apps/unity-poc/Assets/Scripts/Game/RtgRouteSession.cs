@@ -1007,6 +1007,22 @@ namespace RoutesToGlory.Game
                     Debug.Log($"[RTG] World progress reset: {text}");
                     InvalidateSnapCache();
                     RefreshPersistedRoutes();
+                    if (_echoLoader == null)
+                    {
+#if UNITY_2023_1_OR_NEWER
+                        _echoLoader = UnityEngine.Object.FindFirstObjectByType<RtgEchoSiteLoader>();
+#else
+                        _echoLoader = UnityEngine.Object.FindObjectOfType<RtgEchoSiteLoader>();
+#endif
+                    }
+
+                    _echoLoader?.ReloadMarkersAfterReset();
+#if UNITY_2023_1_OR_NEWER
+                    RtgPlayerLocation player = UnityEngine.Object.FindFirstObjectByType<RtgPlayerLocation>();
+#else
+                    RtgPlayerLocation player = UnityEngine.Object.FindObjectOfType<RtgPlayerLocation>();
+#endif
+                    player?.RefreshAfterWorldReset();
                 }
                 else
                 {

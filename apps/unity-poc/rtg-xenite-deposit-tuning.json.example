@@ -1,0 +1,8 @@
+{
+  "_comment": "Copy to rtg-xenite-deposit-tuning.json (gitignored). Tune in Play mode via Settings → Xenite deposit → Save tuning.",
+  "depositEulerOffset": {
+    "x": 270.0,
+    "y": 0.0,
+    "z": 0.0
+  }
+}

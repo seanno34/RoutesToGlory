@@ -847,12 +847,14 @@ namespace RoutesToGlory.Game
                     if (child != null) Destroy(child.gameObject);
             }
 
+            _markerRoot = null;
             _sheetAnchor = null;
             _sheetRenderer = null;
             _permanentReveal.Clear();
             _ready = false;
             _initializing = false;
             _sheetSpawned = false;
+            _hasFocus = false;
             _shimmeringResources.Clear();
             _seenMarkers.Clear();
             _revealTextureDirty = true;
@@ -861,6 +863,25 @@ namespace RoutesToGlory.Game
                 Destroy(_revealTexture);
                 _revealTexture = null;
             }
+        }
+
+        /// <summary>
+        /// After Reset &amp; Reload World — exploration tiles are wiped, so show every respawned
+        /// marker again instead of leaving only the live pin bubble visible.
+        /// </summary>
+        public void RevealAllMarkersAfterWorldReset(Transform markersContainer)
+        {
+            if (RtgWorldScanSettings.PreSurveyedWorld || markersContainer == null)
+                return;
+
+            _markerRoot = markersContainer;
+            foreach (RtgMapMarker marker in markersContainer.GetComponentsInChildren<RtgMapMarker>(true))
+            {
+                TryRevealEntireTile(RtgFogTileMath.LatLngToTileId(marker.lat, marker.lng, tileSizeM));
+                marker.gameObject.SetActive(true);
+            }
+
+            _revealTextureDirty = true;
         }
 
         /// <summary>

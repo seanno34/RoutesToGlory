@@ -1,5 +1,5 @@
 {
-  "_comment": "Sample response mirroring GET /api/worlds/:worldId/map (apps/api/src/db/world-repo.ts). Used by RtgEchoSiteLoader in SampleFile mode to preview Echo Site + resource placement around Douglas, WY without a running backend. Replace with live data by switching the loader's Data Source to LiveApi.",
+  "_comment": "Sample response mirroring GET /api/worlds/:worldId/map (apps/api/src/db/world-repo.ts). Used by RtgEchoSiteLoader in SampleFile mode to preview Echo Site + resource placement around Douglas, WY without a running backend. POC resources: xenite only (see RtgTerrainDepositGuards.ActivePocDepositResourceIds).",
   "settlements": [
     {
       "id": "s-capital",
@@ -109,46 +109,6 @@
       "lat": 42.7638,
       "lng": -105.3762,
       "biome": "xeno_rift"
-    },
-    {
-      "id": "r-solari-1",
-      "tile_id": "t2",
-      "resource_id": "solari_dust",
-      "richness": "moderate",
-      "yield_per_day": 24,
-      "lat": 42.7561,
-      "lng": -105.3883,
-      "biome": "xeno_plains"
-    },
-    {
-      "id": "r-lumin-1",
-      "tile_id": "t3",
-      "resource_id": "lumin_spring",
-      "richness": "rich",
-      "yield_per_day": 40,
-      "lat": 42.7702,
-      "lng": -105.3851,
-      "biome": "xeno_wetland"
-    },
-    {
-      "id": "r-void-1",
-      "tile_id": "t4",
-      "resource_id": "voidglass",
-      "richness": "sparse",
-      "yield_per_day": 12,
-      "lat": 42.7489,
-      "lng": -105.3907,
-      "biome": "xeno_highland"
-    },
-    {
-      "id": "r-quant-1",
-      "tile_id": "t5",
-      "resource_id": "quantium_shard",
-      "richness": "moderate",
-      "yield_per_day": 28,
-      "lat": 42.7619,
-      "lng": -105.3681,
-      "biome": "xeno_highland"
     }
   ]
 }

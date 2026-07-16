@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
+using System.Net.Http;
 using CesiumForUnity;
 using UnityEngine;
 using UnityEngine.Networking;
@@ -31,7 +32,7 @@ namespace RoutesToGlory.Game
         [Tooltip("World id (UUID) to load when dataSource = LiveApi")]
         public string worldId = "";
 
-        [Tooltip("Empire id (UUID) for the player; used by route sessions. Set by '6b. Connect Echo Sites to Live API'.")]
+        [Tooltip("Empire id (UUID) for the player; used by route sessions. Set by Connect Echo Sites to Live API.")]
         public string empireId = "";
 
         [Tooltip("File under Assets/StreamingAssets/ to load when dataSource = SampleFile")]
@@ -52,6 +53,12 @@ namespace RoutesToGlory.Game
 
         [Tooltip("When true, resource deposits sample Cesium terrain height and sit flush on the surface.")]
         public bool anchorDepositsToTerrain = true;
+
+        [Tooltip("When true, Echo Site settlements sample Cesium terrain height (matches deposit anchoring).")]
+        public bool anchorSettlementsToTerrain = true;
+
+        [Tooltip("Meters above resolved terrain ground for deposit roots (prevents mesh burial).")]
+        public float depositSurfaceClearanceM = RtgTerrainDepositGuards.DefaultDepositSurfaceClearanceM;
 
         [Tooltip("Label size multiplier for ground-anchored markers.")]
         public float groundLabelSizeFactor = 0.09f;
@@ -88,7 +95,7 @@ namespace RoutesToGlory.Game
         private const string MarkerContainerName = "Markers";
         private int _scatterIndex;
         private string _corridorGoodieId;
-        private readonly List<ResourceAnchorPending> _pendingResourceAnchors = new();
+        private readonly List<MarkerAnchorPending> _pendingTerrainAnchors = new();
 
         private const double CorridorDLat = 0.012;
 
@@ -102,6 +109,9 @@ namespace RoutesToGlory.Game
         /// <summary>True when LiveApi fell back to the sample file (API unreachable).</summary>
         public bool LoadedFromSampleFallback { get; private set; }
 
+        /// <summary>Human-readable counts from the most recent SpawnAll (for editor menus).</summary>
+        public string LastSpawnSummary { get; private set; } = "no markers spawned";
+
         /// <summary>Keep in-memory map routes aligned after incremental API refreshes.</summary>
         public void ApplyRouteSnapshot(RtgRoute[] routes)
         {
@@ -114,17 +124,21 @@ namespace RoutesToGlory.Game
         private readonly Dictionary<Color, Material> _glowPadCache = new();
         private readonly Dictionary<Color, Material> _depositGlowCache = new();
 
-        private struct ResourceAnchorPending
+        private bool _reloadingAfterWorldReset;
+
+        private struct MarkerAnchorPending
         {
             public GameObject Root;
             public double Longitude;
             public double Latitude;
+            public float SurfaceClearanceM;
         }
 
         private void Awake()
         {
             RtgDevWorldConfig.TryApplyTo(this);
             RtgWorldScanSettings.Apply(preSurveyedWorld);
+            RtgXeniteDepositTuningConfig.TryLoad(out _);
         }
 
         private void Start()
@@ -143,6 +157,33 @@ namespace RoutesToGlory.Game
             SpawnAll(Parse(json));
         }
 
+        /// <summary>Parse JSON from a live map fetch and respawn all markers (editor menu helper).</summary>
+        public void SpawnFromJson(string json)
+        {
+            if (string.IsNullOrEmpty(json)) return;
+            SpawnAll(Parse(json));
+        }
+
+        /// <summary>
+        /// Reload markers from the configured <see cref="dataSource"/>.
+        /// In play mode LiveApi uses a coroutine; sample file loads synchronously.
+        /// </summary>
+        public void ReloadFromConfiguredSource()
+        {
+            if (dataSource == DataSource.SampleFile)
+            {
+                LoadSampleImmediate();
+                return;
+            }
+
+            if (Application.isPlaying)
+                StartCoroutine(ReloadFromApi());
+            else
+                Debug.LogWarning(
+                    "[RTG] Live API reload in Edit mode must be driven by the editor menu " +
+                    "(fetch + SpawnFromJson). Press Play or use Reset & Reload World.");
+        }
+
         private IEnumerator LoadRoutine()
         {
             yield return FetchAndSpawn();
@@ -152,7 +193,155 @@ namespace RoutesToGlory.Game
         public IEnumerator ReloadFromApi()
         {
             if (dataSource != DataSource.LiveApi) yield break;
+            LastMap = null;
             yield return FetchAndSpawn();
+        }
+
+        /// <summary>
+        /// After world reset — discard cached map and respawn from the configured source.
+        /// <paramref name="preferSync"/> uses blocking HTTP (editor menu); otherwise play mode
+        /// uses a coroutine so UnityWebRequest can run on the main thread.
+        /// </summary>
+        /// <returns>True when markers were spawned (sync path), or when an async reload was started.</returns>
+        public bool ReloadAfterWorldReset(bool preferSync = false)
+        {
+            LastMap = null;
+            _reloadingAfterWorldReset = true;
+
+            if (dataSource == DataSource.SampleFile)
+            {
+                LoadSampleImmediate();
+                return LogReloadOutcome(HasActiveMarkers(), "sample file");
+            }
+
+            if (string.IsNullOrWhiteSpace(worldId))
+            {
+                Debug.LogError(
+                    "[RTG] Cannot reload live map — worldId is empty. " +
+                    "Run Routes to Glory → Connect Echo Sites to Live API.");
+                if (fallbackToSampleOnApiFailure)
+                    return TryFallbackSample("missing worldId");
+                return false;
+            }
+
+            if (preferSync)
+                return TryReloadLiveApiSync();
+
+            if (Application.isPlaying)
+            {
+                StartCoroutine(ReloadFromApiThenValidate());
+                return true;
+            }
+
+            Debug.LogWarning(
+                "[RTG] Live API reload in Edit mode must use preferSync=true " +
+                "(Routes to Glory → Reset & Reload World).");
+            return false;
+        }
+
+        private IEnumerator ReloadFromApiThenValidate()
+        {
+            yield return ReloadFromApi();
+            if (HasActiveMarkers())
+                Debug.Log($"[RTG] World reload complete from live API — {LastSpawnSummary}.");
+            else
+                LogEmptyReloadFailure("live API coroutine");
+        }
+
+        private bool TryReloadLiveApiSync()
+        {
+            string json = FetchLiveMapJsonBlocking();
+            if (!string.IsNullOrEmpty(json))
+            {
+                LoadedFromSampleFallback = false;
+                SpawnFromJson(json);
+                return LogReloadOutcome(HasActiveMarkers(), "live API");
+            }
+
+            if (fallbackToSampleOnApiFailure)
+                return TryFallbackSample("live API unreachable");
+
+            Debug.LogError(
+                "[RTG] Live map reload failed and fallbackToSampleOnApiFailure is disabled. " +
+                "Is @empire/api running (pnpm --filter @empire/api dev)?");
+            return false;
+        }
+
+        private bool TryFallbackSample(string reason)
+        {
+            Debug.LogWarning(
+                $"[RTG] Live map reload failed ({reason}) — falling back to {sampleFileName}. " +
+                "Start @empire/api or update apiBaseUrl in rtg-dev-world.json.");
+            LoadedFromSampleFallback = true;
+            LoadSampleImmediate();
+            return LogReloadOutcome(HasActiveMarkers(), "sample fallback");
+        }
+
+        private string FetchLiveMapJsonBlocking()
+        {
+            string primaryUrl = BuildMapUrl(apiBaseUrl);
+            string json = TryFetchMapJsonBlocking(primaryUrl);
+            if (!string.IsNullOrEmpty(json))
+                return json;
+
+            if (Application.isEditor && editorLocalhostRetry)
+            {
+                string localBase = LocalhostApiBase(apiBaseUrl);
+                if (!string.Equals(localBase, apiBaseUrl.TrimEnd('/'), System.StringComparison.OrdinalIgnoreCase))
+                {
+                    string localUrl = BuildMapUrl(localBase);
+                    Debug.LogWarning(
+                        $"[RTG] Live map fetch failed ({primaryUrl}). Retrying via editor localhost: {localUrl}");
+                    json = TryFetchMapJsonBlocking(localUrl);
+                    if (!string.IsNullOrEmpty(json))
+                    {
+                        apiBaseUrl = localBase;
+                        return json;
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        private static string TryFetchMapJsonBlocking(string url)
+        {
+            try
+            {
+                using var client = new HttpClient { Timeout = System.TimeSpan.FromSeconds(8) };
+                return client.GetStringAsync(url).GetAwaiter().GetResult();
+            }
+            catch (System.Exception ex)
+            {
+                Debug.LogWarning($"[RTG] Map fetch failed: {ex.Message} ({url})");
+                return null;
+            }
+        }
+
+        private bool HasActiveMarkers()
+        {
+            Transform container = transform.Find(MarkerContainerName);
+            return container != null && container.childCount > 0;
+        }
+
+        private bool LogReloadOutcome(bool spawned, string source)
+        {
+            if (spawned)
+            {
+                Debug.Log($"[RTG] World reload complete from {source} — {LastSpawnSummary}.");
+                return true;
+            }
+
+            LogEmptyReloadFailure(source);
+            return false;
+        }
+
+        private void LogEmptyReloadFailure(string source)
+        {
+            Debug.LogError(
+                $"[RTG] World reload from {source} finished with NO markers spawned. " +
+                "Check Console for fetch/parse errors, verify rtg-dev-world.json worldId, " +
+                "and ensure sample-world-map.json exists under StreamingAssets.");
         }
 
         private IEnumerator FetchAndSpawn()
@@ -281,9 +470,9 @@ namespace RoutesToGlory.Game
             LastMap = map;
             Transform container = ResetContainer();
             _scatterIndex = 0;
-            _pendingResourceAnchors.Clear();
+            _pendingTerrainAnchors.Clear();
             _corridorGoodieId = SelectCorridorGoodieTarget(map);
-            int settlements = 0, resources = 0;
+            int settlements = 0, resources = 0, xeniteTripo = 0, xeniteProcedural = 0;
 
             if (map.settlements != null)
             {
@@ -296,14 +485,46 @@ namespace RoutesToGlory.Game
 
             if (map.resources != null)
             {
+                int skippedDeposits = 0;
                 foreach (RtgResourceNode r in map.resources)
                 {
-                    SpawnResource(r, container);
+                    if (!RtgTerrainDepositGuards.IsActivePocDeposit(r.resource_id))
+                    {
+                        skippedDeposits++;
+                        continue;
+                    }
+
+                    bool usedTripo = SpawnResource(r, container);
                     resources++;
+                    if (r.resource_id == "xenite")
+                    {
+                        if (usedTripo) xeniteTripo++;
+                        else xeniteProcedural++;
+                    }
+                }
+
+                if (skippedDeposits > 0)
+                {
+                    Debug.Log(
+                        $"[RTG] Skipped {skippedDeposits} resource deposit(s) — POC only spawns: " +
+                        string.Join(", ", RtgTerrainDepositGuards.ActivePocDepositResourceIds));
                 }
             }
 
-            Debug.Log($"[RTG] Spawned {settlements} Echo Site(s) and {resources} resource node(s).");
+            LastSpawnSummary = FormatSpawnSummary(settlements, resources, xeniteTripo, xeniteProcedural);
+            Debug.Log($"[RTG] {LastSpawnSummary}");
+            if (settlements == 0 && resources == 0)
+            {
+                Debug.LogError(
+                    "[RTG] Map parsed but contains no spawnable echo sites or deposits. " +
+                    "After reset-progress the API map may be empty — try Reload or check MySQL seed data.");
+            }
+            else if (settlements == 0 && resources > 0)
+            {
+                Debug.LogWarning(
+                    "[RTG] Map has deposits but no echo sites — verify world seed/MySQL data or enable " +
+                    "fallbackToSampleOnApiFailure on RTG Echo Sites.");
+            }
             DrawPersistedRoutes(map);
             InvalidateRouteSnapCache();
             NotifyRouteCleanup();
@@ -315,43 +536,107 @@ namespace RoutesToGlory.Game
             else
                 SetupFogOfWar(container, map?.routes);
             EnsureAllMarkersVisible(container);
+            if (_reloadingAfterWorldReset)
+            {
+                RtgFogOfWar fog = RtgFogOfWar.Find();
+                fog?.RevealAllMarkersAfterWorldReset(container);
+                _reloadingAfterWorldReset = false;
+            }
             SetupTerrainScatter();
 
-            if (Application.isPlaying && anchorDepositsToTerrain && _pendingResourceAnchors.Count > 0)
-                StartCoroutine(AnchorResourcesToTerrain());
+            if (ShouldAnchorMarkersToTerrain())
+                StartTerrainAnchorRoutine();
         }
 
-        private IEnumerator AnchorResourcesToTerrain()
+        private static string FormatSpawnSummary(
+            int settlements, int resources, int xeniteTripo, int xeniteProcedural)
         {
-            Cesium3DTileset tileset = RtgTerrainHeightSampler.ResolveTileset();
-            if (tileset == null) yield break;
+            string xeniteDetail = xeniteTripo + xeniteProcedural == 0
+                ? "0 xenite"
+                : $"{xeniteTripo + xeniteProcedural} xenite ({xeniteTripo} Tripo, {xeniteProcedural} procedural)";
+            return $"Spawned {settlements} settlements, {resources} deposits ({xeniteDetail})";
+        }
 
-            var requests = new RtgTerrainHeightSampler.SampleRequest[_pendingResourceAnchors.Count];
-            for (int i = 0; i < _pendingResourceAnchors.Count; i++)
+        private bool ShouldAnchorMarkersToTerrain()
+        {
+            if (_pendingTerrainAnchors.Count == 0) return false;
+            if (!Application.isPlaying) return false;
+            return anchorDepositsToTerrain || anchorSettlementsToTerrain;
+        }
+
+        private void StartTerrainAnchorRoutine()
+        {
+            if (Application.isPlaying)
+                StartCoroutine(AnchorMarkersToTerrain());
+        }
+
+        private IEnumerator AnchorMarkersToTerrain()
+        {
+            if (_pendingTerrainAnchors.Count == 0) yield break;
+
+            RtgTerrainHeight terrainHeight = RtgTerrainHeight.FindOrCreate();
+            int anchoredCount = 0;
+
+            for (int attempt = 0; attempt < RtgTerrainDepositGuards.DepositAnchorMaxAttempts; attempt++)
             {
-                ResourceAnchorPending pending = _pendingResourceAnchors[i];
-                requests[i] = new RtgTerrainHeightSampler.SampleRequest
+                if (attempt > 0)
+                    yield return new WaitForSeconds(RtgTerrainDepositGuards.DepositAnchorRetryDelaySeconds);
+
+                Cesium3DTileset tileset = RtgTerrainHeightSampler.ResolveTileset();
+                if (tileset == null) continue;
+
+                var requests = new RtgTerrainHeightSampler.SampleRequest[_pendingTerrainAnchors.Count];
+                for (int i = 0; i < _pendingTerrainAnchors.Count; i++)
                 {
-                    Longitude = pending.Longitude,
-                    Latitude = pending.Latitude,
-                    FallbackHeightM = groundHeightMeters,
-                };
+                    MarkerAnchorPending pending = _pendingTerrainAnchors[i];
+                    requests[i] = new RtgTerrainHeightSampler.SampleRequest
+                    {
+                        Longitude = pending.Longitude,
+                        Latitude = pending.Latitude,
+                        FallbackHeightM = groundHeightMeters,
+                    };
+                }
+
+                double[] heights = null;
+                yield return RtgTerrainHeightSampler.SampleHeightsCoroutine(
+                    tileset,
+                    requests,
+                    sampled => heights = sampled);
+
+                if (heights == null) continue;
+
+                anchoredCount = 0;
+                for (int i = 0; i < _pendingTerrainAnchors.Count && i < heights.Length; i++)
+                {
+                    MarkerAnchorPending pending = _pendingTerrainAnchors[i];
+                    if (pending.Root == null) continue;
+
+                    double groundM = terrainHeight != null
+                        ? terrainHeight.ResolveDepositGroundHeight(
+                            pending.Latitude, pending.Longitude, heights[i])
+                        : heights[i];
+                    double anchorHeightM = groundM + pending.SurfaceClearanceM;
+                    AnchorAt(pending.Root, pending.Longitude, pending.Latitude, anchorHeightM);
+                    anchoredCount++;
+                }
+
+                if (anchoredCount > 0)
+                {
+                    Debug.Log(
+                        $"[RTG] Anchored {anchoredCount} marker(s) to terrain " +
+                        $"(attempt {attempt + 1}/{RtgTerrainDepositGuards.DepositAnchorMaxAttempts}).");
+                    break;
+                }
             }
 
-            double[] heights = null;
-            yield return RtgTerrainHeightSampler.SampleHeightsCoroutine(
-                tileset,
-                requests,
-                sampled => heights = sampled);
-
-            if (heights == null) yield break;
-
-            for (int i = 0; i < _pendingResourceAnchors.Count && i < heights.Length; i++)
+            if (anchoredCount == 0)
             {
-                ResourceAnchorPending pending = _pendingResourceAnchors[i];
-                if (pending.Root == null) continue;
-                AnchorAt(pending.Root, pending.Longitude, pending.Latitude, heights[i]);
+                Debug.LogWarning(
+                    "[RTG] Terrain anchoring failed — markers remain at ellipsoid fallback height. " +
+                    "Enter Play mode and wait for Cesium tiles, or run Build Everything.");
             }
+
+            _pendingTerrainAnchors.Clear();
         }
 
         private static void EnsureAllMarkersVisible(Transform container)
@@ -421,6 +706,70 @@ namespace RoutesToGlory.Game
             drawer?.Clear();
         }
 
+        /// <summary>Respawns resource deposits only (e.g. after xenite rotation tuning).</summary>
+        public void RefreshResourceDepositsOnly()
+        {
+            if (LastMap?.resources == null)
+            {
+                Debug.LogWarning("[RTG] Cannot refresh deposits — no map loaded.");
+                return;
+            }
+
+            Transform container = transform.Find(MarkerContainerName);
+            if (container == null)
+            {
+                Debug.LogWarning("[RTG] Cannot refresh deposits — no marker container.");
+                return;
+            }
+
+            var toDestroy = new List<GameObject>();
+            foreach (RtgMapMarker marker in container.GetComponentsInChildren<RtgMapMarker>(true))
+            {
+                if (marker.kind == RtgMapMarker.Kind.Resource)
+                    toDestroy.Add(marker.gameObject);
+            }
+
+            for (int i = _pendingTerrainAnchors.Count - 1; i >= 0; i--)
+            {
+                GameObject root = _pendingTerrainAnchors[i].Root;
+                if (root == null || toDestroy.Contains(root))
+                    _pendingTerrainAnchors.RemoveAt(i);
+            }
+
+            foreach (GameObject go in toDestroy)
+                DestroyObject(go);
+
+            int resources = 0, xeniteTripo = 0, xeniteProcedural = 0;
+            foreach (RtgResourceNode r in LastMap.resources)
+            {
+                if (!RtgTerrainDepositGuards.IsActivePocDeposit(r.resource_id))
+                    continue;
+
+                bool usedTripo = SpawnResource(r, container);
+                resources++;
+                if (r.resource_id == "xenite")
+                {
+                    if (usedTripo) xeniteTripo++;
+                    else xeniteProcedural++;
+                }
+            }
+
+            RtgMapMarkerRegistry.Refresh();
+            if (ShouldAnchorMarkersToTerrain())
+                StartTerrainAnchorRoutine();
+
+            string xeniteDetail = xeniteTripo + xeniteProcedural == 0
+                ? "0 xenite"
+                : $"{xeniteTripo + xeniteProcedural} xenite ({xeniteTripo} Tripo, {xeniteProcedural} procedural)";
+            Debug.Log($"[RTG] Refreshed {resources} resource deposit(s) ({xeniteDetail}).");
+        }
+
+        /// <summary>After world reset — always re-fetch for LiveApi (never stale LastMap).</summary>
+        public void ReloadMarkersAfterReset()
+        {
+            ReloadAfterWorldReset(preferSync: !Application.isPlaying);
+        }
+
         private Transform ResetContainer()
         {
             ClearMarkers();
@@ -447,6 +796,16 @@ namespace RoutesToGlory.Game
                 GetEmissiveMaterial(color),
                 GetGlowPadMaterial(color));
             AnchorAt(root, lng, lat, groundHeightMeters + groundMarkerClearanceM);
+            if (anchorSettlementsToTerrain)
+            {
+                _pendingTerrainAnchors.Add(new MarkerAnchorPending
+                {
+                    Root = root,
+                    Longitude = lng,
+                    Latitude = lat,
+                    SurfaceClearanceM = groundMarkerClearanceM,
+                });
+            }
             AddLabel(root.transform, $"{s.name}\n{TierLabel(s.tier)} · {s.alignment}{tapTag}",
                 visual.LabelHeightM, groundLabelSizeFactor);
             root.AddComponent<RtgMapMarker>().Configure(
@@ -454,9 +813,11 @@ namespace RoutesToGlory.Game
             RtgMapMarkerRegistry.Register(root.GetComponent<RtgMapMarker>());
         }
 
-        private void SpawnResource(RtgResourceNode r, Transform container)
+        private bool SpawnResource(RtgResourceNode r, Transform container)
         {
             Color color = ResourceColor(r.resource_id);
+            if (r.resource_id == "xenite")
+                RtgTerrainDepositGuards.WarnIfXeniteColorDrift(color);
 
             double lat = r.lat, lng = r.lng;
             string tapTag = ApplyTapTestScatter(ref lat, ref lng, false, r.id);
@@ -471,12 +832,16 @@ namespace RoutesToGlory.Game
                 GetEmissiveMaterial(color),
                 GetDepositGlowMaterial(color));
             AnchorAt(root, lng, lat, groundHeightMeters);
-            _pendingResourceAnchors.Add(new ResourceAnchorPending
+            if (anchorDepositsToTerrain)
             {
-                Root = root,
-                Longitude = lng,
-                Latitude = lat,
-            });
+                _pendingTerrainAnchors.Add(new MarkerAnchorPending
+                {
+                    Root = root,
+                    Longitude = lng,
+                    Latitude = lat,
+                    SurfaceClearanceM = depositSurfaceClearanceM,
+                });
+            }
 
             string biomeTag = string.IsNullOrEmpty(r.biome) ? "" : $"\n{BiomeLabel(r.biome)}";
             AddLabel(root.transform, $"{ResourceName(r.resource_id)}\n{r.richness}{biomeTag}{tapTag}",
@@ -484,6 +849,7 @@ namespace RoutesToGlory.Game
             root.AddComponent<RtgMapMarker>().Configure(
                 RtgMapMarker.Kind.Resource, r.id, ResourceName(r.resource_id), r.richness, lat, lng);
             RtgMapMarkerRegistry.Register(root.GetComponent<RtgMapMarker>());
+            return visual.UsedTripoPrefab;
         }
 
         private string SelectCorridorGoodieTarget(RtgWorldMap map)
@@ -706,6 +1072,7 @@ namespace RoutesToGlory.Game
 
             Color glow = color;
             glow.a = 0.18f;
+            RtgTerrainDepositGuards.WarnIfDepositGlowTooStrong(glow.a);
             if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", glow);
             if (mat.HasProperty("_Color")) mat.SetColor("_Color", glow);
             if (mat.HasProperty("_Surface"))
@@ -736,7 +1103,7 @@ namespace RoutesToGlory.Game
         {
             switch (resourceId)
             {
-                case "xenite":         return new Color(0.40f, 1.00f, 0.50f);
+                case "xenite":         return RtgTerrainDepositGuards.XeniteCanonicalColor;
                 case "solari_dust":    return new Color(1.00f, 0.85f, 0.30f);
                 case "ferracite":      return new Color(1.00f, 0.55f, 0.25f);
                 case "lumin_spring":   return new Color(0.40f, 0.95f, 1.00f);
@@ -798,8 +1165,8 @@ namespace RoutesToGlory.Game
 
         private static void DestroyObject(UnityEngine.Object obj)
         {
-            if (Application.isPlaying) Destroy(obj);
-            else DestroyImmediate(obj);
+            if (obj == null) return;
+            DestroyImmediate(obj);
         }
     }
 }

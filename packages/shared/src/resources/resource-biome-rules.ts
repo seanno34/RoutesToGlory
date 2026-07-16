@@ -2,7 +2,8 @@ import type { AlienResourceId } from '../types/enums.js';
 import type { TerrainBiome } from '../map/terrain-biome.js';
 import { ALIEN_RESOURCE_IDS, ALIEN_RESOURCES } from './alien-resources.js';
 
-/** Preferred biomes per resource — Phase 2 spawn + deposit placement. */
+/** Preferred biomes per resource — Phase 2 spawn + deposit placement.
+ *  Xenite v1 art: docs/XENITE_DEPOSIT_DESIGN_BRIEF.md (rift primary). */
 export const RESOURCE_BIOME_PREFERENCES: Record<AlienResourceId, TerrainBiome[]> = {
   xenite: ['xeno_rift', 'xeno_highland', 'xeno_wasteland'],
   solari_dust: ['xeno_plains', 'xeno_wasteland', 'xeno_highland'],

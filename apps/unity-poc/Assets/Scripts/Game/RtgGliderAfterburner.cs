@@ -646,8 +646,8 @@ namespace RoutesToGlory.Game
                 CavityCoreRenderer = coreRenderer,
                 PlumeOuterRenderer = plumeOuterRenderer,
                 PlumeCoreRenderer = plumeCoreRenderer,
-                NozzleBloom = CreateNozzleBloom(nozzle, sizeScale),
-                NozzleMaterial = null,
+                NozzleBloom = CreateNozzleBloom(nozzle, sizeScale, out Material nozzleMat),
+                NozzleMaterial = nozzleMat,
                 CavityOuterMaterial = outerMat,
                 CavityCoreMaterial = coreMat,
                 PlumeOuterMaterial = plumeOuterMat,
@@ -662,11 +662,6 @@ namespace RoutesToGlory.Game
                 Weight = weight,
                 SizeScale = sizeScale,
             });
-
-            EngineVfx last = _engines[_engines.Count - 1];
-            if (last.NozzleBloom != null)
-                last.NozzleMaterial = last.NozzleBloom.GetComponent<MeshRenderer>().material;
-            _engines[_engines.Count - 1] = last;
         }
 
         private ParticleSystem CreateFlameStreakSystem(
@@ -730,7 +725,7 @@ namespace RoutesToGlory.Game
             renderer.normalDirection = 1f;
             instanceMaterial = new Material(_streakMaterial) { name = "RTG_ExhaustStreak_Runtime" };
             ApplyAdditiveTint(instanceMaterial, new Color(1f, 0.4f, 0.05f) * colorIntensity * 2f);
-            renderer.material = instanceMaterial;
+            renderer.sharedMaterial = instanceMaterial;
             renderer.sortingOrder = 9;
 
             _ = weight;
@@ -791,7 +786,7 @@ namespace RoutesToGlory.Game
             renderer.renderMode = ParticleSystemRenderMode.Billboard;
             instanceMaterial = new Material(_flipbookMaterial) { name = "RTG_ExhaustFlipbook_Runtime" };
             ApplyAdditiveTint(instanceMaterial, new Color(1f, 0.35f, 0.03f) * colorIntensity * 1.8f);
-            renderer.material = instanceMaterial;
+            renderer.sharedMaterial = instanceMaterial;
             renderer.sortingOrder = 8;
 
             _ = weight;
@@ -874,7 +869,7 @@ namespace RoutesToGlory.Game
             meshRenderer.receiveShadows = false;
             instanceMaterial = new Material(template) { name = $"RTG_{name}_Runtime" };
             ApplyExhaustTexture(instanceMaterial, RtgGliderExhaustTextures.CavityFill);
-            meshRenderer.material = instanceMaterial;
+            meshRenderer.sharedMaterial = instanceMaterial;
             meshRenderer.sortingOrder = sortingOrder;
             ApplyOrbTint(meshRenderer, instanceMaterial, null, Color.black);
             return go.transform;
@@ -901,13 +896,13 @@ namespace RoutesToGlory.Game
             meshRenderer.shadowCastingMode = ShadowCastingMode.Off;
             meshRenderer.receiveShadows = false;
             instanceMaterial = new Material(template) { name = $"RTG_{name}_Runtime" };
-            meshRenderer.material = instanceMaterial;
+            meshRenderer.sharedMaterial = instanceMaterial;
             meshRenderer.sortingOrder = sortingOrder;
             ApplyOrbTint(meshRenderer, instanceMaterial, null, Color.black);
             return go.transform;
         }
 
-        private Transform CreateNozzleBloom(Transform nozzle, float sizeScale)
+        private Transform CreateNozzleBloom(Transform nozzle, float sizeScale, out Material instanceMaterial)
         {
             var go = new GameObject($"{nozzle.name}_Nozzle");
             go.transform.SetParent(nozzle, false);
@@ -921,7 +916,8 @@ namespace RoutesToGlory.Game
             var renderer = go.AddComponent<MeshRenderer>();
             renderer.shadowCastingMode = ShadowCastingMode.Off;
             renderer.receiveShadows = false;
-            renderer.material = new Material(_nozzleMaterial) { name = "RTG_NozzleBloom_Runtime" };
+            instanceMaterial = new Material(_nozzleMaterial) { name = "RTG_NozzleBloom_Runtime" };
+            renderer.sharedMaterial = instanceMaterial;
             renderer.sortingOrder = 10;
             go.SetActive(false);
             return go.transform;

@@ -14,7 +14,12 @@ namespace RoutesToGlory.Game
     /// in the editor, or real device GPS), and optionally makes the fly camera follow
     /// it. This is the Step 4 "real movement to position" plumbing: real-world
     /// movement → lat/lng → CesiumGlobeAnchor → world position.
+    ///
+    /// <para><b>Terrain elevation pipeline</b> (see <see cref="RtgTerrainElevationGuards"/>):
+    /// Update queues corridor samples; LateUpdate applies glider height then feeds Light Road.
+    /// Do not set marker ellipsoid height in Update — causes bounce vs Cesium tiles.</para>
     /// </summary>
+    [DefaultExecutionOrder(RtgTerrainElevationGuards.PlayerLocationExecutionOrder)]
     public class RtgPlayerLocation : MonoBehaviour
     {
         // Manual = real device GPS (ship only moves when you move).
@@ -58,6 +63,9 @@ namespace RoutesToGlory.Game
 
         [Tooltip("Fine-tune rotation after auto-orient (usually leave at 0,0,0).")]
         public Vector3 shipHullEulerOffset = Vector3.zero;
+
+        [Tooltip("Euler rotation for Tripo xenite deposits at spawn (Settings → Xenite deposit).")]
+        public Vector3 xeniteDepositEulerOffset = RtgXeniteDepositTuningConfig.DefaultEulerOffset;
 
         [Tooltip("Tripo hull auto-orient. Disable when tuning orientation manually.")]
         public bool shipAutoOrientImportedHull = true;
@@ -391,6 +399,10 @@ namespace RoutesToGlory.Game
         private double _smoothDisplayLng;
         private bool _hasSmoothDisplay;
 
+        private double _anchorLat;
+        private double _anchorLng;
+        private bool _hasAnchorPosition;
+
         private Vector3 _lastMotionSamplePos;
         private bool _hasMotionSample;
         private float _groundSpeedMps;
@@ -420,13 +432,19 @@ namespace RoutesToGlory.Game
             ClampSpeedThrottle();
             EnsureExhaustColorStops();
             EnsureMarker();
+            EnsureDefaultShipArt();
             if (RtgShipTuningConfig.TryLoad(out RtgShipTuningConfig.ShipTuningFile tuning))
             {
                 RtgShipTuningConfig.ApplyTo(this, tuning);
                 Debug.Log(
-                    $"[RTG] Loaded exhaust — main={shipMainEngineLocal} " +
-                    $"left={shipLeftEngineLocal} right={shipRightEngineLocal}");
+                    $"[RTG] Loaded ship tuning — hullEuler={shipHullEulerOffset} " +
+                    $"autoOrient={shipAutoOrientImportedHull} heading={shipHeadingOffsetDegrees} " +
+                    $"main={shipMainEngineLocal} left={shipLeftEngineLocal} right={shipRightEngineLocal}");
             }
+            if (RtgXeniteDepositTuningConfig.TryLoad(out RtgXeniteDepositTuningConfig.XeniteDepositTuningFile xeniteTuning))
+                xeniteDepositEulerOffset = xeniteTuning.depositEulerOffset;
+            else
+                RtgXeniteDepositTuningConfig.ApplyRuntimeEuler(xeniteDepositEulerOffset);
             RefreshMarkerVisual();
             EnsureTerrainHeight();
             EnsureLightRoad();
@@ -497,23 +515,20 @@ namespace RoutesToGlory.Game
 
                 ApplySmoothedDisplayPosition(targetLat, targetLng, out double displayLat, out double displayLng);
 
-                double heightM;
+                _anchorLat = displayLat;
+                _anchorLng = displayLng;
+                _hasAnchorPosition = true;
+
                 if (_terrainHeight == null)
                     EnsureTerrainHeight();
 
                 if (_terrainHeight != null)
                 {
-                    _terrainHeight.QueueForwardSamplesIfNeeded(
-                        displayLat, displayLng, _travelHeadingRad);
-                    heightM = _terrainHeight.GetClearancePlacementHeight(
+                    // Queue async Cesium samples ahead of LateUpdate clearance pass.
+                    // REGRESSION: do not set marker height here — ApplyMarkerTerrainHeight runs in LateUpdate.
+                    _terrainHeight.QueueCorridorSamplesIfNeeded(
                         displayLat, displayLng, _travelHeadingRad);
                 }
-                else
-                {
-                    heightM = groundHeightMeters + markerHeight;
-                }
-
-                _markerAnchor.SetPositionLongitudeLatitudeHeight(displayLng, displayLat, heightM);
 
                 // First real fix — begin tracing the Light Road (avoids a stray
                 // segment from wherever the marker sat before we had a position).
@@ -535,6 +550,7 @@ namespace RoutesToGlory.Game
         private void ResetDisplayPositionSmoothing()
         {
             _hasSmoothDisplay = false;
+            _hasAnchorPosition = false;
         }
 
         private void ApplySmoothedDisplayPosition(
@@ -562,18 +578,45 @@ namespace RoutesToGlory.Game
             displayLng = _smoothDisplayLng;
         }
 
+        /// <summary>
+        /// Terrain elevation order (regression-sensitive):
+        /// 1. ApplyMarkerTerrainHeight — glider corridor commitment
+        /// 2. UpdateTravelHeading / UpdateShipMotion — speed for corridor min-distance
+        /// 3. Light Road SetMovementContext — trail runs at LightRoadExecutionOrder after this
+        /// </summary>
         private void LateUpdate()
         {
             if (_marker != null)
             {
+                ApplyMarkerTerrainHeight();
                 UpdateTravelHeading();
                 UpdateShipMotion();
+                if (_lightRoad != null)
+                    _lightRoad.SetMovementContext(_travelHeadingRad, _groundSpeedMps);
             }
 
             UpdateCameraFollow();
 
             if (_marker != null)
                 TickPathfinderBeam();
+        }
+
+        /// <summary>
+        /// Glider ellipsoid height. REGRESSION: use GetClearancePlacementHeight only —
+        /// not GetGroundHeight, raw raycast, or instant snap. See RtgTerrainElevationGuards.
+        /// </summary>
+        private void ApplyMarkerTerrainHeight()
+        {
+            if (!_hasAnchorPosition || _markerAnchor == null) return;
+
+            double heightM = groundHeightMeters + markerHeight;
+            if (_terrainHeight != null)
+            {
+                heightM = _terrainHeight.GetClearancePlacementHeight(
+                    _anchorLat, _anchorLng, _travelHeadingRad, _groundSpeedMps);
+            }
+
+            _markerAnchor.SetPositionLongitudeLatitudeHeight(_anchorLng, _anchorLat, heightM);
         }
 
         private void UpdateShipMotion()
@@ -1160,6 +1203,186 @@ namespace RoutesToGlory.Game
             SyncMarkerVisual(_marker);
         }
 
+        /// <summary>
+        /// Re-establish camera follow after marker reload. Does not rebuild the ship
+        /// unless the visual is missing (avoids stacking gliders on Clear Routes).
+        /// </summary>
+        public void RefreshAfterWorldReset()
+        {
+            EnsureDefaultShipArt();
+
+            if (_cockpitView != null && _cockpitView.IsActive)
+                ExitCockpit(immediate: true);
+
+            EnsureMarker();
+            if (!HasHealthyShipVisual())
+                RefreshMarkerVisual();
+            else
+                SetShipVisible(true);
+
+            if (!Application.isPlaying)
+                return;
+
+            EnsureTerrainHeight();
+            EnsureCameraManager();
+
+            _panned = false;
+            _hasHeadingSample = false;
+            _hasMotionSample = false;
+
+            if (_marker != null)
+            {
+                _focusTarget = _marker.position;
+                _focus = _focusTarget;
+            }
+
+            if (followWithCamera)
+                SetFollowActive(true);
+        }
+
+        private bool HasHealthyShipVisual()
+        {
+            if (_marker == null)
+                return false;
+
+            Transform ship = _marker.Find("Ship");
+            if (ship == null)
+                return false;
+
+            if (_shipVisual == null)
+                _shipVisual = ship.GetComponent<RtgPlayerShipVisual>();
+
+            return _shipVisual != null && _shipVisual.IsReady;
+        }
+
+        /// <summary>
+        /// Full glider rebuild: hull prefab, tuning, marker position, exhaust, and camera follow.
+        /// Used by Routes to Glory → Regenerate Playable World and world-reset flows.
+        /// </summary>
+        public void RegeneratePresentation()
+        {
+            if (RtgShipTuningConfig.TryLoad(out RtgShipTuningConfig.ShipTuningFile shipTuning))
+                RtgShipTuningConfig.ApplyTo(this, shipTuning);
+
+            if (RtgXeniteDepositTuningConfig.TryLoad(out RtgXeniteDepositTuningConfig.XeniteDepositTuningFile xeniteTuning))
+                RtgXeniteDepositTuningConfig.ApplyTo(this, xeniteTuning);
+            else
+                RtgXeniteDepositTuningConfig.ApplyRuntimeEuler(xeniteDepositEulerOffset);
+
+            EnsureDefaultShipArt();
+            EnsureExhaustColorStops();
+            EditorApplyPathfinderBeamSettings();
+
+            EnsureMarker();
+            ClearMarkerVisualChildren(_marker);
+            RefreshMarkerVisual();
+            EditorPlaceAtStart();
+
+            if (_cockpitView != null && _cockpitView.IsActive)
+                ExitCockpit(immediate: true);
+            else
+                SetShipVisible(true);
+
+            if (!Application.isPlaying)
+                return;
+
+            EnsureTerrainHeight();
+            EnsureCameraManager();
+            EnsureCockpitView();
+            EnsureCockpitRearCamera();
+            EnsurePathfinderBeam();
+            ApplyShipExhaustColors();
+
+            _panned = false;
+            _hasHeadingSample = false;
+            _hasMotionSample = false;
+
+            if (_marker != null)
+            {
+                _focusTarget = _marker.position;
+                _focus = _focusTarget;
+            }
+
+            if (followWithCamera)
+                SetFollowActive(true);
+        }
+
+        /// <summary>
+        /// Editor prefers TripoModels FBX (textured). Device/player uses Resources only — see TRIPO HULL
+        /// GUARDRAILS on <see cref="RtgPlayerShipVisual"/>.
+        /// </summary>
+        private void EnsureDefaultShipHullPrefab()
+        {
+#if UNITY_EDITOR
+            GameObject sourceHull = UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>(
+                "Assets/TripoModels/futuristic_fighter_3d_model/futuristic_fighter_3d_model.fbx");
+            if (RtgPlayerShipVisual.IsValidHullPrefab(sourceHull))
+            {
+                shipHullPrefab = sourceHull;
+                return;
+            }
+#else
+            if (shipHullPrefab != null && !RtgPlayerShipVisual.IsValidHullPrefab(shipHullPrefab))
+                shipHullPrefab = null;
+#endif
+
+            GameObject resourcesHull = RtgPlayerShipVisual.LoadResourcesHullPrefab();
+            if (RtgPlayerShipVisual.IsValidHullPrefab(resourcesHull))
+            {
+                shipHullPrefab = resourcesHull;
+                return;
+            }
+
+            if (RtgPlayerShipVisual.IsValidHullPrefab(shipHullPrefab))
+                return;
+
+            shipHullPrefab = null;
+#if UNITY_EDITOR
+            GameObject editorHull = UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>(
+                "Assets/Resources/RTG_PlayerShip/TripoGlider/TripoGlider.prefab");
+            if (RtgPlayerShipVisual.IsValidHullPrefab(editorHull))
+            {
+                shipHullPrefab = editorHull;
+                return;
+            }
+
+            editorHull = UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>(
+                "Assets/Resources/RTG_PlayerShip/TripoGlider/futuristic_fighter_3d_model.fbx");
+            if (RtgPlayerShipVisual.IsValidHullPrefab(editorHull))
+            {
+                shipHullPrefab = editorHull;
+                return;
+            }
+
+            editorHull = UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>(
+                "Assets/TripoModels/futuristic_fighter_3d_model/futuristic_fighter_3d_model.fbx");
+            if (RtgPlayerShipVisual.IsValidHullPrefab(editorHull))
+                shipHullPrefab = editorHull;
+#endif
+        }
+
+        private void EnsureDefaultShipArt()
+        {
+            EnsureDefaultShipHullPrefab();
+            if (shipTexture == null)
+                shipTexture = Resources.Load<Texture2D>(RtgPlayerShipVisual.ResourcesGliderTexturePath);
+            if (cockpitTexture == null)
+                cockpitTexture = Resources.Load<Texture2D>(RtgPlayerShipVisual.ResourcesCockpitTexturePath);
+            if (cockpitPortraitTexture == null)
+            {
+                cockpitPortraitTexture = Resources.Load<Texture2D>(
+                    RtgPlayerShipVisual.ResourcesCockpitPortraitTexturePath);
+            }
+        }
+
+        private bool CanBuildImportedShip()
+        {
+            EnsureDefaultShipHullPrefab();
+            if (RtgPlayerShipVisual.IsValidHullPrefab(shipHullPrefab))
+                return true;
+            return RtgPlayerShipVisual.HasResourcesHull();
+        }
+
         private void SyncMarkerVisual(Transform root)
         {
             Transform beacon = root.Find("Beacon");
@@ -1167,17 +1390,34 @@ namespace RoutesToGlory.Game
 
             if (markerStyle == PlayerMarkerStyle.SpaceshipSprite)
             {
-                if (beacon != null) DestroyImmediateSafe(beacon.gameObject);
-                if (ship != null && HasLegacyFlatShipMesh(ship))
-                    DestroyImmediateSafe(ship.gameObject);
+                ClearMarkerVisualChildren(root);
                 BuildShipVisual(root);
                 return;
             }
 
-            if (ship != null) DestroyImmediateSafe(ship.gameObject);
-            _shipVisual = null;
-            if (beacon != null) DestroyImmediateSafe(beacon.gameObject);
+            ClearMarkerVisualChildren(root);
             BuildGoldPinVisual(root);
+        }
+
+        private void ClearMarkerVisualChildren(Transform root)
+        {
+            if (root == null)
+                return;
+
+            _shipVisual = null;
+            for (int i = root.childCount - 1; i >= 0; i--)
+            {
+                Transform child = root.GetChild(i);
+                if (child.name == "Ship" || child.name == "Beacon")
+                    DestroyVisualImmediate(child.gameObject);
+            }
+        }
+
+        private static void DestroyVisualImmediate(UnityEngine.Object obj)
+        {
+            if (obj == null)
+                return;
+            DestroyImmediate(obj);
         }
 
         private void EnsureLightRoad()
@@ -1185,6 +1425,7 @@ namespace RoutesToGlory.Game
             if (!drawLightRoad || !Application.isPlaying || _marker == null) return;
             if (_lightRoad != null) return;
 
+            // Light Road uses DefaultExecutionOrder(LightRoadExecutionOrder) — must trail glider LateUpdate.
             var go = new GameObject("Light Road");
             go.SetActive(false);
             go.transform.SetParent(transform, false);
@@ -1214,6 +1455,52 @@ namespace RoutesToGlory.Game
             }
 
             _terrainHeight.Configure(groundHeightMeters, markerHeight);
+            ApplyTerrainClearanceTuning();
+        }
+
+        private void ApplyTerrainClearanceTuning()
+        {
+            if (_terrainHeight == null) return;
+
+            if (RtgTerrainClearanceTuningConfig.TryLoad(
+                    out RtgTerrainClearanceTuningConfig.TerrainClearanceTuningFile tuning))
+            {
+                RtgTerrainClearanceTuningConfig.ApplyTo(_terrainHeight, tuning);
+            }
+        }
+
+        private void SaveTerrainClearanceTuning()
+        {
+            if (_terrainHeight == null)
+                EnsureTerrainHeight();
+            if (_terrainHeight == null) return;
+
+            if (RtgTerrainClearanceTuningConfig.TrySave(
+                    RtgTerrainClearanceTuningConfig.CaptureFrom(_terrainHeight),
+                    out string savedPath))
+            {
+                Debug.Log($"[RTG] Saved terrain clearance tuning → {savedPath}");
+            }
+        }
+
+        private void ReloadTerrainClearanceTuning()
+        {
+            if (_terrainHeight == null)
+                EnsureTerrainHeight();
+            if (_terrainHeight == null) return;
+
+            if (!RtgTerrainClearanceTuningConfig.TryLoad(
+                    out RtgTerrainClearanceTuningConfig.TerrainClearanceTuningFile tuning))
+            {
+                RtgTerrainClearanceTuningConfig.ApplyTo(
+                    _terrainHeight,
+                    RtgTerrainClearanceTuningConfig.Defaults());
+                Debug.LogWarning(
+                    $"[RTG] No {RtgTerrainClearanceTuningConfig.FileName} found — applied built-in defaults.");
+                return;
+            }
+
+            RtgTerrainClearanceTuningConfig.ApplyTo(_terrainHeight, tuning);
         }
 
         // Creates the route-session driver and hands it the live-API config from the
@@ -1268,6 +1555,7 @@ namespace RoutesToGlory.Game
         private void EnsureCockpitView()
         {
             if (!Application.isPlaying) return;
+            EnsureDefaultShipArt();
             _cockpitView = GetComponent<RtgCockpitView>();
             if (_cockpitView == null)
                 _cockpitView = gameObject.AddComponent<RtgCockpitView>();
@@ -1305,16 +1593,15 @@ namespace RoutesToGlory.Game
 
         private void BuildShipVisual(Transform root)
         {
-            Transform existingShip = root.Find("Ship");
-            if (existingShip != null) DestroyImmediateSafe(existingShip.gameObject);
-            _shipVisual = null;
+            ClearMarkerVisualChildren(root);
 
+            EnsureDefaultShipArt();
             Texture2D tex = ResolveShipTexture();
-            if (tex == null)
+            if (tex == null && !CanBuildImportedShip())
             {
                 Debug.LogWarning(
-                    "[RTG] Ship texture missing — falling back to gold pin. " +
-                    "Run Routes to Glory → 8b. Sync Player Ship Art.");
+                    "[RTG] Ship texture and Tripo hull missing — falling back to gold pin. " +
+                    "Run Routes to Glory → Regenerate Playable World before building for device.");
                 BuildGoldPinVisual(root);
                 return;
             }
@@ -1322,6 +1609,7 @@ namespace RoutesToGlory.Game
             var shipGo = new GameObject("Ship");
             shipGo.transform.SetParent(root, false);
             _shipVisual = shipGo.AddComponent<RtgPlayerShipVisual>();
+
             _shipVisual.Configure(
                 tex,
                 shipSizeMeters,
@@ -1398,7 +1686,7 @@ namespace RoutesToGlory.Game
         private Texture2D ResolveShipTexture()
         {
             if (shipTexture != null) return shipTexture;
-            return Resources.Load<Texture2D>("RTG_PlayerShip/glider_01");
+            return Resources.Load<Texture2D>(RtgPlayerShipVisual.ResourcesGliderTexturePath);
         }
 
         private void ApplyShipHullTuning()
@@ -1611,6 +1899,41 @@ namespace RoutesToGlory.Game
             RtgShipTuningConfig.ApplyTo(this, tuning);
             RefreshMarkerVisual();
             ApplyShipExhaustColors();
+        }
+
+        private void SaveXeniteDepositTuning()
+        {
+            if (RtgXeniteDepositTuningConfig.TrySave(
+                    RtgXeniteDepositTuningConfig.CaptureFrom(this),
+                    out string savedPath))
+            {
+                Debug.Log(
+                    $"[RTG] Saved xenite deposit euler={xeniteDepositEulerOffset} → {savedPath}");
+            }
+        }
+
+        private void ReloadXeniteDepositTuning()
+        {
+            if (!RtgXeniteDepositTuningConfig.TryLoad(
+                    out RtgXeniteDepositTuningConfig.XeniteDepositTuningFile tuning))
+            {
+                Debug.LogWarning("[RTG] No rtg-xenite-deposit-tuning.json found to reload.");
+                return;
+            }
+
+            RtgXeniteDepositTuningConfig.ApplyTo(this, tuning);
+            ApplyXeniteDepositTuning();
+        }
+
+        private void ApplyXeniteDepositTuning()
+        {
+            RtgXeniteDepositTuningConfig.ApplyRuntimeEuler(xeniteDepositEulerOffset);
+#if UNITY_2023_1_OR_NEWER
+            RtgEchoSiteLoader loader = Object.FindFirstObjectByType<RtgEchoSiteLoader>();
+#else
+            RtgEchoSiteLoader loader = Object.FindObjectOfType<RtgEchoSiteLoader>();
+#endif
+            loader?.RefreshResourceDepositsOnly();
         }
 
         /// <summary>Travel direction on the ground plane (+Z = north). Radians.</summary>
@@ -2072,6 +2395,8 @@ namespace RoutesToGlory.Game
             bool showAutopilotParity = _activeSource == LocationSource.AutoPilot;
             bool showDeviceGpsTuning = _activeSource == LocationSource.Manual;
             bool showHullTuning = markerStyle == PlayerMarkerStyle.SpaceshipSprite;
+            bool showTerrainClearance = Application.isPlaying;
+            bool showXeniteTuning = Application.isPlaying;
 
             const float panelWidthDesired = 300f * scale;
             const float rowH = 56f * scale;
@@ -2086,6 +2411,12 @@ namespace RoutesToGlory.Game
             if (showPitch) scrollContentH += pitchH + pad;
             if (showAutopilotParity) scrollContentH += rowH * 2f + destFieldH + rowH + pad;
             if (showGps) scrollContentH += rowH * (showDeviceGpsTuning ? 3f : 1f) + pad;
+            if (showTerrainClearance)
+                scrollContentH += CalculateTerrainClearanceScrollHeight(
+                    rowH, hullSectionHeaderH, hullButtonRowH, pad);
+            if (showXeniteTuning)
+                scrollContentH += CalculateXeniteDepositTuningScrollHeight(
+                    rowH, hullSectionHeaderH, hullButtonRowH, pad);
             if (showHullTuning)
                 scrollContentH += CalculateHullTuningScrollHeight(rowH, hullSectionHeaderH, hullButtonRowH, scale, pad);
 
@@ -2219,6 +2550,20 @@ namespace RoutesToGlory.Game
                 }
             }
 
+            if (showTerrainClearance)
+            {
+                y += pad * 0.5f;
+                y = DrawTerrainClearanceSection(
+                    contentPanel, y, rowH, hullSectionHeaderH, hullButtonRowH, scale);
+            }
+
+            if (showXeniteTuning)
+            {
+                y += pad * 0.5f;
+                y = DrawXeniteDepositTuningSection(
+                    contentPanel, y, rowH, hullSectionHeaderH, hullButtonRowH, scale);
+            }
+
             if (showHullTuning)
             {
                 y += pad * 0.5f;
@@ -2229,6 +2574,241 @@ namespace RoutesToGlory.Game
 
             GUI.EndScrollView();
             _activeSettingsScrollViewport = null;
+        }
+
+        private static float CalculateTerrainClearanceScrollHeight(
+            float rowH,
+            float sectionHeaderH,
+            float buttonRowH,
+            float pad)
+        {
+            return pad * 0.5f + sectionHeaderH + rowH * 10f + buttonRowH + pad;
+        }
+
+        private float DrawTerrainClearanceSection(
+            Rect panelRect,
+            float y,
+            float rowH,
+            float sectionHeaderH,
+            float buttonRowH,
+            float scale)
+        {
+            if (_terrainHeight == null)
+                EnsureTerrainHeight();
+            if (_terrainHeight == null)
+                return y;
+
+            var sectionStyle = BrightLabel(
+                Mathf.RoundToInt(14f * scale),
+                new Color(0.88f, 0.94f, 1f),
+                FontStyle.Bold);
+            GUI.Label(
+                new Rect(panelRect.x, y, panelRect.width, sectionHeaderH),
+                "Terrain clearance (corridor)",
+                sectionStyle);
+            // REGRESSION: sliders map to RtgTerrainHeight corridor fields — glider only.
+            // Light Road height is governed by RtgTerrainElevationGuards / RtgLightRoad.
+            y += sectionHeaderH;
+
+            _terrainHeight.corridorSampleSpacingM = DrawSettingSlider(
+                new Rect(panelRect.x, y, panelRect.width, rowH),
+                "Sample spacing (m)",
+                _terrainHeight.corridorSampleSpacingM,
+                4f,
+                30f,
+                "0",
+                scale);
+            y += rowH;
+
+            _terrainHeight.corridorLookAheadM = DrawSettingSlider(
+                new Rect(panelRect.x, y, panelRect.width, rowH),
+                "Look-ahead (m)",
+                _terrainHeight.corridorLookAheadM,
+                24f,
+                120f,
+                "0",
+                scale);
+            y += rowH;
+
+            _terrainHeight.consistencyBandM = DrawSettingSlider(
+                new Rect(panelRect.x, y, panelRect.width, rowH),
+                "Flat band (m)",
+                _terrainHeight.consistencyBandM,
+                0.3f,
+                4f,
+                "0.00",
+                scale);
+            y += rowH;
+
+            _terrainHeight.minConsistentDistanceSlowM = DrawSettingSlider(
+                new Rect(panelRect.x, y, panelRect.width, rowH),
+                "Min distance slow (m)",
+                _terrainHeight.minConsistentDistanceSlowM,
+                12f,
+                80f,
+                "0",
+                scale);
+            y += rowH;
+
+            _terrainHeight.minConsistentDistanceFastM = DrawSettingSlider(
+                new Rect(panelRect.x, y, panelRect.width, rowH),
+                "Min distance fast (m)",
+                _terrainHeight.minConsistentDistanceFastM,
+                8f,
+                60f,
+                "0",
+                scale);
+            y += rowH;
+
+            _terrainHeight.consistencyFullSpeedMps = DrawSettingSlider(
+                new Rect(panelRect.x, y, panelRect.width, rowH),
+                "Full-speed (m/s)",
+                _terrainHeight.consistencyFullSpeedMps,
+                5f,
+                60f,
+                "0",
+                scale);
+            y += rowH;
+
+            _terrainHeight.minLevelChangeM = DrawSettingSlider(
+                new Rect(panelRect.x, y, panelRect.width, rowH),
+                "Min level change (m)",
+                _terrainHeight.minLevelChangeM,
+                0.25f,
+                6f,
+                "0.00",
+                scale);
+            y += rowH;
+
+            _terrainHeight.committedBlendUpSeconds = DrawSettingSlider(
+                new Rect(panelRect.x, y, panelRect.width, rowH),
+                "Blend up (s)",
+                _terrainHeight.committedBlendUpSeconds,
+                0.05f,
+                2f,
+                "0.00",
+                scale);
+            y += rowH;
+
+            _terrainHeight.committedBlendDownSeconds = DrawSettingSlider(
+                new Rect(panelRect.x, y, panelRect.width, rowH),
+                "Blend down (s)",
+                _terrainHeight.committedBlendDownSeconds,
+                0.05f,
+                2f,
+                "0.00",
+                scale);
+            y += rowH;
+
+            bool raycastFallback = DrawSettingToggle(
+                new Rect(panelRect.x, y, panelRect.width, rowH),
+                "Raycast fallback",
+                _terrainHeight.useRaycastFallback,
+                scale);
+            if (raycastFallback != _terrainHeight.useRaycastFallback)
+                _terrainHeight.useRaycastFallback = raycastFallback;
+            y += rowH;
+
+            float buttonW = (panelRect.width - 8f * scale) * 0.5f;
+            var saveRect = new Rect(panelRect.x, y, buttonW, buttonRowH - 8f * scale);
+            var reloadRect = new Rect(saveRect.xMax + 8f * scale, y, buttonW, buttonRowH - 8f * scale);
+            RegisterGameUiRect(saveRect);
+            RegisterGameUiRect(reloadRect);
+
+            var prevBtn = GUI.skin.button.fontSize;
+            GUI.skin.button.fontSize = Mathf.RoundToInt(14f * scale);
+            if (GUI.Button(saveRect, "Save tuning"))
+                SaveTerrainClearanceTuning();
+            if (GUI.Button(reloadRect, "Reload"))
+                ReloadTerrainClearanceTuning();
+            GUI.skin.button.fontSize = prevBtn;
+            y += buttonRowH;
+
+            return y;
+        }
+
+        private static float CalculateXeniteDepositTuningScrollHeight(
+            float rowH,
+            float sectionHeaderH,
+            float buttonRowH,
+            float pad)
+        {
+            return pad * 0.5f + sectionHeaderH + rowH * 3f + buttonRowH + pad;
+        }
+
+        private float DrawXeniteDepositTuningSection(
+            Rect panelRect,
+            float y,
+            float rowH,
+            float sectionHeaderH,
+            float buttonRowH,
+            float scale)
+        {
+            var sectionStyle = BrightLabel(
+                Mathf.RoundToInt(14f * scale),
+                new Color(0.88f, 0.94f, 1f),
+                FontStyle.Bold);
+            GUI.Label(
+                new Rect(panelRect.x, y, panelRect.width, sectionHeaderH),
+                "Xenite deposit",
+                sectionStyle);
+            y += sectionHeaderH;
+
+            Vector3 previousEuler = xeniteDepositEulerOffset;
+
+            float pitchX = DrawSettingSlider(
+                new Rect(panelRect.x, y, panelRect.width, rowH),
+                "Deposit pitch X",
+                xeniteDepositEulerOffset.x,
+                -180f,
+                180f,
+                "0",
+                scale);
+            y += rowH;
+
+            float yawY = DrawSettingSlider(
+                new Rect(panelRect.x, y, panelRect.width, rowH),
+                "Deposit yaw Y",
+                xeniteDepositEulerOffset.y,
+                -180f,
+                180f,
+                "0",
+                scale);
+            y += rowH;
+
+            float rollZ = DrawSettingSlider(
+                new Rect(panelRect.x, y, panelRect.width, rowH),
+                "Deposit roll Z",
+                xeniteDepositEulerOffset.z,
+                -180f,
+                180f,
+                "0",
+                scale);
+            y += rowH;
+
+            float buttonW = (panelRect.width - 8f * scale) * 0.5f;
+            var saveRect = new Rect(panelRect.x, y, buttonW, buttonRowH - 8f * scale);
+            var reloadRect = new Rect(saveRect.xMax + 8f * scale, y, buttonW, buttonRowH - 8f * scale);
+            RegisterGameUiRect(saveRect);
+            RegisterGameUiRect(reloadRect);
+
+            var prevBtn = GUI.skin.button.fontSize;
+            GUI.skin.button.fontSize = Mathf.RoundToInt(14f * scale);
+            if (GUI.Button(saveRect, "Save tuning"))
+                SaveXeniteDepositTuning();
+            if (GUI.Button(reloadRect, "Reload"))
+                ReloadXeniteDepositTuning();
+            GUI.skin.button.fontSize = prevBtn;
+            y += buttonRowH;
+
+            Vector3 newEuler = new Vector3(pitchX, yawY, rollZ);
+            if (newEuler != previousEuler)
+            {
+                xeniteDepositEulerOffset = newEuler;
+                ApplyXeniteDepositTuning();
+            }
+
+            return y;
         }
 
         private static float CalculateHullTuningScrollHeight(
@@ -4301,6 +4881,14 @@ namespace RoutesToGlory.Game
                         _lightRoad.ClearRoad();
                         _roadStarted = false;
                     }
+
+#if UNITY_2023_1_OR_NEWER
+                    RtgEchoSiteLoader loader = Object.FindFirstObjectByType<RtgEchoSiteLoader>();
+#else
+                    RtgEchoSiteLoader loader = Object.FindObjectOfType<RtgEchoSiteLoader>();
+#endif
+                    loader?.ReloadMarkersAfterReset();
+                    RefreshAfterWorldReset();
                 }
 
                 Debug.Log(ok
