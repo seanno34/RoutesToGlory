@@ -112,11 +112,46 @@ namespace RoutesToGlory.Game
         /// <summary>Human-readable counts from the most recent SpawnAll (for editor menus).</summary>
         public string LastSpawnSummary { get; private set; } = "no markers spawned";
 
+        /// <summary>
+        /// When false (default until join), Play-mode loads / sample fallback / SpawnAll are blocked.
+        /// Set by <see cref="RtgGameSessionLogin"/> after Join or Editor sample.
+        /// </summary>
+        private bool _sessionLoadAllowed;
+
+        /// <summary>Allow or deny Play-mode world loads until login confirms a session.</summary>
+        public void SetSessionLoadAllowed(bool allowed)
+        {
+            _sessionLoadAllowed = allowed;
+            if (!allowed)
+            {
+                loadOnPlay = false;
+                ClearMarkers();
+                LastMap = null;
+                LoadedFromSampleFallback = false;
+                LastSpawnSummary = "waiting for login";
+            }
+        }
+
+        /// <summary>Clear the cached map without spawning (used while login gates play).</summary>
+        public void ClearCachedMap()
+        {
+            LastMap = null;
+            LoadedFromSampleFallback = false;
+        }
+
         /// <summary>Keep in-memory map routes aligned after incremental API refreshes.</summary>
         public void ApplyRouteSnapshot(RtgRoute[] routes)
         {
             if (LastMap == null) return;
             LastMap.routes = routes;
+        }
+
+        private bool CanLoadWorldInPlay()
+        {
+            if (!Application.isPlaying) return true;
+            if (_sessionLoadAllowed) return true;
+            // No login component → legacy scenes may still load.
+            return !RtgGameSessionLogin.IsBlockingWorldLoad(this);
         }
 
         // Cache runtime-created emissive materials by color so we don't leak one per marker.
@@ -136,22 +171,36 @@ namespace RoutesToGlory.Game
 
         private void Awake()
         {
+            // Gate before dev-config / Start so sample or LiveApi never auto-loads
+            // while the join overlay is up.
+            loadOnPlay = false;
+            _sessionLoadAllowed = false;
             RtgDevWorldConfig.TryApplyTo(this);
             RtgWorldScanSettings.Apply(preSurveyedWorld);
             RtgXeniteDepositTuningConfig.TryLoad(out _);
+            // Access-code login gates loadOnPlay until a session is applied.
+            RtgGameSessionLogin.EnsureOn(this);
         }
 
         private void Start()
         {
-            if (Application.isPlaying && loadOnPlay)
+            if (!Application.isPlaying || !loadOnPlay) return;
+            if (!CanLoadWorldInPlay())
             {
-                StartCoroutine(LoadRoutine());
+                loadOnPlay = false;
+                return;
             }
+            StartCoroutine(LoadRoutine());
         }
 
         /// <summary>Editor entry point: loads the sample file synchronously and spawns markers.</summary>
         public void LoadSampleImmediate()
         {
+            if (Application.isPlaying && !CanLoadWorldInPlay())
+            {
+                Debug.Log("[RTG] Sample world load blocked until login Join (or Editor sample button).");
+                return;
+            }
             string json = ReadSampleFile();
             if (string.IsNullOrEmpty(json)) return;
             SpawnAll(Parse(json));
@@ -161,6 +210,11 @@ namespace RoutesToGlory.Game
         public void SpawnFromJson(string json)
         {
             if (string.IsNullOrEmpty(json)) return;
+            if (Application.isPlaying && !CanLoadWorldInPlay())
+            {
+                Debug.Log("[RTG] Map spawn blocked until login Join.");
+                return;
+            }
             SpawnAll(Parse(json));
         }
 
@@ -170,6 +224,12 @@ namespace RoutesToGlory.Game
         /// </summary>
         public void ReloadFromConfiguredSource()
         {
+            if (Application.isPlaying && !CanLoadWorldInPlay())
+            {
+                Debug.Log("[RTG] World reload blocked until login Join.");
+                return;
+            }
+
             if (dataSource == DataSource.SampleFile)
             {
                 LoadSampleImmediate();
@@ -186,6 +246,7 @@ namespace RoutesToGlory.Game
 
         private IEnumerator LoadRoutine()
         {
+            if (!CanLoadWorldInPlay()) yield break;
             yield return FetchAndSpawn();
         }
 
@@ -193,6 +254,7 @@ namespace RoutesToGlory.Game
         public IEnumerator ReloadFromApi()
         {
             if (dataSource != DataSource.LiveApi) yield break;
+            if (Application.isPlaying && !CanLoadWorldInPlay()) yield break;
             LastMap = null;
             yield return FetchAndSpawn();
         }
@@ -269,6 +331,12 @@ namespace RoutesToGlory.Game
 
         private bool TryFallbackSample(string reason)
         {
+            if (Application.isPlaying && !CanLoadWorldInPlay())
+            {
+                Debug.Log($"[RTG] Skipping sample fallback ({reason}) — waiting for access-code Join.");
+                return false;
+            }
+
             Debug.LogWarning(
                 $"[RTG] Live map reload failed ({reason}) — falling back to {sampleFileName}. " +
                 "Start @empire/api or update apiBaseUrl in rtg-dev-world.json.");
@@ -346,6 +414,9 @@ namespace RoutesToGlory.Game
 
         private IEnumerator FetchAndSpawn()
         {
+            if (Application.isPlaying && !CanLoadWorldInPlay())
+                yield break;
+
             string json = null;
             LoadedFromSampleFallback = false;
 
@@ -357,6 +428,9 @@ namespace RoutesToGlory.Game
             {
                 yield return FetchLiveMapJson(result => json = result);
             }
+
+            if (Application.isPlaying && !CanLoadWorldInPlay())
+                yield break;
 
             if (!string.IsNullOrEmpty(json)) SpawnAll(Parse(json));
         }
@@ -392,7 +466,7 @@ namespace RoutesToGlory.Game
                 }
             }
 
-            if (fallbackToSampleOnApiFailure)
+            if (fallbackToSampleOnApiFailure && CanLoadWorldInPlay())
             {
                 Debug.LogWarning(
                     $"[RTG] Echo Site load failed ({primaryUrl}). Falling back to {sampleFileName}. " +
@@ -400,6 +474,12 @@ namespace RoutesToGlory.Game
                 LoadedFromSampleFallback = true;
                 done?.Invoke(ReadSampleFile());
                 yield break;
+            }
+
+            if (fallbackToSampleOnApiFailure && !CanLoadWorldInPlay())
+            {
+                Debug.Log(
+                    "[RTG] Skipping sample fallback — waiting for access-code Join.");
             }
 
             Debug.LogError(
@@ -466,6 +546,11 @@ namespace RoutesToGlory.Game
         public void SpawnAll(RtgWorldMap map)
         {
             if (map == null) return;
+            if (Application.isPlaying && !CanLoadWorldInPlay())
+            {
+                Debug.Log("[RTG] SpawnAll blocked until login Join.");
+                return;
+            }
 
             LastMap = map;
             Transform container = ResetContainer();

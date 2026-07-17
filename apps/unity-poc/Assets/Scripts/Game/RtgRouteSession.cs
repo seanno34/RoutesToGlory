@@ -844,10 +844,9 @@ namespace RoutesToGlory.Game
                 _apiUnreachableBlockedUntil = 0f;
             }
 
-            if (!string.IsNullOrWhiteSpace(_echoLoader.worldId))
-                worldId = _echoLoader.worldId;
-            if (!string.IsNullOrWhiteSpace(_echoLoader.empireId))
-                empireId = _echoLoader.empireId;
+            // Always mirror loader IDs (including clear on Exit → login).
+            worldId = _echoLoader.worldId ?? "";
+            empireId = _echoLoader.empireId ?? "";
         }
 
         private static string LocalhostApiBase(string baseUrl)
@@ -929,6 +928,7 @@ namespace RoutesToGlory.Game
         private void OnGUI()
         {
             if (!Application.isPlaying) return;
+            if (RtgGameSessionLogin.IsPlayBlocked()) return;
 
             const float margin = 16f;
 

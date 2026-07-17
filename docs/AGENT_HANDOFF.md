@@ -36,7 +36,7 @@ Last major push: **`0f3362d`** on `main` — Tripo hull editor + device renderin
 
 1. Open Unity project: `apps/unity-poc/`
 2. **Routes to Glory → Regenerate Playable World** (after Tripo/asset changes)
-3. **Play** — sample world map from `Assets/StreamingAssets/sample-world-map.json`
+3. **Play** — join overlay: enter **4-digit user PIN**, then **Join** a session or **New Game** (live API). Editor **Sample (Editor)** is offline-only.
 4. Save scene after structural edits (Cmd+S)
 
 For live API field tests: run API with sleep prevention (see §5).
@@ -151,7 +151,13 @@ Recent addition: Earth→alien biome mapping documented in `TERRAIN_BIOME_TAXONO
 
 ---
 
-## 8. Open / follow-up (not blocking)
+## 8. POC success criteria
+
+**Definition of done:** `docs/POC_SUCCESS_CRITERIA.md` — user PIN + game session select, sequential missions A–C (connect 5 Xenite → base camp → 24h reserves), Victory Stats, in-game Exit near Gear, New Game world gen on mobile + Editor.
+
+**Unity login (criterion 1):** Testers use a **4-digit user PIN** (`users.pin`) plus a **game session ID** (`worlds.access_code`). `RtgGameSessionLogin` calls `GET /worlds/saved?pin=…`, `GET /worlds/by-code/:code?pin=…`, and `POST /worlds` with `{ pin }` for **New Game**. Exit clears markers and returns to the overlay (PIN kept). Editor **Sample (Editor)** remains a secondary offline hatch only.
+
+## 9. Open / follow-up (not blocking)
 
 - **Web PWA** — scaffold exists; not the current focus.
 - **ENGINE_EVALUATION docs** — unstaged locally at handoff time.
@@ -161,7 +167,7 @@ Recent addition: Earth→alien biome mapping documented in `TERRAIN_BIOME_TAXONO
 
 ---
 
-## 9. Git & deploy notes
+## 10. Git & deploy notes
 
 - **Branch:** `main` (pushed through `0f3362d`)
 - **Do not commit:** `.env`, `tilesource.local.json`, local tuning JSON (gitignored), build artifacts, `deploy/rtg_api_bundle/` unless intentional.
@@ -169,7 +175,7 @@ Recent addition: Earth→alien biome mapping documented in `TERRAIN_BIOME_TAXONO
 
 ---
 
-## 10. Debugging checklist (ship)
+## 11. Debugging checklist (ship)
 
 1. Console: `[RTG] Player ship using Tripo imported hull.` **and** `albedo=<name>` (not `none`).
 2. Editor: Hierarchy `Player Marker → Ship → Hull → Model` has enabled `MeshRenderer`.
@@ -179,16 +185,17 @@ Recent addition: Earth→alien biome mapping documented in `TERRAIN_BIOME_TAXONO
 
 ---
 
-## 11. Conversation context
+## 12. Conversation context
 
 Recent agent work focused on:
 
-1. Xenite Tripo deposit integration + world reset menu cleanup  
-2. Regenerate Playable World (single command for full restore)  
-3. Xenite orientation sliders + `rtg-xenite-deposit-tuning.json`  
-4. Tripo hull **editor vs device** rendering (multi-day regression cycle — now fixed + documented)  
-5. Xenite stacking on slider refresh  
-6. Guardrail comments in ship pipeline code  
+1. **User PIN + game session login** — `RtgGameSessionLogin`, `users.pin` migration/heal, New Game + Exit near Gear  
+2. Xenite Tripo deposit integration + world reset menu cleanup  
+3. Regenerate Playable World (single command for full restore)  
+4. Xenite orientation sliders + `rtg-xenite-deposit-tuning.json`  
+5. Tripo hull **editor vs device** rendering (multi-day regression cycle — now fixed + documented)  
+6. Xenite stacking on slider refresh  
+7. Guardrail comments in ship pipeline code  
 
 Prior transcript (Tripo hull debugging arc): agent session `8e33b70d-51fa-4ef9-a06b-4a5c938af2d1` in Cursor agent transcripts.
 

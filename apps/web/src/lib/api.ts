@@ -113,17 +113,30 @@ export interface WorldMap {
 }
 
 export const api = {
-  listSavedWorlds: () =>
-    request<{ worlds: SavedWorldSummary[] }>('/worlds/saved'),
+  listSavedWorlds: (pin?: string) => {
+    const qs =
+      pin != null && String(pin).trim() !== ''
+        ? `?pin=${encodeURIComponent(String(pin).trim())}`
+        : '';
+    return request<{ worlds: SavedWorldSummary[] }>(`/worlds/saved${qs}`);
+  },
 
-  getWorldByCode: (code: string) =>
-    request<BootstrapWorld>(`/worlds/by-code/${encodeURIComponent(code.trim().toUpperCase())}`),
+  getWorldByCode: (code: string, pin?: string) => {
+    const qs =
+      pin != null && String(pin).trim() !== ''
+        ? `?pin=${encodeURIComponent(String(pin).trim())}`
+        : '';
+    return request<BootstrapWorld>(
+      `/worlds/by-code/${encodeURIComponent(code.trim().toUpperCase())}${qs}`,
+    );
+  },
 
   createWorld: (body?: {
     name?: string;
     playerName?: string;
     spawnLat?: number;
     spawnLng?: number;
+    pin?: string;
   }) =>
     request<BootstrapWorld>('/worlds', {
       method: 'POST',

@@ -55,6 +55,7 @@ namespace RoutesToGlory.Game
 
         private void Update()
         {
+            if (RtgGameSessionLogin.IsPlayBlocked()) return;
             if (_pendingGoodie != null) return;
 
             if (ReadPressDown(out Vector2 down))

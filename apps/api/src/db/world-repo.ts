@@ -8,6 +8,11 @@ import {
   backfillMissingAccessCodes,
   generateUniqueAccessCode,
 } from './access-code.js';
+import {
+  ensureUserPinSchema,
+  findOrCreateUserByPin,
+  normalizeUserPin,
+} from './user-pin.js';
 
 export interface CreateWorldInput {
   name: string;
@@ -16,6 +21,8 @@ export interface CreateWorldInput {
   playerName?: string;
   spawnLat?: number;
   spawnLng?: number;
+  /** When set, reuse/create the user for this 4-digit PIN instead of a fresh email user. */
+  pin?: string;
 }
 
 export interface WorldBootstrap {
@@ -80,12 +87,21 @@ export async function createWorldInDb(
     [worldId, input.difficulty ?? 'normal'],
   );
 
-  const userId = newId();
-  await query(`INSERT INTO users (id, display_name, email) VALUES (?, ?, ?)`, [
-    userId,
-    input.playerName ?? 'Explorer',
-    `dev-${slug}@rtg.local`,
-  ]);
+  const pin = normalizeUserPin(input.pin);
+  let userId: string;
+  const playerName = input.playerName ?? 'Explorer';
+
+  if (pin) {
+    const user = await findOrCreateUserByPin(pin, playerName);
+    userId = user.id;
+  } else {
+    userId = newId();
+    await query(`INSERT INTO users (id, display_name, email) VALUES (?, ?, ?)`, [
+      userId,
+      playerName,
+      `dev-${slug}@rtg.local`,
+    ]);
+  }
 
   const empireId = newId();
   await query(
@@ -95,7 +111,7 @@ export async function createWorldInDb(
       empireId,
       worldId,
       userId,
-      `${input.playerName ?? 'Explorer'} Empire`,
+      `${playerName} Empire`,
       spawnLat,
       spawnLng,
     ],
@@ -134,8 +150,19 @@ export async function createWorldInDb(
   };
 }
 
-export async function listSavedWorlds(): Promise<SavedWorldSummary[]> {
+export async function listSavedWorlds(
+  pin?: string | null,
+): Promise<SavedWorldSummary[]> {
   await backfillMissingAccessCodes();
+  await ensureUserPinSchema();
+
+  const normalizedPin = normalizeUserPin(pin);
+  const params: string[] = [];
+  let pinClause = '';
+  if (normalizedPin) {
+    pinClause = ' AND u.pin = ?';
+    params.push(normalizedPin);
+  }
 
   const result = await query<{
     access_code: string;
@@ -154,8 +181,9 @@ export async function listSavedWorlds(): Promise<SavedWorldSummary[]> {
      FROM worlds w
      JOIN empires e ON e.world_id = w.id
      JOIN users u ON u.id = e.user_id
-     WHERE w.status = 'active'
+     WHERE w.status = 'active'${pinClause}
      ORDER BY w.created_at DESC`,
+    params,
   );
 
   return result.rows.map((row) => ({
@@ -171,10 +199,16 @@ export async function listSavedWorlds(): Promise<SavedWorldSummary[]> {
   }));
 }
 
+export type WorldBootstrapLookup =
+  | { ok: true; world: SavedWorldSummary }
+  | { ok: false; reason: 'not_found' | 'pin_mismatch' };
+
 export async function getWorldBootstrapByAccessCode(
   code: string,
-): Promise<SavedWorldSummary | null> {
+  pin?: string | null,
+): Promise<WorldBootstrapLookup> {
   await backfillMissingAccessCodes();
+  await ensureUserPinSchema();
 
   const normalized = code.trim().toUpperCase();
   const result = await query<{
@@ -185,11 +219,12 @@ export async function getWorldBootstrapByAccessCode(
     empire_id: string;
     user_id: string;
     player_name: string;
+    user_pin: string | null;
     settlement_count: number;
     created_at: string;
   }>(
     `SELECT w.access_code, w.id AS world_id, w.slug, w.name, w.created_at,
-            e.id AS empire_id, e.user_id, u.display_name AS player_name,
+            e.id AS empire_id, e.user_id, u.display_name AS player_name, u.pin AS user_pin,
             (SELECT COUNT(*) FROM settlements s WHERE s.world_id = w.id) AS settlement_count
      FROM worlds w
      JOIN empires e ON e.world_id = w.id
@@ -201,19 +236,27 @@ export async function getWorldBootstrapByAccessCode(
 
   const row = result.rows[0];
   if (!row) {
-    return null;
+    return { ok: false, reason: 'not_found' };
+  }
+
+  const normalizedPin = normalizeUserPin(pin);
+  if (normalizedPin && row.user_pin !== normalizedPin) {
+    return { ok: false, reason: 'pin_mismatch' };
   }
 
   return {
-    accessCode: row.access_code,
-    id: row.world_id,
-    slug: row.slug,
-    name: row.name,
-    empireId: row.empire_id,
-    userId: row.user_id,
-    playerName: row.player_name,
-    settlementCount: Number(row.settlement_count),
-    createdAt: row.created_at,
+    ok: true,
+    world: {
+      accessCode: row.access_code,
+      id: row.world_id,
+      slug: row.slug,
+      name: row.name,
+      empireId: row.empire_id,
+      userId: row.user_id,
+      playerName: row.player_name,
+      settlementCount: Number(row.settlement_count),
+      createdAt: row.created_at,
+    },
   };
 }
 

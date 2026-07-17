@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Engine Evaluation — Routes to Glory</title>
+<style>
+  :root {
+    --bg: #0e1117;
+    --panel: #161b22;
+    --panel-2: #1c2230;
+    --border: #2a3140;
+    --text: #e6edf3;
+    --muted: #9aa7b4;
+    --accent: #4f9dff;
+    --accent-2: #7c5cff;
+    --good: #2ea043;
+    --good-bg: rgba(46,160,67,0.14);
+    --mid: #d29922;
+    --mid-bg: rgba(210,153,34,0.14);
+    --low: #d1495b;
+    --low-bg: rgba(209,73,91,0.14);
+    --code-bg: #0b0f16;
+    --pill: #223049;
+    --shadow: 0 10px 30px rgba(0,0,0,0.35);
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f6f8fa;
+      --panel: #ffffff;
+      --panel-2: #f0f3f7;
+      --border: #d8dee4;
+      --text: #1f2328;
+      --muted: #59636e;
+      --code-bg: #f2f4f7;
+      --pill: #e3ecfb;
+      --shadow: 0 10px 30px rgba(140,149,159,0.2);
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 0 24px 96px; }
+
+  header.hero {
+    background: linear-gradient(135deg, var(--accent-2), var(--accent));
+    color: #fff;
+    padding: 56px 24px 48px;
+    margin-bottom: 40px;
+    box-shadow: var(--shadow);
+  }
+  header.hero .inner { max-width: 960px; margin: 0 auto; }
+  header.hero .eyebrow {
+    text-transform: uppercase; letter-spacing: 2px; font-size: 12px;
+    font-weight: 700; opacity: 0.85; margin: 0 0 12px;
+  }
+  header.hero h1 { margin: 0 0 12px; font-size: 34px; line-height: 1.2; font-weight: 800; }
+  header.hero p { margin: 0; font-size: 17px; max-width: 720px; opacity: 0.95; }
+  .badges { margin-top: 20px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .badge {
+    background: rgba(255,255,255,0.18); border: 1px solid rgba(255,255,255,0.28);
+    padding: 5px 12px; border-radius: 999px; font-size: 13px; font-weight: 600;
+    backdrop-filter: blur(4px);
+  }
+
+  nav.toc {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    padding: 18px 22px; margin-bottom: 36px; box-shadow: var(--shadow);
+  }
+  nav.toc h2 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); }
+  nav.toc ol { margin: 0; padding-left: 20px; columns: 2; column-gap: 32px; }
+  @media (max-width: 640px) { nav.toc ol { columns: 1; } }
+  nav.toc a { color: var(--accent); text-decoration: none; }
+  nav.toc a:hover { text-decoration: underline; }
+
+  section { margin-bottom: 40px; }
+  h2.sec {
+    font-size: 24px; font-weight: 800; margin: 0 0 16px;
+    padding-bottom: 10px; border-bottom: 2px solid var(--border);
+    scroll-margin-top: 20px;
+  }
+  h3 { font-size: 18px; margin: 26px 0 12px; }
+  p { margin: 0 0 14px; }
+  ul, ol { margin: 0 0 16px; padding-left: 24px; }
+  li { margin: 6px 0; }
+  a { color: var(--accent); }
+  strong { color: var(--text); font-weight: 700; }
+  em { color: var(--muted); }
+
+  code {
+    background: var(--code-bg); border: 1px solid var(--border);
+    padding: 1px 6px; border-radius: 6px; font-size: 0.88em;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px 18px; overflow-x: auto; margin: 0 0 8px;
+  }
+  pre code { background: none; border: none; padding: 0; font-size: 13px; line-height: 1.55; }
+  .code-caption { font-size: 12px; color: var(--muted); margin: 0 0 18px; }
+
+  .callout {
+    border-left: 4px solid var(--accent); background: var(--panel);
+    border-radius: 0 12px 12px 0; padding: 16px 20px; margin: 0 0 20px;
+    box-shadow: var(--shadow);
+  }
+  .callout.tldr { border-left-color: var(--accent-2); }
+  .callout.warn { border-left-color: var(--mid); }
+  .callout.rec { border-left-color: var(--good); }
+  .callout h3 { margin-top: 0; }
+
+  .table-scroll { overflow-x: auto; border-radius: 12px; border: 1px solid var(--border); box-shadow: var(--shadow); }
+  table { border-collapse: collapse; width: 100%; background: var(--panel); font-size: 14px; }
+  th, td { padding: 11px 14px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: top; }
+  thead th { background: var(--panel-2); font-weight: 700; position: sticky; top: 0; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: var(--panel-2); }
+  tbody tr.rec-row { background: rgba(46,160,67,0.10); }
+  tbody tr.rec-row:hover { background: rgba(46,160,67,0.16); }
+  td.opt { font-weight: 700; white-space: nowrap; }
+  .tag-rec { display:inline-block; margin-left:6px; font-size:10px; font-weight:800; letter-spacing:0.5px; color:#fff; background:var(--good); padding:1px 6px; border-radius:6px; vertical-align:middle; }
+  .tag-alt { display:inline-block; margin-left:6px; font-size:10px; font-weight:800; letter-spacing:0.5px; color:var(--text); background:var(--pill); padding:1px 6px; border-radius:6px; vertical-align:middle; }
+
+  .score { display: inline-block; min-width: 30px; text-align: center; font-weight: 700; padding: 2px 8px; border-radius: 6px; }
+  .s5, .s4 { color: var(--good); background: var(--good-bg); }
+  .s3 { color: var(--mid); background: var(--mid-bg); }
+  .s2, .s1 { color: var(--low); background: var(--low-bg); }
+  .score small { font-weight: 500; color: var(--muted); }
+
+  .pill { display: inline-block; background: var(--pill); color: var(--accent); border-radius: 999px; padding: 2px 10px; font-size: 12px; font-weight: 600; }
+
+  .winner {
+    background: linear-gradient(135deg, rgba(46,160,67,0.12), rgba(79,157,255,0.10));
+    border: 1px solid var(--good); border-radius: 14px; padding: 20px 24px; margin: 0 0 22px;
+  }
+  .winner h3 { margin: 0 0 8px; color: var(--good); }
+
+  footer { margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--border); color: var(--muted); font-size: 13px; }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; color: var(--muted); margin: 10px 0 16px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .dot { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+  .fn { font-size: 13px; color: var(--muted); margin: 10px 0 0; }
+</style>
+</head>
+<body>
+<header class="hero">
+  <div class="inner">
+    <p class="eyebrow">Technical Decision Doc</p>
+    <h1>Engine Evaluation — Native Mobile for Routes to Glory</h1>
+    <p>Choosing a client platform for a location-based empire builder: map + fog of war + real-world GPS. Moving from a React/Mapbox PWA toward native mobile for richer graphics and better GPS.</p>
+    <div class="badges">
+      <span class="badge">Goal: deep, rich, performant graphics</span>
+      <span class="badge">Team: 15 yrs .NET / C#</span>
+      <span class="badge">Recommended: Unity (C#) + Cesium</span>
+      <span class="badge">No migration committed</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <nav class="toc">
+    <h2>Contents</h2>
+    <ol>
+      <li><a href="#tldr">TL;DR</a></li>
+      <li><a href="#context">Context: what the POC is</a></li>
+      <li><a href="#zombie">"Games like Zombie Waves" + map-SDK churn</a></li>
+      <li><a href="#options">Options compared</a></li>
+      <li><a href="#recommendation">Recommendation</a></li>
+      <li><a href="#tiles">Styled-tile tooling</a></li>
+      <li><a href="#fog">Fog-of-war caveat</a></li>
+      <li><a href="#next">Suggested next step</a></li>
+      <li><a href="#scope">Out of scope</a></li>
+    </ol>
+  </nav>
+
+  <section id="tldr">
+    <h2 class="sec">TL;DR</h2>
+    <div class="callout tldr">
+      <ul>
+        <li>The POC works. The question is <strong>client platform</strong>, not architecture — the game rules already live server-side and are engine-agnostic, so any client swap keeps the Node/<code>@empire/shared</code> backend.</li>
+        <li><strong>Given the goal (rich, performant graphics) and a C#-native team, the recommended client is Unity (C#).</strong> Unity is where shader-based fog, real-time 3D, particles, and AR are first-class; RN/Flutter map views structurally can't reach that graphics bar.</li>
+        <li><strong>For the map inside Unity, lead with Cesium for Unity</strong> (free OSS plugin, full WGS84 globe, Android/iOS). For the game's <strong>alien-world overlay</strong> vision, use <strong>Cesium World Terrain + a custom stylized raster overlay</strong> (not photoreal) with cartographic polygons for fog/claims — richer, cheaper, and lighter on mobile than Google 3D Tiles.</li>
+        <li><strong>Do NOT lead with Niantic Lightship.</strong> Niantic sold its games business to Scopely (2025); Niantic Spatial deprecated <strong>Lightship.dev</strong>, is migrating to <strong>Scaniverse / NSDK 4.0</strong>, decommissions Lightship.dev on <strong>2027-02-20</strong>, and is pivoting to enterprise VPS / "physical AI". Keep Niantic <strong>NSDK/VPS</strong> as a <em>future</em> option only if camera-AR with centimeter positioning becomes core.</li>
+        <li><strong>React Native + Mapbox</strong> (MapLibre as the OSS/cost hedge) is now the <strong>lighter/faster fallback</strong> — lowest migration risk and best turnkey native GPS, but capped on graphics.</li>
+        <li>The <strong>"fog wonky on new worlds"</strong> bug is a tile-math inconsistency in our own code, <strong>not</strong> a Mapbox limitation. It follows us to any engine (and must be ported correctly into C#). Fix it independently of the platform decision.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="context">
+    <h2 class="sec">Context: what the POC already is</h2>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Layer</th><th>Today</th><th>Portable to native?</th></tr></thead>
+        <tbody>
+          <tr><td>Game rules (fog, routes, claims, resources, NPC, diplomacy)</td><td><code>@empire/shared</code> + <code>@empire/api</code> (Fastify + MySQL)</td><td>Yes — server-side, client-agnostic</td></tr>
+          <tr><td>Shared geo/tile math</td><td><code>packages/shared/src/map/fog-of-war.ts</code></td><td>Yes (TS) — reuse in RN, or port to C# for Unity</td></tr>
+          <tr><td>Map rendering</td><td><code>mapbox-gl</code> + <code>react-map-gl</code> (<code>apps/web/package.json</code>)</td><td>Depends on target (see below)</td></tr>
+          <tr><td>Fog rendering</td><td>GeoJSON polygon tiles in Mapbox GL (<code>apps/web/src/lib/fog-geojson.ts</code>)</td><td>Concept portable; re-implemented as shader/mesh in Unity</td></tr>
+          <tr><td>GPS</td><td>Browser <code>navigator.geolocation</code>, foreground only</td><td>Native GPS is the main reason to move</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:16px">Key point: <strong>routes, resource claims, resume codes, world seeding, NPC ticks, and diplomacy are all backend concerns.</strong> A client swap re-implements the <em>view</em> and <em>input</em>, not the game. Keep it that way — it is what makes the platform choice low-stakes and reversible, and it means a C# client rewrite does not touch the game logic.</p>
+    <p>Motivation to move:</p>
+    <ul>
+      <li><strong>Richer graphics (top priority)</strong> — animated units, particles, real-time 3D, real-world photoreal terrain, and soft shader-based fog transitions.</li>
+      <li><strong>Better GPS</strong> — PWAs get foreground-only, throttled, lower-accuracy geolocation and no reliable background location. Native gives high-accuracy fused location and background/geofence hooks.</li>
+    </ul>
+  </section>
+
+  <section id="zombie">
+    <h2 class="sec">"Games like Zombie Waves" + the Unity map-SDK churn</h2>
+    <ul>
+      <li><strong>Zombie Waves</strong> (Fun Formula), <strong>Survivor.io</strong>, <strong>Archero</strong> → <strong>Unity</strong>. These are 3D roguelike/arena shooters. Unity is chosen for real-time 3D combat, particles, and physics — <strong>none of which is map/GPS related.</strong> They are not a precedent for a location game, but they confirm Unity is the go-to for rich mobile 3D.</li>
+      <li>The relevant precedent is the <strong>location-based</strong> class:
+        <ul>
+          <li><strong>Pokémon GO / Ingress / Peridot</strong> → <strong>Unity</strong>. The hard part Niantic solved is <em>linking player location to world state at scale</em> — the layer <strong>we already own</strong> in our API. Basemaps are <strong>OpenStreetMap</strong>-derived (Pokémon GO moved off Google Maps in 2017).</li>
+        </ul>
+      </li>
+    </ul>
+    <div class="callout">
+      <strong>Takeaway:</strong> Unity is the proven path <strong>when the game wants AR or heavy 3D</strong> — which is exactly this project's goal. It does <strong>not</strong> give you GPS, a basemap, anti-spoofing, or multiplayer for free — you build those (we have). So Unity's upside is graphics/AR; its cost is rebuilding the client + choosing a map layer.
+    </div>
+
+    <h3>The Unity map-SDK landscape has churned — this matters</h3>
+    <p>The obvious "Unity + Niantic" answer is now the wrong default:</p>
+    <ul>
+      <li><strong>Mapbox Maps SDK for Unity</strong> — unmaintained/effectively dead. (This is the <em>Unity plugin</em>, not the alive-and-well <strong>Mapbox mobile SDK for iOS/Android</strong> that React Native uses.)</li>
+      <li><strong>Google Maps for Games</strong> (Unity/Unreal) — discontinued.</li>
+      <li><strong>Niantic Lightship</strong> — Niantic sold its games business to <strong>Scopely</strong> (2025) and spun off <strong>Niantic Spatial</strong>, which has <strong>deprecated Lightship.dev</strong>, forces migration to <strong>Scaniverse + NSDK 4.0</strong>, decommissions Lightship.dev on <strong>2027-02-20</strong>, and is refocusing on <strong>enterprise VPS / "physical AI"</strong> rather than indie game basemaps. World-class AR/VPS tech, but a churny, enterprise-leaning bet for a game map layer today.</li>
+    </ul>
+    <div class="callout rec">
+      <strong>Actively maintained &amp; graphics-first: <a href="https://cesium.com/platform/cesium-for-unity">Cesium for Unity</a>.</strong> Free, open-source plugin; a full-scale WGS84 globe; streams Cesium World Terrain, imagery, 3D buildings, and (optionally) Google Photorealistic 3D Tiles via <strong>3D Tiles / Cesium ion</strong>; integrates with Unity GameObjects; supports Android/iOS.
+    </div>
+
+    <h3>Art direction: stylized "alien world" overlay (this project's vision)</h3>
+    <p>The game's fiction is an <strong>artificial alien world laid over real geography</strong> — players build route-based empires whose growth scales with real-world movement. That means a stylized reskin aligned to real coordinates, <strong>not</strong> the real world shown photorealistically. Cesium supports this richly, and dropping photoreal 3D Tiles removes the biggest cost line and the iOS memory issue:</p>
+    <ul>
+      <li><strong>Custom raster overlays</strong> — drape our own alien-styled tiles over Cesium World Terrain via <code>CesiumUrlTemplateRasterOverlay</code> (any <code>{z}/{x}/{y}</code> server), <code>CesiumTileMapServiceRasterOverlay</code>, <code>CesiumWebMapServiceRasterOverlay</code>, or <code>CesiumIonRasterOverlay</code>. Style tiles in Mapbox Studio / MapTiler / offline. Multiple overlays stack via <code>Material Key</code>.</li>
+      <li><strong>Custom tileset material + Shader Graph</strong> — copy <code>CesiumDefaultTilesetShader</code> / <code>CesiumDefaultTilesetMaterial</code> into the <code>Opaque Material</code> slot to recolor, add atmosphere/glow, animate, mask, and drive transparency.</li>
+      <li><strong>Cartographic polygons</strong> — <code>CesiumCartographicPolygon</code> clips/highlights regions: a natural primitive for <strong>fog-of-war reveal</strong> and <strong>claimed-territory highlighting</strong> (the default shader already uses an overlay texture as an alpha/clipping mask).</li>
+      <li><strong>Georeferenced Unity geometry</strong> — routes (glowing conduits/particles), empire structures, and units anchored via <code>CesiumGeoreference</code> + <code>CesiumGlobeAnchor</code>, rendered in real-world position on the globe.</li>
+    </ul>
+    <p><strong>Recommended layer stack for the alien look:</strong> Cesium World Terrain (real elevation) + custom stylized raster overlay (alien skin) + optional Cesium OSM Buildings restyled with a global alien material + our own routes/structures/fog as Unity content.</p>
+    <p class="fn"><strong>Caveats:</strong> per-building <em>runtime</em> restyling is hard (OSM Buildings render batched — a global material is easy, single-building highlight needs feature-ID-in-material work); plain XYZ tiles need <code>CesiumUrlTemplateRasterOverlay</code> (TMS requires a <code>tilemapresource.xml</code>) and alpha handling so missing tiles don't render white; the styling is genuine Shader Graph/HLSL work.</p>
+  </section>
+
+  <section id="options">
+    <h2 class="sec">Options compared</h2>
+    <p>Scores are relative for <em>our</em> use case and <strong>weighted for this team's priorities</strong>: graphics quality is the top goal, C#/.NET is home turf, and a client rewrite is acceptable. Ramp-up and stack-reuse are scored <em>for a C# team that is fine rewriting the client</em>. 5 = best.</p>
+    <div class="legend">
+      <span><span class="dot" style="background:var(--good)"></span> 4–5 strong</span>
+      <span><span class="dot" style="background:var(--mid)"></span> 3 moderate</span>
+      <span><span class="dot" style="background:var(--low)"></span> 1–2 weak</span>
+    </div>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Option</th><th>Map + basemap</th><th>Native GPS</th><th>Fog effort</th><th>3D ceiling</th><th>AR ready</th><th>Stack reuse*</th><th>Ramp-up</th><th>Cost at scale</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="rec-row">
+            <td class="opt">Unity (C#) + Cesium<span class="tag-rec">PICK</span></td>
+            <td><span class="score s5">5</span> <small>terrain + alien overlay</small></td>
+            <td><span class="score s3">3</span> <small>you wire GPS</small></td>
+            <td><span class="score s5">5</span> <small>shaders/polygons</small></td>
+            <td><span class="score s5">5</span></td>
+            <td><span class="score s4">4</span> <small>AR Foundation/NSDK</small></td>
+            <td><span class="score s1">1</span> <small>rewrite in C#*</small></td>
+            <td><span class="score s4">4</span> <small>C# native</small></td>
+            <td><span class="score s3">3</span> <small>Unity + tile hosting</small></td>
+          </tr>
+          <tr>
+            <td class="opt">React Native + Mapbox<span class="tag-alt">FALLBACK</span></td>
+            <td><span class="score s5">5</span> <small>Mapbox GL native</small></td>
+            <td><span class="score s5">5</span></td>
+            <td><span class="score s3">3</span> <small>GeoJSON fill</small></td>
+            <td><span class="score s2">2–3</span></td>
+            <td><span class="score s2">2</span></td>
+            <td><span class="score s5">5</span> <small>reuses shared + API</small></td>
+            <td><span class="score s5">5</span></td>
+            <td><span class="score s3">3</span> <small>Mapbox per-MAU</small></td>
+          </tr>
+          <tr>
+            <td class="opt">React Native + MapLibre</td>
+            <td><span class="score s4">4</span> <small>OSS fork</small></td>
+            <td><span class="score s5">5</span></td>
+            <td><span class="score s3">3</span></td>
+            <td><span class="score s2">2–3</span></td>
+            <td><span class="score s2">2</span></td>
+            <td><span class="score s5">5</span></td>
+            <td><span class="score s5">5</span></td>
+            <td><span class="score s5">5</span> <small>self-host tiles</small></td>
+          </tr>
+          <tr>
+            <td class="opt">Unity (C#) + Niantic NSDK/VPS</td>
+            <td><span class="score s3">3</span> <small>churn; enterprise pivot</small></td>
+            <td><span class="score s5">5</span> <small>VPS cm-accuracy</small></td>
+            <td><span class="score s5">5</span></td>
+            <td><span class="score s5">5</span></td>
+            <td><span class="score s5">5</span></td>
+            <td><span class="score s1">1</span> <small>rewrite in C#*</small></td>
+            <td><span class="score s3">3</span> <small>new SDK mid-migration</small></td>
+            <td><span class="score s3">3</span> <small>VPS/Maps fees</small></td>
+          </tr>
+          <tr>
+            <td class="opt">Flutter + Mapbox</td>
+            <td><span class="score s5">5</span></td>
+            <td><span class="score s5">5</span></td>
+            <td><span class="score s3">3</span></td>
+            <td><span class="score s3">3</span></td>
+            <td><span class="score s2">2</span></td>
+            <td><span class="score s1">1</span> <small>new Dart UI</small></td>
+            <td><span class="score s1">1</span> <small>new language</small></td>
+            <td><span class="score s3">3</span></td>
+          </tr>
+          <tr>
+            <td class="opt">Unreal 5</td>
+            <td><span class="score s2">2</span> <small>no location tooling</small></td>
+            <td><span class="score s2">2</span></td>
+            <td><span class="score s5">5</span></td>
+            <td><span class="score s5">5</span></td>
+            <td><span class="score s4">4</span></td>
+            <td><span class="score s1">1</span></td>
+            <td><span class="score s1">1</span> <small>C++/Blueprints</small></td>
+            <td><span class="score s4">4</span> <small>5% after $1M</small></td>
+          </tr>
+          <tr>
+            <td class="opt">Native SwiftUI/Kotlin + MapLibre</td>
+            <td><span class="score s4">4</span></td>
+            <td><span class="score s5">5</span></td>
+            <td><span class="score s3">3–4</span></td>
+            <td><span class="score s3">3</span></td>
+            <td><span class="score s3">3</span></td>
+            <td><span class="score s2">2</span></td>
+            <td><span class="score s2">2</span> <small>2× platforms</small></td>
+            <td><span class="score s5">5</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="fn">* Reuse is scored objectively (how much of the current TS/React client carries over). The team has accepted a C# rewrite, so this axis is <strong>low-weight</strong> here — and the Node/<code>@empire/shared</code> backend is reused regardless of client.</p>
+
+    <h3>Notes per option</h3>
+    <ul>
+      <li><strong>Unity (C#) + Cesium — recommended.</strong> Best fit for the stated goal: shader-based fog, real-time 3D and particles, and a stylized alien world built on Cesium World Terrain + a custom raster overlay (photoreal 3D Tiles optional). C# is the team's strength. Costs to accept: rewrite the client in C#, port the tile/fog math to C# (and fix the bug below), wire device GPS (Unity <code>LocationService</code> or a native plugin), and build/host the styled tiles + shaders. AR can be added later via AR Foundation (and/or Niantic NSDK).</li>
+      <li><strong>React Native + Mapbox — lighter fallback.</strong> Keeps React and reuses the API + TypeScript <code>@empire/shared</code> tile math verbatim; best turnkey native GPS, offline tile packs, geofencing. But fog stays a GeoJSON polygon fill and the map is essentially 2.5D vector — it cannot reach the "deep, rich graphics" bar. Choose only if that ambition is scaled back or speed-to-ship dominates.</li>
+      <li><strong>React Native + MapLibre</strong> — Same shape as RN+Mapbox, MIT-licensed, any tile source; removes Mapbox per-load fees at the cost of self-hosting tiles. Same graphics ceiling.</li>
+      <li><strong>Unity (C#) + Niantic NSDK/VPS</strong> — Best-in-class AR and centimeter positioning (VPS 2.0), and closest to the Pokémon GO stack. But mid-migration (Lightship → Scaniverse/NSDK, Lightship.dev decommissioned 2027-02-20) and pivoting toward enterprise. Reserve for a later AR phase, not the initial map layer.</li>
+      <li><strong>Flutter + Mapbox</strong> — Strong renderer and native GPS, but a full UI rewrite in Dart, no <code>@empire/shared</code> reuse, and no C# leverage. Not recommended for this team.</li>
+      <li><strong>Unreal 5</strong> — Best raw graphics, but C++/Blueprints (no C# benefit), heavy for mobile, and no location tooling. Not recommended.</li>
+      <li><strong>Native SwiftUI/Kotlin + MapLibre</strong> — Max control, ~2× platform cost, and would still need a 3D layer for rich graphics. Not recommended.</li>
+    </ul>
+  </section>
+
+  <section id="recommendation">
+    <h2 class="sec">Recommendation</h2>
+    <div class="winner">
+      <h3>Adopt Unity (C#) + Cesium for Unity</h3>
+      <p style="margin:0">The option whose ceiling matches the goal of deep, rich, performant graphics — and one that plays to a C#-native team. Keep <strong>React Native + Mapbox</strong> as the lighter fallback if graphics ambition is scaled back.</p>
+    </div>
+    <ol>
+      <li><strong>It matches the top priority.</strong> Only a game engine gives shader-based fog, real-time 3D, particles, and lighting. Cesium supplies a real-world globe (terrain + custom alien overlay) to build the stylized world on. RN/Flutter map views cannot reach this bar.</li>
+      <li><strong>It plays to the team's strength.</strong> C#/.NET is home turf, so the ramp is Unity's engine model (scenes, prefabs, shaders), not the language.</li>
+      <li><strong>The expensive parts are already done and reusable.</strong> World state, routes, claims, resources, NPC, and diplomacy stay in the Node/<code>@empire/shared</code> backend; the Unity client is a rich view + GPS input over the same API.</li>
+      <li><strong>AR stays open.</strong> Add AR Foundation later, or Niantic NSDK/VPS if camera-AR with centimeter accuracy becomes a core mechanic.</li>
+    </ol>
+    <h3>Accept these Unity + Cesium trade-offs</h3>
+    <ul>
+      <li><strong>Client rewrite in C#</strong> (accepted) and a <strong>C# port of the tile/fog math</strong> — fix the bug below during the port.</li>
+      <li><strong>GPS is yours to wire</strong> — Unity <code>LocationService</code> or a native plugin; the backend already owns anti-spoof/world logic.</li>
+      <li><strong>Mobile tuning</strong> — raise Maximum Screen Space Error, cap Maximum Cached Bytes. The stylized-overlay approach (World Terrain + custom raster) is far lighter than Google Photoreal 3D Tiles and sidesteps the known iOS memory-growth issue.</li>
+      <li><strong>Shader work is real</strong> — the alien look is Shader Graph/HLSL effort; C# helps with logic, not rendering.</li>
+      <li><strong>Costs</strong> — Unity runtime/rev-share at scale, plus tile/hosting costs for the custom overlay (Cesium ion / Google 3D Tiles fees only if photoreal is used).</li>
+    </ul>
+    <h3>Protect the migration seam</h3>
+    <ul>
+      <li>Keep <strong>all game rules on the server</strong>; the client is a rich view + GPS input layer.</li>
+      <li>Keep the <strong>map layer swappable</strong> (Cesium now; NSDK/VPS or a stylized vector approach later) behind one interface.</li>
+      <li>Treat <code>@empire/shared</code> as the single source of truth for tile math; the C# port should mirror it exactly (shared test vectors) so web and native never diverge.</li>
+    </ul>
+    <div class="callout warn">
+      <h3>Platform / vendor watch</h3>
+      <ul style="margin-bottom:0">
+        <li><strong>Niantic Lightship → Scaniverse/NSDK 4.0:</strong> Lightship.dev decommissioned <strong>2027-02-20</strong>; do not build the initial map layer on it. Re-evaluate NSDK/VPS only for a dedicated AR phase.</li>
+        <li><strong>Custom tile hosting:</strong> the alien overlay needs styled tiles served somewhere (Mapbox/MapTiler/self-hosted); factor tile-serving cost/ops. Cesium ion / Google 3D Tiles fees apply only if photoreal is used.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="tiles">
+    <h2 class="sec">Styled-tile tooling <span class="pill">alien-overlay pipeline</span></h2>
+    <div class="callout">
+      <strong>Core constraint:</strong> Cesium overlays consume <strong>raster XYZ tiles</strong> (<code>CesiumUrlTemplateRasterOverlay</code>, <code>{z}/{x}/{y}</code>, Web Mercator). The job is always: author an alien style &rarr; produce/serve raster PNG tiles &rarr; point Cesium at the XYZ URL. Author the style as a <strong>portable MapLibre GL style</strong> to avoid vendor lock-in.
+    </div>
+
+    <h3>Recommended by tier</h3>
+    <ol>
+      <li><strong>Prototype fast (use for the spike): <a href="https://docs.stadiamaps.com/raster/">Stadia Maps</a> + Stamen.</strong> Ready-made artistic XYZ raster — e.g. <code>https://tiles.stadiamaps.com/tiles/stamen_toner/{z}/{x}/{y}@2x.png</code> (high-contrast B/W, ideal to tint in-shader), plus Terrain/Watercolor and custom styles. Zero pipeline.</li>
+      <li><strong>Production custom look (recommended): author + self-serve.</strong>
+        <ul>
+          <li><strong>Author</strong> the alien style in <a href="https://maplibre.org/maputnik/"><strong>Maputnik</strong></a> (OSS MapLibre GL style editor) or MapTiler Customize.</li>
+          <li><strong>Data:</strong> <a href="https://github.com/onthegomap/planetiler"><strong>Planetiler</strong></a> turns OpenStreetMap into vector tiles (MBTiles/PMTiles) in hours on one machine.</li>
+          <li><strong>Serve as raster:</strong> <a href="https://github.com/maptiler/tileserver-gl"><strong>TileServer GL</strong></a> renders vector tiles + GL style into raster XYZ on the fly — exactly Cesium's format — behind a CDN. No per-tile fees, no lock-in, offline-ready.</li>
+        </ul>
+      </li>
+      <li><strong>Managed alternative (no tile server): MapTiler Cloud</strong> (custom styles + hosted raster; free tier then usage). <strong>MapTiler Server</strong> (~$2,500/yr Standard) for supported self-hosting. Same OpenMapTiles schema, so a Maputnik style ports cleanly.</li>
+      <li><strong>Premium hosted editor: Mapbox Studio + Static Tiles API.</strong> Best editor; renders GL styles to raster usable in third-party renderers, but billed <strong>per tile request</strong> (~$0.50/1k after free tier), "not actively maintained" for third-party use, no Mapbox Standard style support, and non-portable. Watch cost/lock-in.</li>
+    </ol>
+
+    <h3>Comparison</h3>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Tool</th><th>Role</th><th>Hosting</th><th>Cost / licensing</th><th>Lock-in</th></tr></thead>
+        <tbody>
+          <tr><td class="opt">Maputnik</td><td>MapLibre GL style editor</td><td>local/web</td><td>Free, OSS</td><td><span class="score s5">None</span></td></tr>
+          <tr><td class="opt">Planetiler</td><td>OSM &rarr; vector tiles</td><td>you run it</td><td>Free, OSS</td><td><span class="score s5">None</span></td></tr>
+          <tr class="rec-row"><td class="opt">TileServer GL<span class="tag-rec">SERVE</span></td><td>vector+style &rarr; raster XYZ</td><td>self-host (Docker)</td><td>Free, OSS</td><td><span class="score s5">None</span></td></tr>
+          <tr><td class="opt">PMTiles + S3/R2</td><td>single-file tile archive</td><td>static/CDN</td><td>Storage only</td><td><span class="score s5">None</span> <small>needs rasterizer</small></td></tr>
+          <tr><td class="opt">MapTiler Cloud</td><td>styled raster tiles</td><td>managed</td><td>Free tier &rarr; usage</td><td><span class="score s4">Low</span></td></tr>
+          <tr><td class="opt">MapTiler Server</td><td>self-host rasterization</td><td>self-host</td><td>~$2,500/yr Standard</td><td><span class="score s4">Low</span></td></tr>
+          <tr><td class="opt">Mapbox Studio + Static Tiles API</td><td>editor + raster render</td><td>managed</td><td>~$0.50/1k tiles</td><td><span class="score s2">High</span></td></tr>
+          <tr><td class="opt">Stadia Maps (Stamen)</td><td>ready artistic raster XYZ</td><td>managed</td><td>Free tier &rarr; usage</td><td><span class="score s4">Low</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Cesium plumbing + gotchas</h3>
+    <ul>
+      <li>Use <code>CesiumUrlTemplateRasterOverlay</code>, <strong>Web Mercator</strong>, standard <strong>XYZ</strong> (not TMS — mind the Y-origin flip; <code>{reverseY}</code> exists if needed).</li>
+      <li>Prefer <strong>512px @2x</strong> tiles; stack multiple overlays via <code>Material Key</code>.</li>
+      <li>Handle <strong>alpha for missing tiles</strong> in the tileset shader or they render white.</li>
+      <li>Show <strong>OSM attribution</strong> (ODbL) in-app; confirm the provider's ToS allows use in a non-Mapbox renderer (self-host and MapTiler/Stadia are clean; Mapbox has per-tile + caching caveats).</li>
+    </ul>
+
+    <div class="callout rec">
+      <strong>Default recommendation:</strong> prototype on <strong>Stadia/Stamen</strong> now; for production, author a <strong>MapLibre style in Maputnik</strong> over <strong>Planetiler</strong> OSM data, served as raster by <strong>self-hosted TileServer GL</strong>, with <strong>MapTiler Cloud</strong> as the managed escape hatch.
+    </div>
+  </section>
+
+  <section id="fog">
+    <h2 class="sec">Fog-of-war caveat <span class="pill">engine-independent</span></h2>
+    <div class="callout warn">
+      The "fog is still a bit wonky on new worlds" symptom is a <strong>coordinate-math inconsistency in our own code</strong>, not a Mapbox problem, so migrating engines will <strong>not</strong> fix it — and it must be ported correctly when the tile math moves to C#.
+    </div>
+    <p><strong>Root causes in the current tile model:</strong></p>
+    <p><strong>1. Longitude scale depends on latitude, but inconsistently.</strong> <code>latLngToTileId</code> derives the tile X index using <code>lngM = 111320 * cos(lat)</code> at the <strong>point's own latitude</strong>:</p>
+<pre><code>const latM = 111_320;
+const lngM = 111_320 * Math.cos((lat * Math.PI) / 180);
+const x = Math.floor((lng * lngM) / tileSizeM);
+const y = Math.floor((lat * latM) / tileSizeM);
+return `${x}:${y}`;</code></pre>
+    <p class="code-caption">packages/shared/src/map/fog-of-war.ts (lines 9–14)</p>
+    <p>Meanwhile the fog <strong>grid</strong> is rasterized using a single <code>refLat</code> (the focus point) for the whole viewport:</p>
+<pre><code>const clipped = clipBoundsToRadius(bounds, focus.lat, focus.lng, MAX_FOG_RADIUS_M);
+const refLat = focus.lat;
+...
+const minX = Math.floor((clipped.west * lngM) / tileSizeM) - 1;
+...
+    const tileId = `${x}:${y}`;
+    if (explored.has(tileId)) continue;</code></pre>
+    <p class="code-caption">apps/web/src/lib/fog-geojson.ts (lines 81–104)</p>
+    <p>Because explored tiles are indexed with each point's own <code>cos(lat)</code> but the fog grid is indexed with the focus point's <code>cos(lat)</code>, the two grids <strong>drift apart</strong> the farther a world's tiles are from the current focus latitude — so explored tiles don't line up with fog holes on new/distant worlds.</p>
+    <p><strong>2. Tile columns are latitude-warped.</strong> Encoding X as <code>lng * cos(lat)</code> means the same longitude maps to a different tile column at different latitudes, so the grid is not globally consistent.</p>
+    <h3>Recommended fix (independent of the engine decision)</h3>
+    <ul>
+      <li>Adopt a <strong>single, consistent tile scheme</strong> — either standard <strong>Web Mercator / slippy-tile</strong> indexing, or a fixed reference latitude <strong>per world</strong> stored on the world seed — and use it identically in <code>latLngToTileId</code>, <code>tileIdToCenter</code>, and the fog rasterizer.</li>
+      <li>Add a unit test asserting <code>tileIdToCenter(latLngToTileId(p)) ≈ p</code> and that a point's tile id equals the fog cell drawn over it, across several latitudes. Reuse the same vectors to validate the C# port.</li>
+      <li>Revisit <code>MAX_FOG_TILES</code> (500) and <code>MAX_FOG_RADIUS_M</code> only after the indexing is consistent; they are mitigations, not the cause.</li>
+    </ul>
+    <p>Doing this first means the Unity client inherits a correct fog model instead of porting the bug.</p>
+  </section>
+
+  <section id="next">
+    <h2 class="sec">Suggested next step</h2>
+    <p>Time-boxed <strong>Unity + Cesium spike (about 1–2 weeks)</strong> to de-risk the graphics-first path on a real device:</p>
+    <ol>
+      <li>Unity project with <strong>Cesium for Unity</strong>: <strong>Cesium World Terrain</strong> + a <strong>custom stylized (alien) raster overlay</strong> via <code>CesiumUrlTemplateRasterOverlay</code>, georeferenced to a test city. (Photoreal 3D Tiles only as an optional visual comparison.)</li>
+      <li>Device <strong>GPS</strong> (Unity <code>LocationService</code>) drives the camera/player over the globe; validate accuracy/stability vs. the PWA.</li>
+      <li>Call the <strong>existing API</strong> and render <strong>fog + claims as cartographic polygons / shader masks</strong> plus a <strong>glowing route line</strong> for an active session, using the C#-ported (and fixed) tile math.</li>
+      <li>Build to a mid-range <strong>Android</strong> and an <strong>iOS</strong> device; measure FPS, memory, thermal, and battery.</li>
+    </ol>
+    <div class="callout rec">
+      <strong>Success criteria:</strong> the alien-world look clearly exceeds the PWA, GPS is at least as good, fog/claims align with explored tiles, routes render convincingly, memory/thermals are fine on a mid-range phone, and no backend changes were required. If it passes, promote Unity + Cesium to the v-next client track in the roadmap. If mobile performance is prohibitive, fall back to RN + Mapbox.
+    </div>
+  </section>
+
+  <section id="scope">
+    <h2 class="sec">Out of scope for this doc</h2>
+    <p>No engine migration or client code changes are made here. A detailed migration/spike implementation plan follows once a direction is confirmed.</p>
+  </section>
+
+  <footer>
+    Routes to Glory · Engine Evaluation · Generated from <code>docs/ENGINE_EVALUATION.md</code>. Also see <code>docs/ROADMAP.md</code>, <code>docs/DEPLOY.md</code>, and <code>README.md</code>.
+  </footer>
+
+</div>
+</body>
+</html>

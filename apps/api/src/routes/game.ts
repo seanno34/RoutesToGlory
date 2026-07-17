@@ -35,6 +35,7 @@ import {
   seedSettlementDeposits,
 } from '../services/resources.js';
 import { createWorldInDb, getWorldMap, listSavedWorlds, getWorldBootstrapByAccessCode } from '../db/world-repo.js';
+import { normalizeUserPin } from '../db/user-pin.js';
 import { resetWorldProgress } from '../db/world-reset.js';
 import { getExplorationState } from '../db/exploration-repo.js';
 import { isDatabaseEnabled } from '../db/client.js';
@@ -338,11 +339,17 @@ export const godModeRoutes: FastifyPluginAsync = async (app) => {
 };
 
 export const worldRoutes: FastifyPluginAsync = async (app) => {
-  app.get('/worlds/saved', async (_request, reply) => {
+  app.get('/worlds/saved', async (request, reply) => {
     if (!isDatabaseEnabled()) {
       return reply.status(503).send({ error: 'Database required' });
     }
-    const worlds = await listSavedWorlds();
+    const { pin } = request.query as { pin?: string };
+    const normalizedPin = normalizeUserPin(pin);
+    if (pin != null && String(pin).trim() !== '' && !normalizedPin) {
+      return reply.status(400).send({ error: 'PIN must be 4 digits (0000–9999)' });
+    }
+    // When pin is supplied, only that user's worlds; without pin, list all (legacy/web).
+    const worlds = await listSavedWorlds(normalizedPin);
     return { worlds };
   });
 
@@ -352,11 +359,23 @@ export const worldRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const { code } = request.params as { code: string };
-    const world = await getWorldBootstrapByAccessCode(code);
-    if (!world) {
+    const { pin } = request.query as { pin?: string };
+    const normalizedPin = normalizeUserPin(pin);
+    if (pin != null && String(pin).trim() !== '' && !normalizedPin) {
+      return reply.status(400).send({ error: 'PIN must be 4 digits (0000–9999)' });
+    }
+
+    const lookup = await getWorldBootstrapByAccessCode(code, normalizedPin);
+    if (!lookup.ok) {
+      if (lookup.reason === 'pin_mismatch') {
+        return reply.status(403).send({
+          error: 'This game session belongs to a different user PIN',
+        });
+      }
       return reply.status(404).send({ error: 'Game not found' });
     }
 
+    const world = lookup.world;
     return {
       id: world.id,
       slug: world.slug,
@@ -368,14 +387,20 @@ export const worldRoutes: FastifyPluginAsync = async (app) => {
     };
   });
 
-  app.post('/worlds', async (request) => {
+  app.post('/worlds', async (request, reply) => {
     const body = (request.body ?? {}) as {
       name?: string;
       difficulty?: 'slow' | 'normal' | 'fast';
       playerName?: string;
       spawnLat?: number;
       spawnLng?: number;
+      pin?: string;
     };
+
+    const normalizedPin = normalizeUserPin(body.pin);
+    if (body.pin != null && String(body.pin).trim() !== '' && !normalizedPin) {
+      return reply.status(400).send({ error: 'PIN must be 4 digits (0000–9999)' });
+    }
 
     if (isDatabaseEnabled()) {
       const bootstrap = await createWorldInDb({
@@ -384,6 +409,7 @@ export const worldRoutes: FastifyPluginAsync = async (app) => {
         playerName: body.playerName ?? 'Explorer',
         spawnLat: body.spawnLat,
         spawnLng: body.spawnLng,
+        pin: normalizedPin ?? undefined,
       });
 
       return {

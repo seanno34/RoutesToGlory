@@ -1029,6 +1029,7 @@ namespace RoutesToGlory.EditorTools
 
             RtgEchoSiteLoader loader = go.GetComponent<RtgEchoSiteLoader>();
             if (loader == null) loader = go.AddComponent<RtgEchoSiteLoader>();
+            RtgGameSessionLogin.EnsureOn(loader);
             return loader;
         }
 

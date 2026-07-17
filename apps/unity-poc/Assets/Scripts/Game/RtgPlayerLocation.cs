@@ -469,8 +469,20 @@ namespace RoutesToGlory.Game
 
             // The tour route depends on the Echo Sites, which may still be loading
             // (async in Play mode for live data), so build it in a coroutine that
-            // waits for them. Everything else starts a provider immediately.
+            // waits for them. Everything else starts a provider immediately — unless
+            // login is still blocking (no world / ship play until Join).
             Debug.Log($"[RTG] Location source at launch: {LocationSourceLabel(_activeSource)}");
+            if (!RtgGameSessionLogin.IsPlayBlocked())
+                BeginLocationProvider();
+            else
+                StartCoroutine(BeginLocationProviderWhenSessionReady());
+        }
+
+        private IEnumerator BeginLocationProviderWhenSessionReady()
+        {
+            while (RtgGameSessionLogin.IsPlayBlocked())
+                yield return null;
+            if (!isActiveAndEnabled) yield break;
             BeginLocationProvider();
         }
 
@@ -486,12 +498,14 @@ namespace RoutesToGlory.Game
 
         private void FixedUpdate()
         {
+            if (RtgGameSessionLogin.IsPlayBlocked()) return;
             if (IsCockpitCameraActive() && _cameraManager != null)
                 _cameraManager.SetGameplayCameraOwnership(true);
         }
 
         private void Update()
         {
+            if (RtgGameSessionLogin.IsPlayBlocked()) return;
             if (_provider == null) return;
 
             if (IsCockpitCameraActive() && _cameraManager != null)
@@ -586,6 +600,8 @@ namespace RoutesToGlory.Game
         /// </summary>
         private void LateUpdate()
         {
+            if (RtgGameSessionLogin.IsPlayBlocked()) return;
+
             if (_marker != null)
             {
                 ApplyMarkerTerrainHeight();
@@ -2260,6 +2276,7 @@ namespace RoutesToGlory.Game
         private void OnGUI()
         {
             if (!Application.isPlaying) return;
+            if (RtgGameSessionLogin.IsPlayBlocked()) return;
 
             _gameUiRects.Clear();
 
@@ -2373,7 +2390,21 @@ namespace RoutesToGlory.Game
             const float gearSize = 72f * scale;
             var gearRect = new Rect(margin, midY - gearSize * 0.5f, gearSize, gearSize);
 
+            // Exit session — sits just above Gear so testers can return to PIN / session UI.
+            const float exitGap = 10f * scale;
+            var exitRect = new Rect(margin, gearRect.y - gearSize - exitGap, gearSize, gearSize);
             var prevFont = GUI.skin.button.fontSize;
+            GUI.skin.button.fontSize = Mathf.RoundToInt(22f * scale);
+            if (GUI.Button(exitRect, "Exit"))
+            {
+                var login = RtgGameSessionLogin.FindActive();
+                if (login != null)
+                    login.ExitSessionToLogin();
+                else
+                    Debug.LogWarning("[RTG] Exit pressed but RtgGameSessionLogin is missing.");
+            }
+            _gameUiRects.Add(exitRect);
+
             GUI.skin.button.fontSize = Mathf.RoundToInt(34f * scale);
             if (GUI.Button(gearRect, GUIContent.none))
                 _settingsOpen = !_settingsOpen;
