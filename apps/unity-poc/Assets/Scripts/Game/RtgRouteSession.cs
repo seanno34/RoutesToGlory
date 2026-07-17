@@ -959,9 +959,27 @@ namespace RoutesToGlory.Game
         {
             RtgPersistedRouteDrawer drawer = RtgPersistedRouteDrawer.FindOrCreate();
             if (drawer == null) return;
+            ConfigurePersistedRouteDrawer(drawer);
             if (_debouncedRouteRefresh != null)
                 StopCoroutine(_debouncedRouteRefresh);
             _debouncedRouteRefresh = StartCoroutine(DebouncedRouteRefresh(drawer));
+        }
+
+        private void ConfigurePersistedRouteDrawer(RtgPersistedRouteDrawer drawer)
+        {
+            if (drawer == null) return;
+
+#if UNITY_2023_1_OR_NEWER
+            RtgEchoSiteLoader loader = UnityEngine.Object.FindFirstObjectByType<RtgEchoSiteLoader>();
+            RtgPlayerLocation player = UnityEngine.Object.FindFirstObjectByType<RtgPlayerLocation>();
+#else
+            RtgEchoSiteLoader loader = UnityEngine.Object.FindObjectOfType<RtgEchoSiteLoader>();
+            RtgPlayerLocation player = UnityEngine.Object.FindObjectOfType<RtgPlayerLocation>();
+#endif
+            if (loader != null)
+                drawer.groundHeightMeters = loader.groundHeightMeters;
+            if (player != null)
+                drawer.travelHeightAboveTerrainM = player.roadHeightMeters;
         }
 
         private IEnumerator DebouncedRouteRefresh(RtgPersistedRouteDrawer drawer)

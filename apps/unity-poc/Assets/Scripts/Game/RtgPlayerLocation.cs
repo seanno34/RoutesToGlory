@@ -157,8 +157,8 @@ namespace RoutesToGlory.Game
         [Tooltip("Approx. ground height (m above ellipsoid) near Douglas, WY.")]
         public double groundHeightMeters = 1476.0;
 
-        [Tooltip("Meters the player marker's center sits above the ground.")]
-        public float markerHeight = 15f;
+        [Tooltip("Meters the player marker's center sits above the ground. Keep above Light Road / persisted travel clearance.")]
+        public float markerHeight = RtgTerrainElevationGuards.GliderClearanceM;
 
         [Header("Light Road")]
         [Tooltip("Draw a glowing Light Road trail behind the player as it moves.")]
@@ -167,8 +167,8 @@ namespace RoutesToGlory.Game
         [Tooltip("Road width in meters.")]
         public float roadWidth = 8f;
 
-        [Tooltip("Meters above the ground the road ribbon sits.")]
-        public float roadHeightMeters = 3f;
+        [Tooltip("Meters above the ground the road ribbon sits. Must stay below markerHeight so the glider reads above roads.")]
+        public float roadHeightMeters = RtgTerrainElevationGuards.TravelRoadClearanceM;
 
         [Tooltip("Record a road point after the player moves this many meters.")]
         public float roadPointSpacing = 12f;

@@ -65,11 +65,28 @@ namespace RoutesToGlory.Game
             line.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
             line.receiveShadows = false;
 
-            Shader shader = Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Sprites/Default");
-            var mat = new Material(shader) { name = "RTG_Connector" };
+            Shader shader = Shader.Find("Universal Render Pipeline/Unlit")
+                ?? Shader.Find("Sprites/Default")
+                ?? Shader.Find("Unlit/Color");
+            if (shader == null)
+            {
+                Debug.LogError("[RTG] Connector LineRenderer shader missing — skipping draw (would be magenta).");
+                if (Application.isPlaying) Destroy(go);
+                else DestroyImmediate(go);
+                return;
+            }
+
+            var mat = new Material(shader)
+            {
+                name = "RTG_Connector",
+                hideFlags = HideFlags.HideAndDontSave,
+            };
             if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", connectorColor);
             if (mat.HasProperty("_Color")) mat.SetColor("_Color", connectorColor);
-            line.material = mat;
+            // sharedMaterial — avoid .material instance that can destroy templates on GO teardown.
+            line.sharedMaterial = mat;
+            line.startColor = connectorColor;
+            line.endColor = connectorColor;
 
             Debug.Log($"[RTG] Drew connector line (anchor → target).");
         }

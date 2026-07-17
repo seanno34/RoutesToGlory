@@ -263,12 +263,17 @@ namespace RoutesToGlory.Game
             if (result.ok && result.hasConnector)
             {
                 RtgPersistedRouteDrawer drawer = RtgPersistedRouteDrawer.FindOrCreate();
-                drawer?.AppendConnector(
-                    result.connectorRouteId,
-                    result.anchorLat,
-                    result.anchorLng,
-                    result.targetLat,
-                    result.targetLng);
+                if (drawer != null)
+                {
+                    if (_echoLoader != null)
+                        drawer.groundHeightMeters = _echoLoader.groundHeightMeters;
+                    drawer.AppendConnector(
+                        result.connectorRouteId,
+                        result.anchorLat,
+                        result.anchorLng,
+                        result.targetLat,
+                        result.targetLng);
+                }
             }
 
             if (result.ok || result.alreadyConnected)

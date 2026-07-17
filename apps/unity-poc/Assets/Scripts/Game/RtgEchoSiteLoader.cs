@@ -792,6 +792,15 @@ namespace RoutesToGlory.Game
         {
             RtgPersistedRouteDrawer drawer = RtgPersistedRouteDrawer.FindOrCreate();
             if (drawer == null) return;
+            // Fallback ellipsoid only — drawer samples Cesium per vertex for real elevation.
+            drawer.groundHeightMeters = groundHeightMeters;
+#if UNITY_2023_1_OR_NEWER
+            RtgPlayerLocation player = Object.FindFirstObjectByType<RtgPlayerLocation>();
+#else
+            RtgPlayerLocation player = Object.FindObjectOfType<RtgPlayerLocation>();
+#endif
+            if (player != null)
+                drawer.travelHeightAboveTerrainM = player.roadHeightMeters;
             int routeCount = map?.routes?.Length ?? 0;
             drawer.SyncRoutes(map?.routes);
             if (routeCount > 0)

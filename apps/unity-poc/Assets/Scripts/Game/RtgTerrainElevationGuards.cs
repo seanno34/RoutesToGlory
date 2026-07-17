@@ -23,8 +23,21 @@ namespace RoutesToGlory.Game
     /// <see cref="RtgTerrainHeight.GetGroundHeight"/> per frame, or refresh the whole trail
     /// from raw heights.</para>
     ///
+    /// <para><b>Persisted Light Roads</b> — <see cref="RtgPersistedRouteDrawer"/> samples
+    /// Cesium terrain per vertex (same sampler as deposits) then adds travel/connector
+    /// clearance. Never leave saved routes at fixed ellipsoid
+    /// <c>groundHeightMeters + offset</c> — path_json is lat/lng only and that floats
+    /// lines above the terrain-following glider.</para>
+    ///
+    /// <para><b>Clearance stack</b> (ellipsoid = sampled terrain + clearance):
+    /// travel / live Light Road ≈ <see cref="TravelRoadClearanceM"/>,
+    /// connectors ≈ <see cref="ConnectorClearanceM"/>,
+    /// glider ≈ <see cref="GliderClearanceM"/>. Keep glider above route clearances;
+    /// prefer lowering routes toward terrain over raising the ship.</para>
+    ///
     /// <para><b>Before changing this pipeline</b>, playtest slow cruise on editor + device:
-    /// glider must not bounce; trail must not clip hills or jitter.</para>
+    /// glider must not bounce; trail must not clip hills or jitter. Also reload a saved
+    /// world with routes — persisted lines must sit just above terrain, under the glider.</para>
     /// </summary>
     public static class RtgTerrainElevationGuards
     {
@@ -33,6 +46,26 @@ namespace RoutesToGlory.Game
 
         /// <summary>Must run after <see cref="RtgPlayerLocation"/> LateUpdate terrain pass.</summary>
         public const int LightRoadExecutionOrder = 100;
+
+        /// <summary>
+        /// Live + persisted travel ribbon clearance above sampled terrain.
+        /// Matches <c>RtgLightRoad.roadClearanceMeters</c> / <c>RtgPlayerLocation.roadHeightMeters</c>
+        /// / <c>RtgPersistedRouteDrawer.travelHeightAboveTerrainM</c>.
+        /// </summary>
+        public const float TravelRoadClearanceM = 3f;
+
+        /// <summary>
+        /// Tap-claim connector clearance above sampled terrain
+        /// (<c>RtgPersistedRouteDrawer.connectorHeightAboveTerrainM</c>).
+        /// </summary>
+        public const float ConnectorClearanceM = 7f;
+
+        /// <summary>
+        /// Default glider clearance above committed corridor ground
+        /// (<c>RtgPlayerLocation.markerHeight</c> / <c>RtgTerrainHeight.markerClearanceM</c>).
+        /// Must stay above <see cref="TravelRoadClearanceM"/> and <see cref="ConnectorClearanceM"/>.
+        /// </summary>
+        public const float GliderClearanceM = 15f;
 
         /// <summary>Tolerance (m) when comparing ground heights for monotonic lift.</summary>
         public const double LiftEpsilonM = 0.01;

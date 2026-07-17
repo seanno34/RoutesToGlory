@@ -34,6 +34,9 @@ These proved out in POC and should **not** be re-invented in production:
 | **Manual vs Auto Pilot** | Manual = real GPS; Auto Pilot = simulated route | `RtgPlayerLocation` |
 | **Field-test workflow** | `pnpm dev:field` (caffeinate + API) for Mac-as-server driving tests | `scripts/field-test-server.sh` |
 | **Shader / pipeline artifacts** | Light Road glow concept, alien overlay shader approach, tile pipeline scripts | Copy Shader Graphs + pipeline docs, not POC placeholders |
+| **Route elevation + materials** | Terrain-sample persisted routes (not fixed `groundHeightMeters`); clearance stack travel +3 / connector +7 / glider +15; `sharedMaterial` + purge unmanaged LineRenderers | [LIGHT_ROAD_ROUTES_HANDOFF.md](../apps/unity-poc/docs/LIGHT_ROAD_ROUTES_HANDOFF.md), `RtgPersistedRouteDrawer`, `RtgLightRoad`, `RtgTerrainElevationGuards` |
+
+**Production scene hygiene:** do not ship sample LineRenderers under `RTG Persisted Routes`; purge-on-load is only a safety net.
 
 ---
 
@@ -146,3 +149,4 @@ When Phase 2 is done:
 | 2026-07-14 | Cockpit drag-look **deferred** (visual UX); hostile ordnance is sole remaining go/no-go POC item |
 | 2026-07-14 | Priority shift: **realistic terrain/map tiles** replaces hostile ordnance as active POC |
 | 2026-07-14 | Unity fog of war **disabled** — pre-surveyed world fiction; GPU budget for terrain tiles |
+| 2026-07-17 | Persisted Light Road terrain-sample + magenta material/orphan purge; see LIGHT_ROAD_ROUTES_HANDOFF.md |

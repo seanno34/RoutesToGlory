@@ -34,8 +34,9 @@ namespace RoutesToGlory.Game
         [Tooltip("Road width in meters.")]
         public float widthMeters = 8f;
 
-        [Tooltip("Meters above committed corridor ground for each road point.")]
-        public float roadClearanceMeters = 3f;
+        [Tooltip("Meters above committed corridor ground for each road point. " +
+                 "Must stay below RtgPlayerLocation.markerHeight so the glider reads above the trail.")]
+        public float roadClearanceMeters = RtgTerrainElevationGuards.TravelRoadClearanceM;
 
         [Tooltip("Cap on recorded points; oldest are dropped past this so the road stays bounded.")]
         public int maxPoints = 8000;
@@ -282,12 +283,23 @@ namespace RoutesToGlory.Game
             _line.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
             _line.receiveShadows = false;
             _line.sortingOrder = 1;
-            Shader shader = Shader.Find("Universal Render Pipeline/Unlit");
-            if (shader == null) shader = Shader.Find("Sprites/Default");
-            var mat = new Material(shader) { name = "RTG_LightRoad" };
+            Shader shader = Shader.Find("Universal Render Pipeline/Unlit")
+                ?? Shader.Find("Sprites/Default")
+                ?? Shader.Find("Unlit/Color");
+            if (shader == null)
+            {
+                Debug.LogError("[RTG] Light Road shader missing — trail would render magenta.");
+                return;
+            }
+
+            var mat = new Material(shader)
+            {
+                name = "RTG_LightRoad",
+                hideFlags = HideFlags.HideAndDontSave,
+            };
             if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", roadColor);
             if (mat.HasProperty("_Color")) mat.SetColor("_Color", roadColor);
-            _line.material = mat;
+            _line.sharedMaterial = mat;
 
             var gradient = new Gradient();
             gradient.SetKeys(

@@ -35,8 +35,9 @@ namespace RoutesToGlory.Game
         [Tooltip("Flat ellipsoid height (m) used before Cesium samples arrive.")]
         public double fallbackGroundHeightM = 1476.0;
 
-        [Tooltip("Meters above committed corridor ground for player clearance.")]
-        public float markerClearanceM = 6f;
+        [Tooltip("Meters above committed corridor ground for player clearance. " +
+                 "Keep above TravelRoadClearanceM / ConnectorClearanceM so the ship reads above roads.")]
+        public float markerClearanceM = RtgTerrainElevationGuards.GliderClearanceM;
 
         [Tooltip("Spacing (m) between terrain samples along the travel corridor.")]
         public float corridorSampleSpacingM = 12f;

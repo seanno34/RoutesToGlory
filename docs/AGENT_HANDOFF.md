@@ -167,7 +167,22 @@ Unity mobile build: preprocessor runs automatically; or run **Regenerate Playabl
 | Ship tuning | `Assets/Scripts/Game/RtgShipTuningConfig.cs` |
 | Echo sites / deposits | `RtgEchoSiteLoader.cs`, `RtgTerrainDeposit.cs` (**XENITE TRIPO GUARDRAILS**) |
 | Terrain guards | `RtgTerrainDepositGuards.cs`, `RtgTerrainElevationGuards.cs`, `RtgTerrainClearanceTuningConfig.cs` |
+| Persisted / live routes | `RtgPersistedRouteDrawer.cs`, `RtgLightRoad.cs` — see §6b |
 | Biome | `packages/shared` biome types + `RtgBiomePalette.cs`, alien terrain shader |
+
+### 6b. Light Road + persisted routes (elevation + magenta) — production cutover
+
+**Focused doc:** `apps/unity-poc/docs/LIGHT_ROAD_ROUTES_HANDOFF.md`
+
+| Topic | Rule |
+|-------|------|
+| **Saved route elevation** | Persisted legs must **terrain-sample** like live Light Road / glider — not fixed ellipsoid `groundHeightMeters`. Clearance stack in `RtgTerrainElevationGuards`: travel **+3 m**, connector **+7 m**, glider **+15 m**. |
+| **Magenta “routes”** | Unity **missing-material error color** — **not** a route type. |
+| Magenta cause (a) | Assigning `line.material` destroys shared templates on reload → use **`sharedMaterial`**; re-ensure after create/re-anchor. |
+| Magenta cause (b) | **Scene-baked** unmanaged children under `RTG Persisted Routes` (`Route route-sample-leg` / `Connector route-sample-connector`) with null mats; `SyncRoutes` never tracked them. **Purge** unmanaged `LineRenderer` children on Awake / Clear / Sync. |
+| **Production** | Do **not** bake sample LineRenderers into shipped scenes; purge-on-load is a safety net only. |
+
+Key files: `RtgPersistedRouteDrawer`, `RtgLightRoad`, `RtgTerrainElevationGuards`.
 
 ---
 
@@ -198,7 +213,7 @@ Recent addition: Earth→alien biome mapping documented in `TERRAIN_BIOME_TAXONO
 ## 10. Git & deploy notes
 
 - **Branch:** `main` (pushed through `0f3362d`)
-- **Do not commit:** `.env`, `tilesource.local.json`, local tuning JSON (gitignored), build artifacts, `deploy/rtg_api_bundle/` unless intentional.
+- **Do not commit:** `.env`, `tilesource.local.json`, local tuning JSON (gitignored), build artifacts, `deploy/rtg_api_bundle/`, Unity `Assets/_Recovery/`, `*.tsbuildinfo` unless intentional.
 - **Deploy:** see `docs/DEPLOY.md` — PWA to `public_html/rtg/`, API outside public_html.
 
 ---
@@ -233,9 +248,10 @@ Recent agent work focused on:
 6. Xenite stacking on slider refresh  
 7. Guardrail comments in ship pipeline code  
 8. Xenite Tripo albedo Persist / yellow-wash fix + **XENITE TRIPO GUARDRAILS** docs/comments  
+9. **Persisted Light Road elevation** (terrain-sample + clearance stack) + **magenta** material/`sharedMaterial` + orphan purge under `RTG Persisted Routes` — see §6b / `LIGHT_ROAD_ROUTES_HANDOFF.md`
 
 Prior transcript (Tripo hull debugging arc): agent session `8e33b70d-51fa-4ef9-a06b-4a5c938af2d1` in Cursor agent transcripts.
 
 ---
 
-*Update this doc when ship/deposit pipeline or primary workflows change materially.*
+*Update this doc when ship/deposit/route pipeline or primary workflows change materially.*
