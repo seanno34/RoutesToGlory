@@ -6,6 +6,11 @@ namespace RoutesToGlory.Game
     /// <summary>
     /// Regression guardrails for tile-embedded resource deposits (Phase 2).
     /// Xenite v1 spec: <c>docs/XENITE_DEPOSIT_DESIGN_BRIEF.md</c>
+    ///
+    /// XENITE TRIPO GUARDRAILS (Jul 2026 — do not regress):
+    /// Prefab + albedo must live under Resources (see <see cref="XeniteResourcesLocalPrefabGuard"/>).
+    /// Full Sync/runtime rules: <c>apps/unity-poc/docs/XENITE_SPAWN_HANDOFF.md</c>
+    /// and summaries on <see cref="RtgTerrainDeposit"/> / <c>RtgMapBuilder.SyncXeniteDeposit</c>.
     /// </summary>
     public static class RtgTerrainDepositGuards
     {
@@ -59,6 +64,19 @@ namespace RoutesToGlory.Game
         /// Add ids here as each deposit brief ships; others stay in data but are not rendered.
         /// </summary>
         public static readonly string[] ActivePocDepositResourceIds = { "xenite" };
+
+        /// <summary>
+        /// REGRESSION: <c>xenite_rift.prefab</c> must reference mesh/material GUIDs under
+        /// <c>Assets/Resources/RTG_Deposits/</c>. Prefabs baked from <c>TripoModels/</c> look
+        /// fine in the editor until those paths strip or desync — then Tripo succeeds and
+        /// procedural fallback never runs, so deposits are invisible.
+        /// Also: never bake flat fuel×2.2 emission onto Resources mats — washes Tripo albedo to yellow.
+        /// Also: Sync must Persist Xenite materials onto the instance before SaveAsPrefabAsset —
+        /// normalizing Materials/*.mat alone leaves FBX-embedded mats without _BaseMap on the prefab.
+        /// Flat albedo: <c>Resources/RTG_Deposits/Xenite_Albedo.jpg</c> (like TripoHull_Albedo).
+        /// </summary>
+        public const string XeniteResourcesLocalPrefabGuard =
+            "Resources/RTG_Deposits mesh+external mat+_BaseMap+Xenite_Albedo (not FBX-embedded mats; no fuel wash)";
 
         public static bool IsActivePocDeposit(string resourceId)
         {

@@ -70,7 +70,7 @@ For live API field tests: run API with sleep prevention (see §5).
 3. **`TripoHull.mat` with URP/Lit but empty `_BaseMap`** — gray/invisible hull on device; editor looked fine.
 4. **Forcing `autoOrient=true` / `hullEuler=zero`** — broke tuned orientation from `rtg-ship-tuning.json`.
 5. **Skipping `FitImportedHullScale` for “baked” prefab** — microscopic hull on device.
-6. **Deferred `Destroy()` on deposit refresh** — stacked Xenite crystals (fixed with `DestroyImmediate` + `ClearDepositVisuals`).
+6. **Deferred `Destroy()` on deposit refresh** — stacked Xenite crystals (fixed with `DestroyImmediate` + `ClearDepositVisuals`). See §4 for Xenite Tripo material regressions (invisible / yellow wash / Sync Persist).
 
 ### Key Resources paths (must ship in player)
 
@@ -91,16 +91,42 @@ Gitignored local tuning (user machine): `rtg-xenite-deposit-tuning.json` under S
 
 ---
 
-## 4. Xenite deposits
+## 4. Xenite deposits — Tripo material / Sync
 
-- **Design:** `apps/unity-poc/docs/XENITE_DEPOSIT_DESIGN_BRIEF.md`
-- **Asset brief:** `apps/unity-poc/docs/XENITE_DEPOSIT_ASSET_BRIEF.md`
-- **Runtime:** `RtgTerrainDeposit.cs`, `RtgEchoSiteLoader.cs`, `RtgXeniteDepositTuningConfig.cs`
-- **Resources prefab:** `Assets/Resources/RTG_Deposits/` (Tripo crystal)
-- **POC map:** only `xenite` in active deposit list (`RtgTerrainDepositGuards`)
-- **Tuning:** Settings sliders → `ApplyXeniteDepositTuning()` → `RefreshResourceDepositsOnly()`; orientation defaults X=270° (migrated from old 90°)
+**Read the spawn handoff + in-code guardrails before changing deposit Sync or materials:**
 
-Stacking fix: `RtgEchoSiteLoader.DestroyObject()` uses `DestroyImmediate`; `BuildEmbedded()` calls `ClearDepositVisuals()` first.
+| Doc / file | What it documents |
+|------------|-------------------|
+| `apps/unity-poc/docs/XENITE_SPAWN_HANDOFF.md` | **TRIPO MATERIAL / SYNC GUARDRAILS** (pipeline + debug table) |
+| `Assets/Scripts/Editor/RtgMapBuilder.cs` | **XENITE TRIPO GUARDRAILS** on `SyncXeniteDeposit` / Persist / albedo |
+| `Assets/Scripts/Game/RtgTerrainDeposit.cs` | **XENITE TRIPO GUARDRAILS** + `ConfigureXenitePrefabRenderers` |
+| `Assets/Scripts/Game/RtgTerrainDepositGuards.cs` | Resources-local prefab / albedo path constants |
+
+Also: design `XENITE_DEPOSIT_DESIGN_BRIEF.md`, art `XENITE_DEPOSIT_ASSET_BRIEF.md`.
+
+### Required pattern (same class as player ship Tripo hull)
+
+| Step | What |
+|------|------|
+| Bake source | Resources-local mesh under `Assets/Resources/RTG_Deposits/` — **not** TripoModels-only GUIDs |
+| Albedo | `EnsureXeniteAlbedoInResources` → `Xenite_Albedo.jpg` **before** `SaveAsPrefabAsset` |
+| Materials | External Resources `.mat` with `_BaseMap`; **`PersistXeniteMaterialsToResources`** on bake instance |
+| Validate | `IsRenderableDepositPrefab` after Sync (mesh + material + albedo) |
+| Runtime | Do **not** force fuel×2.2 emission / orange base wash (`ConfigureXenitePrefabRenderers`) |
+
+### Past regressions (avoid repeating)
+
+1. **Invisible xenite** — prefab mesh/mat GUIDs pointed at `TripoModels/`; editor OK, device empty.
+2. **Sync “not renderable”** — normalized `Materials/*.mat` but bake left MeshRenderer on **FBX-embedded** mats without readable `_BaseMap` (skipped Persist).
+3. **Solid yellow wash** — fuel×2.2 emission + orange tint destroyed Tripo albedo at runtime.
+4. **Stacked crystals** on slider refresh — deferred `Destroy()` (fixed with `DestroyImmediate` + `ClearDepositVisuals`).
+
+### Key paths / workflow
+
+- **Resources prefab:** `Assets/Resources/RTG_Deposits/xenite_rift.prefab` (+ `Xenite_Albedo.jpg`, `Materials/*.mat`)
+- **Sync:** `Routes to Glory → Sync Xenite Deposit (Tripo)` in `RtgMapBuilder.cs`
+- **POC map:** only `xenite` in `ActivePocDepositResourceIds`
+- **Tuning:** Settings → `ApplyXeniteDepositTuning()` → `RefreshResourceDepositsOnly()`; default euler X=270°
 
 ---
 
@@ -139,7 +165,7 @@ Unity mobile build: preprocessor runs automatically; or run **Regenerate Playabl
 | Ship visual | `Assets/Scripts/Game/RtgPlayerShipVisual.cs` |
 | Player / marker | `Assets/Scripts/Game/RtgPlayerLocation.cs` |
 | Ship tuning | `Assets/Scripts/Game/RtgShipTuningConfig.cs` |
-| Echo sites / deposits | `RtgEchoSiteLoader.cs`, `RtgTerrainDeposit.cs` |
+| Echo sites / deposits | `RtgEchoSiteLoader.cs`, `RtgTerrainDeposit.cs` (**XENITE TRIPO GUARDRAILS**) |
 | Terrain guards | `RtgTerrainDepositGuards.cs`, `RtgTerrainElevationGuards.cs`, `RtgTerrainClearanceTuningConfig.cs` |
 | Biome | `packages/shared` biome types + `RtgBiomePalette.cs`, alien terrain shader |
 
@@ -183,6 +209,14 @@ Recent addition: Earth→alien biome mapping documented in `TERRAIN_BIOME_TAXONO
 4. If orientation wrong: check `rtg-ship-tuning.json` loaded (`ApplyTo`, not exhaust-only).
 5. If invisible on device only: inspect `TripoGlider.prefab` mesh GUID (must be Resources FBX) and `TripoHull.mat` `_BaseMap`.
 
+### Xenite (Tripo skin / Sync)
+
+See `apps/unity-poc/docs/XENITE_SPAWN_HANDOFF.md` → **TRIPO MATERIAL / SYNC GUARDRAILS**. Quick hits:
+
+1. **Yellow skin** — re-Sync; no fuel×2.2 emission; `_BaseMap` = `Xenite_Albedo.jpg`.
+2. **Sync “not renderable”** — Persist external mat before bake (not FBX-embedded mats).
+3. **Invisible on device** — Resources-local mesh+mat GUIDs in `xenite_rift.prefab`.
+
 ---
 
 ## 12. Conversation context
@@ -196,6 +230,7 @@ Recent agent work focused on:
 5. Tripo hull **editor vs device** rendering (multi-day regression cycle — now fixed + documented)  
 6. Xenite stacking on slider refresh  
 7. Guardrail comments in ship pipeline code  
+8. Xenite Tripo albedo Persist / yellow-wash fix + **XENITE TRIPO GUARDRAILS** docs/comments  
 
 Prior transcript (Tripo hull debugging arc): agent session `8e33b70d-51fa-4ef9-a06b-4a5c938af2d1` in Cursor agent transcripts.
 

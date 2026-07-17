@@ -9,7 +9,20 @@ namespace RoutesToGlory.Game
     /// Tile-embedded resource deposits for Phase 2 — flush with terrain, minimal glow.
     /// Xenite v1 spec: <c>docs/XENITE_DEPOSIT_DESIGN_BRIEF.md</c>
     /// Tripo / prefab spec: <c>apps/unity-poc/docs/XENITE_DEPOSIT_ASSET_BRIEF.md</c>
+    /// Spawn handoff: <c>apps/unity-poc/docs/XENITE_SPAWN_HANDOFF.md</c>
     /// Guardrails: <see cref="RtgTerrainDepositGuards"/>
+    ///
+    /// XENITE TRIPO GUARDRAILS (Jul 2026 — do not regress; same class as ship TRIPO HULL):
+    /// • Prefab mesh + material refs must stay under <c>Assets/Resources/RTG_Deposits/</c>.
+    ///   Baking from <c>TripoModels/</c> alone → invisible deposits on device.
+    /// • <see cref="IsRenderableDepositPrefab"/> requires mesh + non-null materials + albedo
+    ///   (<c>_BaseMap</c> / <c>_MainTex</c>). A Renderer alone is not enough.
+    /// • Do not leave MeshRenderer on FBX-embedded materials — Sync must
+    ///   <c>PersistXeniteMaterialsToResources</c> before <c>SaveAsPrefabAsset</c>.
+    /// • Flat albedo in Resources: <c>Xenite_Albedo.jpg</c> (like TripoHull_Albedo).
+    /// • <see cref="ConfigureXenitePrefabRenderers"/> must NOT force fuel×2.2 emission or
+    ///   orange base wash — that destroys Tripo albedo (solid yellow). Subtle textured
+    ///   emission only. Re-bake via Routes to Glory → Sync Xenite Deposit (Tripo).
     /// </summary>
     public static class RtgTerrainDeposit
     {
@@ -78,6 +91,8 @@ namespace RoutesToGlory.Game
         /// <summary>
         /// Loads Tripo/commissioned prefab from Resources when present.
         /// See <c>docs/XENITE_DEPOSIT_ASSET_BRIEF.md</c> §9.
+        /// XENITE TRIPO GUARDRAILS: configure renderers then gate on
+        /// <see cref="IsRenderableDepositInstance"/> — never treat a non-albedo prefab as success.
         /// </summary>
         private static bool TryBuildXeniteFromPrefab(
             Transform root,
@@ -101,42 +116,129 @@ namespace RoutesToGlory.Game
             instance.transform.localScale *= richnessScale;
             ConfigureXenitePrefabRenderers(instance);
 
+            if (!IsRenderableDepositInstance(instance))
+            {
+                UnityEngine.Debug.LogWarning(
+                    $"[RTG] Xenite prefab '{prefab.name}' instantiated without a usable mesh/material — " +
+                    "falling back to procedural deposit. Re-run Routes to Glory → Sync Xenite Deposit (Tripo).");
+                Object.DestroyImmediate(instance);
+                return false;
+            }
+
             labelHeightM = Mathf.Max(ResolveVisualHeightM(instance.transform), footprintM * 0.06f);
             UnityEngine.Debug.Log(
                 $"[RTG] Xenite deposit using Tripo prefab ({prefab.name}) — footprint {footprintM:0.#}m.");
             return true;
         }
 
+        /// <summary>
+        /// XENITE TRIPO GUARDRAILS — prefabs that load but reference missing TripoModels
+        /// mesh/material GUIDs look fine in Resources.Load logs and still render nothing —
+        /// same class of bug as TripoGlider. Requires mesh + materials + albedo.
+        /// </summary>
+        public static bool IsRenderableDepositPrefab(GameObject prefab)
+        {
+            if (prefab == null)
+                return false;
+
+            MeshFilter[] filters = prefab.GetComponentsInChildren<MeshFilter>(true);
+            if (filters == null || filters.Length == 0)
+                return false;
+
+            bool hasMesh = false;
+            foreach (MeshFilter filter in filters)
+            {
+                if (filter != null && filter.sharedMesh != null)
+                {
+                    hasMesh = true;
+                    break;
+                }
+            }
+
+            if (!hasMesh)
+                return false;
+
+            bool hasAlbedo = false;
+            foreach (Renderer renderer in prefab.GetComponentsInChildren<Renderer>(true))
+            {
+                if (renderer == null)
+                    continue;
+                Material[] materials = renderer.sharedMaterials;
+                if (materials == null || materials.Length == 0)
+                    return false;
+                foreach (Material material in materials)
+                {
+                    if (material == null)
+                        return false;
+                    if (ExtractAlbedoTexture(material) != null)
+                        hasAlbedo = true;
+                }
+            }
+
+            // Textured Tripo skin is required — untextured URP Lit reads as flat yellow/gray.
+            if (!hasAlbedo)
+            {
+                UnityEngine.Debug.LogWarning(
+                    $"[RTG] Xenite prefab '{prefab.name}' has materials but no albedo map — " +
+                    "re-run Routes to Glory → Sync Xenite Deposit (Tripo).");
+                return false;
+            }
+
+            return true;
+        }
+
+        private static bool IsRenderableDepositInstance(GameObject instance) =>
+            IsRenderableDepositPrefab(instance);
+
         private static GameObject ResolveXenitePrefab(string biome)
         {
             string resourcesPath = RtgTerrainDepositGuards.ResolveXenitePrefabResourcesPath(biome);
-            GameObject prefab = Resources.Load<GameObject>(resourcesPath);
+            GameObject prefab = TryLoadRenderableResourcesPrefab(resourcesPath);
             if (prefab != null)
                 return prefab;
 
             if (biome != RtgBiomePalette.Rift)
             {
-                prefab = Resources.Load<GameObject>(RtgTerrainDepositGuards.XeniteRiftPrefabResourcesPath);
+                prefab = TryLoadRenderableResourcesPrefab(RtgTerrainDepositGuards.XeniteRiftPrefabResourcesPath);
                 if (prefab != null)
                     return prefab;
             }
 
-            prefab = Resources.Load<GameObject>(RtgTerrainDepositGuards.XeniteTripoResourcesFallbackPath);
+            // Prefer the Resources FBX copy (stable GUIDs) over a baked prefab that still
+            // points at TripoModels paths outside Resources.
+            prefab = TryLoadRenderableResourcesPrefab(RtgTerrainDepositGuards.XeniteTripoResourcesFallbackPath);
             if (prefab != null)
                 return prefab;
 
 #if UNITY_EDITOR
             prefab = FindXeniteTripoImportInEditor();
-            if (prefab != null)
+            if (IsRenderableDepositPrefab(prefab))
                 return prefab;
 #endif
 
             UnityEngine.Debug.LogWarning(
-                $"[RTG] Xenite prefab not found (tried Resources/{resourcesPath}, " +
+                $"[RTG] Xenite prefab not found or not renderable (tried Resources/{resourcesPath}, " +
                 $"{RtgTerrainDepositGuards.XeniteRiftPrefabResourcesPath}, " +
                 $"{RtgTerrainDepositGuards.XeniteTripoResourcesFallbackPath}). " +
                 "Run Routes to Glory → Sync Xenite Deposit (Tripo).");
             return null;
+        }
+
+        private static GameObject TryLoadRenderableResourcesPrefab(string resourcesPath)
+        {
+            GameObject prefab = Resources.Load<GameObject>(resourcesPath);
+            if (!IsRenderableDepositPrefab(prefab))
+            {
+                if (prefab != null)
+                {
+                    UnityEngine.Debug.LogWarning(
+                        $"[RTG] Skipping Xenite asset Resources/{resourcesPath} — missing mesh or material refs.");
+                }
+
+                return null;
+            }
+
+            return prefab;
         }
 
 #if UNITY_EDITOR
@@ -180,54 +282,203 @@ namespace RoutesToGlory.Game
         /// <summary>Normalize Tripo import to 10 m authoring footprint with pivot on terrain surface.</summary>
         private static void FitXenitePrefabToAuthoringFootprint(Transform instance)
         {
-            Bounds bounds = CalculateLocalBounds(instance);
+            Bounds bounds = CalculateMeshLocalBounds(instance);
             float horizontalSpan = Mathf.Max(bounds.size.x, bounds.size.z, 0.001f);
             float fitScale = RtgTerrainDepositGuards.XeniteAuthoringFootprintM / horizontalSpan;
             instance.localScale = Vector3.one * fitScale;
 
-            bounds = CalculateLocalBounds(instance);
+            bounds = CalculateMeshLocalBounds(instance);
             instance.localPosition = new Vector3(0f, -bounds.min.y, 0f);
         }
 
-        private static Bounds CalculateLocalBounds(Transform root)
+        /// <summary>
+        /// Mesh.bounds in root-local space — avoids world-AABB corner bugs under Cesium /
+        /// non-axis rotations that previously collapsed scale to near-zero or buried the mesh.
+        /// </summary>
+        private static Bounds CalculateMeshLocalBounds(Transform root)
         {
-            Renderer[] renderers = root.GetComponentsInChildren<Renderer>(true);
-            if (renderers == null || renderers.Length == 0)
-                return new Bounds(Vector3.zero, Vector3.one);
+            MeshFilter[] filters = root.GetComponentsInChildren<MeshFilter>(true);
+            Bounds bounds = new Bounds(Vector3.zero, Vector3.zero);
+            bool hasBounds = false;
 
-            Bounds bounds = new Bounds(root.InverseTransformPoint(renderers[0].bounds.center), Vector3.zero);
-            foreach (Renderer renderer in renderers)
+            foreach (MeshFilter filter in filters)
             {
-                Bounds world = renderer.bounds;
-                bounds.Encapsulate(root.InverseTransformPoint(world.min));
-                bounds.Encapsulate(root.InverseTransformPoint(world.max));
+                if (filter == null || filter.sharedMesh == null)
+                    continue;
+
+                Bounds meshBounds = filter.sharedMesh.bounds;
+                Matrix4x4 localToRoot = root.worldToLocalMatrix * filter.transform.localToWorldMatrix;
+                Vector3[] corners =
+                {
+                    meshBounds.min,
+                    new Vector3(meshBounds.min.x, meshBounds.min.y, meshBounds.max.z),
+                    new Vector3(meshBounds.min.x, meshBounds.max.y, meshBounds.min.z),
+                    new Vector3(meshBounds.min.x, meshBounds.max.y, meshBounds.max.z),
+                    new Vector3(meshBounds.max.x, meshBounds.min.y, meshBounds.min.z),
+                    new Vector3(meshBounds.max.x, meshBounds.min.y, meshBounds.max.z),
+                    new Vector3(meshBounds.max.x, meshBounds.max.y, meshBounds.min.z),
+                    meshBounds.max,
+                };
+
+                foreach (Vector3 corner in corners)
+                {
+                    Vector3 local = localToRoot.MultiplyPoint3x4(corner);
+                    if (!hasBounds)
+                    {
+                        bounds = new Bounds(local, Vector3.zero);
+                        hasBounds = true;
+                    }
+                    else
+                    {
+                        bounds.Encapsulate(local);
+                    }
+                }
             }
 
-            return bounds;
+            return hasBounds ? bounds : new Bounds(Vector3.zero, Vector3.one);
         }
 
+        /// <summary>
+        /// XENITE TRIPO GUARDRAILS — keep Tripo albedo/maps readable.
+        /// Only fix broken shaders and add a low-intensity textured glow for night pass-over —
+        /// never flat fuel emission or base-color wash.
+        /// REGRESSION: fuel×2.2 emission + orange base lerp made Tripo deposits solid yellow.
+        /// </summary>
         private static void ConfigureXenitePrefabRenderers(GameObject depositRoot)
         {
             Shader urpLit = Shader.Find("Universal Render Pipeline/Lit");
+            Color fuel = RtgTerrainDepositGuards.XeniteCanonicalColor;
+            // Low HDR so lava albedo still dominates; emission map carries texture detail.
+            const float subtleEmissionIntensity = 0.22f;
+
             foreach (Renderer renderer in depositRoot.GetComponentsInChildren<Renderer>(true))
             {
                 renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
                 renderer.receiveShadows = false;
 
-                if (urpLit == null)
+                Material[] shared = renderer.sharedMaterials;
+                if (shared == null)
                     continue;
 
-                foreach (Material material in renderer.sharedMaterials)
+                var runtime = new Material[shared.Length];
+                for (int i = 0; i < shared.Length; i++)
                 {
-                    if (material == null || material.shader == null)
+                    Material source = shared[i];
+                    if (source == null)
+                    {
+                        runtime[i] = null;
                         continue;
-                    if (material.shader.name.Contains("Hidden/InternalErrorShader")
-                        || material.shader.name == "Standard")
+                    }
+
+                    Material material = new Material(source);
+                    Texture albedo = ExtractAlbedoTexture(material);
+
+                    if (urpLit != null
+                        && (material.shader == null
+                            || material.shader.name.Contains("Hidden/InternalErrorShader")
+                            || material.shader.name == "Standard"))
                     {
                         material.shader = urpLit;
+                        ApplyAlbedoTexture(material, albedo);
+                        if (material.HasProperty("_BaseColor"))
+                            material.SetColor("_BaseColor", Color.white);
                     }
+
+                    // Strip washout emission baked onto Resources materials by older sync/runtime.
+                    if (material.HasProperty("_EmissionColor"))
+                    {
+                        Color existing = material.GetColor("_EmissionColor");
+                        float luminance = existing.r * 0.299f + existing.g * 0.587f + existing.b * 0.114f;
+                        if (luminance > 0.75f || existing.maxColorComponent > 1.2f)
+                        {
+                            material.SetColor("_EmissionColor", Color.black);
+                            material.DisableKeyword("_EMISSION");
+                        }
+                    }
+
+                    if (albedo == null)
+                        albedo = TryLoadXeniteAlbedoFromResources();
+
+                    if (albedo != null)
+                        ApplyAlbedoTexture(material, albedo);
+
+                    // Subtle night glow: reuse albedo as emission map so crystal detail remains.
+                    if (material.HasProperty("_EmissionColor") && albedo != null)
+                    {
+                        if (material.HasProperty("_EmissionMap")
+                            && material.GetTexture("_EmissionMap") == null)
+                        {
+                            material.SetTexture("_EmissionMap", albedo);
+                        }
+
+                        material.EnableKeyword("_EMISSION");
+                        Color emission = Color.Lerp(Color.white, fuel, 0.4f) * subtleEmissionIntensity;
+                        material.SetColor("_EmissionColor", emission);
+                        material.globalIlluminationFlags = MaterialGlobalIlluminationFlags.RealtimeEmissive;
+                    }
+
+                    runtime[i] = material;
                 }
+
+                renderer.materials = runtime;
             }
+        }
+
+        private static Texture ExtractAlbedoTexture(Material source)
+        {
+            if (source == null)
+                return null;
+
+            if (source.mainTexture != null)
+                return source.mainTexture;
+
+            string[] texturePropertyNames =
+            {
+                "_BaseMap",
+                "_MainTex",
+                "_BaseColorMap",
+                "_DiffuseMap",
+            };
+
+            foreach (string propertyName in texturePropertyNames)
+            {
+                if (!source.HasProperty(propertyName))
+                    continue;
+
+                Texture texture = source.GetTexture(propertyName);
+                if (texture != null)
+                    return texture;
+            }
+
+            return null;
+        }
+
+        private static void ApplyAlbedoTexture(Material material, Texture albedo)
+        {
+            if (material == null || albedo == null)
+                return;
+
+            if (material.HasProperty("_BaseMap"))
+                material.SetTexture("_BaseMap", albedo);
+            if (material.HasProperty("_MainTex"))
+                material.SetTexture("_MainTex", albedo);
+        }
+
+        private static Texture TryLoadXeniteAlbedoFromResources()
+        {
+            // Flat copy written by Sync (mirrors TripoHull_Albedo) — preferred device path.
+            Texture2D texture = Resources.Load<Texture2D>("RTG_Deposits/Xenite_Albedo");
+            if (texture != null)
+                return texture;
+
+            // Resources path omits extension; JPEG lives beside the FBX under .fbm.
+            texture = Resources.Load<Texture2D>(
+                "RTG_Deposits/glowing_lava_crystal_3d_model_basecolor");
+            if (texture != null)
+                return texture;
+
+            return Resources.Load<Texture2D>(
+                "RTG_Deposits/glowing_lava_crystal_3d_model.fbm/glowing_lava_crystal_3d_model_basecolor");
         }
 
         private static float ResolveVisualHeightM(Transform depositRoot)

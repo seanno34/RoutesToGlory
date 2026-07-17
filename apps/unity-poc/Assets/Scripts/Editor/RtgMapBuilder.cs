@@ -297,6 +297,18 @@ namespace RoutesToGlory.EditorTools
                 "or Manual for real on-device GPS. Tick 'Follow With Camera' to chase it. Save with Cmd+S.");
         }
 
+        /// <summary>
+        /// XENITE TRIPO GUARDRAILS (Jul 2026 — do not regress; mirrors ship TRIPO DEVICE PIPELINE):
+        /// 1. Copy Tripo → <c>Resources/RTG_Deposits/</c> (Resources-local mesh GUIDs).
+        /// 2. <see cref="EnsureXeniteAlbedoInResources"/> writes <c>Xenite_Albedo.jpg</c>.
+        /// 3. <see cref="NormalizeXeniteResourcesMaterials"/> wires external mat <c>_BaseMap</c>, clears fuel wash.
+        /// 4. Bake from Resources FBX; <see cref="PersistXeniteMaterialsToResources"/> before
+        ///    <c>SaveAsPrefabAsset</c> — never leave MeshRenderer on FBX-embedded mats.
+        /// 5. <see cref="RtgTerrainDeposit.IsRenderableDepositPrefab"/> must pass (mesh + mat + albedo).
+        /// REGRESSIONS: TripoModels-only GUIDs → invisible on device; skip Persist → Sync
+        /// “not renderable”; fuel×2.2 emission at runtime → solid yellow skin.
+        /// See <c>apps/unity-poc/docs/XENITE_SPAWN_HANDOFF.md</c>.
+        /// </summary>
         [MenuItem("Routes to Glory/Sync Xenite Deposit (Tripo)", priority = 16)]
         public static void SyncXeniteDeposit()
         {
@@ -327,10 +339,26 @@ namespace RoutesToGlory.EditorTools
                 targetFolder);
             AssetDatabase.Refresh();
 
-            GameObject source = AssetDatabase.LoadAssetAtPath<GameObject>(sourceAssetPath);
+            // Flat albedo path for Resources.Load (same pattern as TripoHull_Albedo.png).
+            EnsureXeniteAlbedoInResources();
+
+            // Like TripoHull: keep albedo wired to the Resources-local JPEG and clear any
+            // washout emission left on copied mats (flat yellow fuel glow).
+            NormalizeXeniteResourcesMaterials();
+
+            // Bake the prefab from the Resources copy so mesh/material GUIDs stay inside
+            // Resources (device-safe). Instantiating the TripoModels source left xenite_rift
+            // pointing at guids that break when only Resources ships — invisible deposits.
+            // REGRESSION: SaveAsPrefabAsset alone kept FBX-embedded materials (no albedo on
+            // the baked prefab) even after Normalize touched Materials/*.mat — same class of
+            // bug as skipping PersistHullMaterialsToResources for TripoGlider.
+            string resourcesFbxPath = $"{XeniteTripoResourcesFolder}/glowing_lava_crystal_3d_model.fbx";
+            GameObject source = AssetDatabase.LoadAssetAtPath<GameObject>(resourcesFbxPath);
+            if (source == null)
+                source = AssetDatabase.LoadAssetAtPath<GameObject>(sourceAssetPath);
             if (source == null)
             {
-                Debug.LogError($"[RTG] Could not load Xenite Tripo asset from {sourceAssetPath}");
+                Debug.LogError($"[RTG] Could not load Xenite Tripo asset from {resourcesFbxPath}");
                 return;
             }
 
@@ -338,6 +366,14 @@ namespace RoutesToGlory.EditorTools
             GameObject instance = Object.Instantiate(source);
             try
             {
+                instance.name = XeniteTripoPrefabName;
+                if (!PersistXeniteMaterialsToResources(instance))
+                {
+                    Debug.LogError(
+                        "[RTG] Failed to bind Tripo albedo material onto Xenite instance before bake.");
+                    return;
+                }
+
                 PrefabUtility.SaveAsPrefabAsset(instance, prefabPath, out bool success);
                 if (!success)
                 {
@@ -350,10 +386,261 @@ namespace RoutesToGlory.EditorTools
                 Object.DestroyImmediate(instance);
             }
 
+            AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
+            GameObject baked = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+            if (!RtgTerrainDeposit.IsRenderableDepositPrefab(baked))
+            {
+                Debug.LogError(
+                    $"[RTG] Synced Xenite prefab at {prefabPath} is not renderable " +
+                    "(missing mesh, material, or albedo). Check Resources/RTG_Deposits materials.");
+                return;
+            }
+
             Debug.Log(
-                $"[RTG] Xenite deposit synced — source={sourceAssetPath} prefab={prefabPath}. " +
-                "Enter Play mode (or Reset & Reload World) to respawn deposits at r-xenite-1.");
+                $"[RTG] Xenite deposit synced — source={sourceAssetPath} prefab={prefabPath} " +
+                $"(Resources-local GUIDs + Tripo albedo). Enter Play mode to respawn deposits.");
+        }
+
+        private const string XeniteResourcesAlbedoAssetPath =
+            XeniteTripoResourcesFolder + "/Xenite_Albedo.jpg";
+        private const string XeniteResourcesMaterialPath =
+            XeniteTripoResourcesFolder + "/Materials/glowing_lava_crystal_3d_model_basecolor.mat";
+        private const string XeniteTripoAlbedoInFbmPath =
+            XeniteTripoResourcesFolder
+            + "/glowing_lava_crystal_3d_model.fbm/glowing_lava_crystal_3d_model_basecolor.JPEG";
+
+        /// <summary>
+        /// XENITE TRIPO GUARDRAILS — copies Tripo basecolor into a flat Resources path for
+        /// runtime <c>Resources.Load</c> (mirrors <c>TripoHull_Albedo.png</c>). Must run
+        /// before Persist / SaveAsPrefabAsset.
+        /// </summary>
+        private static void EnsureXeniteAlbedoInResources()
+        {
+            string destFull = Path.GetFullPath(
+                Path.Combine(Application.dataPath, "..", XeniteResourcesAlbedoAssetPath));
+
+            string[] candidates =
+            {
+                Path.GetFullPath(Path.Combine(Application.dataPath, "..", XeniteTripoAlbedoInFbmPath)),
+                Path.Combine(
+                    Application.dataPath,
+                    "Resources/RTG_Deposits/glowing_lava_crystal_3d_model.fbm/glowing_lava_crystal_3d_model_basecolor.JPEG"),
+            };
+
+            string sourceFull = null;
+            foreach (string candidate in candidates)
+            {
+                if (File.Exists(candidate))
+                {
+                    sourceFull = candidate;
+                    break;
+                }
+            }
+
+            if (sourceFull == null)
+            {
+                string[] found = Directory.GetFiles(
+                    Path.Combine(Application.dataPath, "Resources/RTG_Deposits"),
+                    "*basecolor*",
+                    SearchOption.AllDirectories);
+                foreach (string file in found)
+                {
+                    string lower = file.ToLowerInvariant();
+                    if (lower.EndsWith(".jpeg") || lower.EndsWith(".jpg") || lower.EndsWith(".png"))
+                    {
+                        sourceFull = file;
+                        break;
+                    }
+                }
+            }
+
+            if (sourceFull == null)
+            {
+                Debug.LogWarning(
+                    "[RTG] Xenite albedo JPEG not found under Resources/RTG_Deposits — " +
+                    "Tripo skin may be flat/yellow.");
+                return;
+            }
+
+            string destDir = Path.GetDirectoryName(destFull)
+                ?? Path.Combine(Application.dataPath, "Resources/RTG_Deposits");
+            Directory.CreateDirectory(destDir);
+            File.Copy(sourceFull, destFull, overwrite: true);
+            AssetDatabase.Refresh();
+        }
+
+        /// <summary>
+        /// XENITE TRIPO GUARDRAILS — ensures Resources xenite materials keep Tripo albedo and
+        /// do not ship with HDR fuel emission that washes the crystal to solid yellow.
+        /// </summary>
+        private static void NormalizeXeniteResourcesMaterials()
+        {
+            Texture2D albedo = LoadXeniteAlbedoTexture();
+            if (albedo == null)
+            {
+                Debug.LogWarning(
+                    "[RTG] Xenite albedo missing under Resources/RTG_Deposits — Tripo skin may be flat/yellow.");
+                return;
+            }
+
+            Material mat = EnsureXeniteResourcesMaterial(albedo);
+            if (mat == null)
+            {
+                Debug.LogWarning(
+                    "[RTG] No Xenite materials found under Resources/RTG_Deposits to normalize.");
+                return;
+            }
+
+            ApplyXeniteAlbedoToMaterial(mat, albedo);
+            EditorUtility.SetDirty(mat);
+            AssetDatabase.SaveAssets();
+        }
+
+        /// <summary>
+        /// XENITE TRIPO GUARDRAILS — assigns the Resources-local URP Lit material (with Tripo
+        /// albedo) onto the bake instance before SaveAsPrefabAsset.
+        /// REGRESSION: baking the raw FBX left MeshRenderer materials as FBX sub-assets without
+        /// a readable _BaseMap, so IsRenderableDepositPrefab failed after Sync even though
+        /// Materials/*.mat was fine (same class as skipping PersistHullMaterialsToResources).
+        /// </summary>
+        private static bool PersistXeniteMaterialsToResources(GameObject depositRoot)
+        {
+            Texture2D albedo = LoadXeniteAlbedoTexture();
+            Material persisted = EnsureXeniteResourcesMaterial(albedo);
+            if (persisted == null || albedo == null)
+                return false;
+
+            ApplyXeniteAlbedoToMaterial(persisted, albedo);
+            EditorUtility.SetDirty(persisted);
+
+            bool assigned = false;
+            foreach (Renderer renderer in depositRoot.GetComponentsInChildren<Renderer>(true))
+            {
+                if (renderer == null)
+                    continue;
+
+                Material[] shared = renderer.sharedMaterials;
+                if (shared == null || shared.Length == 0)
+                {
+                    renderer.sharedMaterial = persisted;
+                    assigned = true;
+                    continue;
+                }
+
+                var next = new Material[shared.Length];
+                for (int i = 0; i < shared.Length; i++)
+                    next[i] = persisted;
+                renderer.sharedMaterials = next;
+                assigned = true;
+            }
+
+            AssetDatabase.SaveAssets();
+            return assigned;
+        }
+
+        private static Texture2D LoadXeniteAlbedoTexture()
+        {
+            Texture2D albedo = AssetDatabase.LoadAssetAtPath<Texture2D>(XeniteResourcesAlbedoAssetPath);
+            if (albedo != null)
+                return albedo;
+
+            albedo = AssetDatabase.LoadAssetAtPath<Texture2D>(XeniteTripoAlbedoInFbmPath);
+            if (albedo != null)
+                return albedo;
+
+            string[] guids = AssetDatabase.FindAssets(
+                "glowing_lava_crystal_3d_model_basecolor t:Texture2D",
+                new[] { XeniteTripoResourcesFolder });
+            if (guids == null)
+                return null;
+
+            foreach (string guid in guids)
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+                albedo = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+                if (albedo != null)
+                    return albedo;
+            }
+
+            return null;
+        }
+
+        private static Material EnsureXeniteResourcesMaterial(Texture2D albedo)
+        {
+            Material existing = AssetDatabase.LoadAssetAtPath<Material>(XeniteResourcesMaterialPath);
+            if (existing != null)
+            {
+                ApplyXeniteAlbedoToMaterial(existing, albedo);
+                return existing;
+            }
+
+            string materialsFolder = XeniteTripoResourcesFolder + "/Materials";
+            string[] matGuids = AssetDatabase.FindAssets("t:Material", new[] { materialsFolder });
+            if (matGuids == null || matGuids.Length == 0)
+            {
+                matGuids = AssetDatabase.FindAssets(
+                    "glowing_lava_crystal_3d_model_basecolor t:Material",
+                    new[] { XeniteTripoResourcesFolder });
+            }
+
+            if (matGuids != null)
+            {
+                foreach (string guid in matGuids)
+                {
+                    string path = AssetDatabase.GUIDToAssetPath(guid);
+                    Material mat = AssetDatabase.LoadAssetAtPath<Material>(path);
+                    if (mat == null)
+                        continue;
+                    ApplyXeniteAlbedoToMaterial(mat, albedo);
+                    return mat;
+                }
+            }
+
+            Shader urpLit = Shader.Find("Universal Render Pipeline/Lit");
+            if (urpLit == null)
+                return null;
+
+            string folder = Path.GetDirectoryName(XeniteResourcesMaterialPath)?.Replace('\\', '/');
+            if (!string.IsNullOrEmpty(folder) && !AssetDatabase.IsValidFolder(folder))
+            {
+                if (!AssetDatabase.IsValidFolder(XeniteTripoResourcesFolder + "/Materials"))
+                    AssetDatabase.CreateFolder(XeniteTripoResourcesFolder, "Materials");
+            }
+
+            var created = new Material(urpLit)
+            {
+                name = "glowing_lava_crystal_3d_model_basecolor",
+            };
+            ApplyXeniteAlbedoToMaterial(created, albedo);
+            AssetDatabase.CreateAsset(created, XeniteResourcesMaterialPath);
+            return AssetDatabase.LoadAssetAtPath<Material>(XeniteResourcesMaterialPath);
+        }
+
+        private static void ApplyXeniteAlbedoToMaterial(Material mat, Texture albedo)
+        {
+            if (mat == null)
+                return;
+
+            if (albedo != null)
+            {
+                if (mat.HasProperty("_BaseMap"))
+                    mat.SetTexture("_BaseMap", albedo);
+                if (mat.HasProperty("_MainTex"))
+                    mat.SetTexture("_MainTex", albedo);
+            }
+
+            if (mat.HasProperty("_BaseColor"))
+                mat.SetColor("_BaseColor", Color.white);
+            if (mat.HasProperty("_Color"))
+                mat.SetColor("_Color", Color.white);
+            if (mat.HasProperty("_EmissionColor"))
+                mat.SetColor("_EmissionColor", Color.black);
+            if (mat.HasProperty("_EmissionMap"))
+                mat.SetTexture("_EmissionMap", null);
+
+            mat.DisableKeyword("_EMISSION");
+            mat.globalIlluminationFlags = MaterialGlobalIlluminationFlags.EmissiveIsBlack;
         }
 
         [MenuItem("Routes to Glory/Sync Player Ship Art", priority = 17)]

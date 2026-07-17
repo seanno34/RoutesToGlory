@@ -8,6 +8,9 @@ import { query, newId } from './client.js';
 import { insertResourceNode } from './exploration-repo.js';
 
 const PLAY_AREA_RADIUS_M = 12_000;
+/** Mission A needs 5 xenite connections — keep a dense ring under the play camera. */
+const NEAR_RING_COUNT = 12;
+const NEAR_RING_RADIUS_M = 1_800;
 const GOODIE_HUT_COUNT = 16;
 const RESOURCE_NODE_COUNT = 48;
 
@@ -45,6 +48,41 @@ function rng(seed: number): () => number {
     s = (s * 1664525 + 1013904223) % 2 ** 32;
     return s / 2 ** 32;
   };
+}
+
+async function tryInsertXenite(
+  worldId: string,
+  lat: number,
+  lng: number,
+  tileSize: number,
+  occupiedTiles: Set<string>,
+  random: () => number,
+  config: GameConfig,
+): Promise<boolean> {
+  const tileId = latLngToTileId(lat, lng, tileSize);
+  if (occupiedTiles.has(tileId)) return false;
+
+  const richnessRoll = random();
+  const richness =
+    richnessRoll < 0.15 ? 'sparse' : richnessRoll < 0.55 ? 'moderate' : 'rich';
+  const mult = richness === 'sparse' ? 0.6 : richness === 'moderate' ? 1 : 1.6;
+  const base =
+    config.resources.depositYieldPerDay.min +
+    random() *
+      (config.resources.depositYieldPerDay.max - config.resources.depositYieldPerDay.min);
+  const yieldPerDay = Math.max(2, Math.floor(base * mult));
+
+  await insertResourceNode(
+    worldId,
+    tileId,
+    POC_ACTIVE_DEPOSIT_RESOURCE_IDS[0],
+    lat,
+    lng,
+    richness,
+    yieldPerDay,
+  );
+  occupiedTiles.add(tileId);
+  return true;
 }
 
 export async function seedPlayArea(
@@ -98,6 +136,23 @@ export async function seedPlayArea(
   }
 
   const tileSize = config.fogOfWar.tileSizeM;
+  const occupiedTiles = new Set<string>();
+
+  // Near ring first — unique fog tiles so INSERT IGNORE cannot drop neighbors.
+  for (let i = 0; i < NEAR_RING_COUNT && resources < RESOURCE_NODE_COUNT; i += 1) {
+    const angle = (i / NEAR_RING_COUNT) * Math.PI * 2 + random() * 0.15;
+    const dist = 250 + (i % 4) * (NEAR_RING_RADIUS_M / 4) + random() * 80;
+    const { lat, lng } = offsetMeters(
+      centerLat,
+      centerLng,
+      Math.cos(angle) * dist,
+      Math.sin(angle) * dist,
+    );
+    if (await tryInsertXenite(worldId, lat, lng, tileSize, occupiedTiles, random, config)) {
+      resources += 1;
+    }
+  }
+
   const gridSteps = Math.ceil(Math.sqrt(RESOURCE_NODE_COUNT));
 
   for (let gy = 0; gy < gridSteps && resources < RESOURCE_NODE_COUNT; gy += 1) {
@@ -115,20 +170,9 @@ export async function seedPlayArea(
 
       if (haversineM(lat, lng, centerLat, centerLng) > PLAY_AREA_RADIUS_M) continue;
 
-      const tileId = latLngToTileId(lat, lng, tileSize);
-      const resourceId = POC_ACTIVE_DEPOSIT_RESOURCE_IDS[0];
-      const richnessRoll = random();
-      const richness =
-        richnessRoll < 0.15 ? 'sparse' : richnessRoll < 0.55 ? 'moderate' : 'rich';
-      const mult = richness === 'sparse' ? 0.6 : richness === 'moderate' ? 1 : 1.6;
-      const base =
-        config.resources.depositYieldPerDay.min +
-        random() *
-          (config.resources.depositYieldPerDay.max - config.resources.depositYieldPerDay.min);
-      const yieldPerDay = Math.max(2, Math.floor(base * mult));
-
-      await insertResourceNode(worldId, tileId, resourceId, lat, lng, richness, yieldPerDay);
-      resources += 1;
+      if (await tryInsertXenite(worldId, lat, lng, tileSize, occupiedTiles, random, config)) {
+        resources += 1;
+      }
     }
   }
 

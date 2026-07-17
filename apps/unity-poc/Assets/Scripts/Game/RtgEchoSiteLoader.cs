@@ -610,6 +610,16 @@ namespace RoutesToGlory.Game
                     "[RTG] Map has deposits but no echo sites — verify world seed/MySQL data or enable " +
                     "fallbackToSampleOnApiFailure on RTG Echo Sites.");
             }
+            else if (resources == 0 && map.resources != null && map.resources.Length > 0)
+            {
+                Debug.LogWarning(
+                    $"[RTG] Map has {map.resources.Length} resource node(s) but 0 POC deposits spawned " +
+                    $"(active ids: {string.Join(", ", RtgTerrainDepositGuards.ActivePocDepositResourceIds)}).");
+            }
+            else if (resources > 0)
+            {
+                WarnIfNoDepositsNearPlayCenter(map);
+            }
             DrawPersistedRoutes(map);
             InvalidateRouteSnapCache();
             NotifyRouteCleanup();
@@ -640,6 +650,31 @@ namespace RoutesToGlory.Game
                 ? "0 xenite"
                 : $"{xeniteTripo + xeniteProcedural} xenite ({xeniteTripo} Tripo, {xeniteProcedural} procedural)";
             return $"Spawned {settlements} settlements, {resources} deposits ({xeniteDetail})";
+        }
+
+        /// <summary>
+        /// Catches worlds seeded far from the Unity play camera (e.g. Denver default vs Orin POC).
+        /// </summary>
+        private void WarnIfNoDepositsNearPlayCenter(RtgWorldMap map)
+        {
+            if (map?.resources == null) return;
+
+            int near = 0;
+            foreach (RtgResourceNode r in map.resources)
+            {
+                if (r == null || !RtgTerrainDepositGuards.IsActivePocDeposit(r.resource_id))
+                    continue;
+                if (HaversineM(scatterCenterLat, scatterCenterLng, r.lat, r.lng) <= scatterRadiusMeters)
+                    near++;
+            }
+
+            if (near == 0)
+            {
+                Debug.LogWarning(
+                    $"[RTG] Xenite deposits spawned but none within {scatterRadiusMeters:0} m of play center " +
+                    $"({scatterCenterLat:F4}, {scatterCenterLng:F4}). World was likely seeded at a different " +
+                    "spawn (use New Game after the Orin spawn fix, or Join a Douglas-area session).");
+            }
         }
 
         private bool ShouldAnchorMarkersToTerrain()

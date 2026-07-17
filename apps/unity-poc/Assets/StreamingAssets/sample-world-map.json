@@ -109,6 +109,46 @@
       "lat": 42.7638,
       "lng": -105.3762,
       "biome": "xeno_rift"
+    },
+    {
+      "id": "r-xenite-2",
+      "tile_id": "t2",
+      "resource_id": "xenite",
+      "richness": "moderate",
+      "yield_per_day": 18,
+      "lat": 42.7571,
+      "lng": -105.3884,
+      "biome": "xeno_rift"
+    },
+    {
+      "id": "r-xenite-3",
+      "tile_id": "t3",
+      "resource_id": "xenite",
+      "richness": "rich",
+      "yield_per_day": 36,
+      "lat": 42.7665,
+      "lng": -105.3901,
+      "biome": "xeno_rift"
+    },
+    {
+      "id": "r-xenite-4",
+      "tile_id": "t4",
+      "resource_id": "xenite",
+      "richness": "sparse",
+      "yield_per_day": 8,
+      "lat": 42.7528,
+      "lng": -105.3720,
+      "biome": "xeno_highland"
+    },
+    {
+      "id": "r-xenite-5",
+      "tile_id": "t5",
+      "resource_id": "xenite",
+      "richness": "moderate",
+      "yield_per_day": 22,
+      "lat": 42.7610,
+      "lng": -105.3695,
+      "biome": "xeno_rift"
     }
   ]
 }

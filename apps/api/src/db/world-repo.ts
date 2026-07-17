@@ -58,13 +58,19 @@ function slugify(name: string): string {
     .slice(0, 48);
 }
 
+/** Unity POC play area (Douglas / Orin Junction, WY) — matches sample-world-map + Echo Sites. */
+const POC_DEFAULT_SPAWN_LAT = 42.7597;
+const POC_DEFAULT_SPAWN_LNG = -105.3819;
+
 export async function createWorldInDb(
   input: CreateWorldInput,
   config: GameConfig = DEFAULT_GAME_CONFIG,
 ): Promise<WorldBootstrap> {
   const slug = input.slug ?? `${slugify(input.name)}-${Date.now().toString(36)}`;
-  const spawnLat = input.spawnLat ?? 39.7392;
-  const spawnLng = input.spawnLng ?? -104.9903;
+  // Prefer caller GPS (web / Unity New Game). Default is Orin Junction — NOT Denver —
+  // so seeded xenite lands under the Unity camera when spawnLat/Lng are omitted.
+  const spawnLat = input.spawnLat ?? POC_DEFAULT_SPAWN_LAT;
+  const spawnLng = input.spawnLng ?? POC_DEFAULT_SPAWN_LNG;
 
   const worldId = newId();
   const accessCode = await generateUniqueAccessCode();

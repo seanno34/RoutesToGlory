@@ -88,7 +88,16 @@ namespace RoutesToGlory.Game
             public string name;
             public string playerName;
             public string pin;
+            public double spawnLat;
+            public double spawnLng;
         }
+
+        /// <summary>
+        /// POC play-area default (Douglas / Orin Junction). Must match API
+        /// <c>POC_DEFAULT_SPAWN_*</c> and <see cref="RtgEchoSiteLoader"/> scatter center.
+        /// </summary>
+        private const double PocDefaultSpawnLat = 42.7597;
+        private const double PocDefaultSpawnLng = -105.3819;
 
         /// <summary>Ensure a login component exists on the Echo Sites GameObject.</summary>
         public static RtgGameSessionLogin EnsureOn(RtgEchoSiteLoader loader)
@@ -299,6 +308,55 @@ namespace RoutesToGlory.Game
             _loader.SetSessionLoadAllowed(true);
             _loader.ReloadFromConfiguredSource();
             SyncRouteSession();
+        }
+
+        /// <summary>
+        /// Seed New Game resources under the player (or POC Douglas center before GPS starts).
+        /// Omitting spawn made the API default to Denver — xenite existed but ~330 km from the camera.
+        /// </summary>
+        private void ResolveNewGameSpawn(out double spawnLat, out double spawnLng)
+        {
+            spawnLat = PocDefaultSpawnLat;
+            spawnLng = PocDefaultSpawnLng;
+
+#if UNITY_2023_1_OR_NEWER
+            var player = FindFirstObjectByType<RtgPlayerLocation>();
+#else
+            var player = FindObjectOfType<RtgPlayerLocation>();
+#endif
+            if (player != null)
+            {
+                if (player.TryGetPlayerLatLng(out double lat, out double lng)
+                    && IsPlausibleSpawn(lat, lng))
+                {
+                    spawnLat = lat;
+                    spawnLng = lng;
+                    return;
+                }
+
+                if (IsPlausibleSpawn(player.tourCenterLatitude, player.tourCenterLongitude))
+                {
+                    spawnLat = player.tourCenterLatitude;
+                    spawnLng = player.tourCenterLongitude;
+                    return;
+                }
+            }
+
+            if (_loader != null && IsPlausibleSpawn(_loader.scatterCenterLat, _loader.scatterCenterLng))
+            {
+                spawnLat = _loader.scatterCenterLat;
+                spawnLng = _loader.scatterCenterLng;
+            }
+        }
+
+        private static bool IsPlausibleSpawn(double lat, double lng)
+        {
+            if (double.IsNaN(lat) || double.IsNaN(lng) || double.IsInfinity(lat) || double.IsInfinity(lng))
+                return false;
+            if (lat < -90.0 || lat > 90.0 || lng < -180.0 || lng > 180.0)
+                return false;
+            // Reject uninitialized globe anchors still at 0,0.
+            return Math.Abs(lat) > 0.01 || Math.Abs(lng) > 0.01;
         }
 
         private void SyncRouteSession()
@@ -559,13 +617,17 @@ namespace RoutesToGlory.Game
             _error = "";
             _status = "Creating new world…";
 
+            ResolveNewGameSpawn(out double spawnLat, out double spawnLng);
             var reqBody = new CreateWorldRequest
             {
                 name = $"World {DateTime.UtcNow:yyyy-MM-dd HH:mm}",
                 playerName = $"PIN {normalizedPin}",
                 pin = normalizedPin,
+                spawnLat = spawnLat,
+                spawnLng = spawnLng,
             };
             string json = JsonUtility.ToJson(reqBody);
+            Debug.Log($"[RTG] New Game seeding play area at {spawnLat:F4}, {spawnLng:F4}");
             string url = RtgApiHttp.JoinUrl(ResolveApiBaseUrl(), "worlds");
             string body = null;
             string error = null;
