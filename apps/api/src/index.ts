@@ -6,6 +6,7 @@ import { godModeRoutes, worldRoutes } from './routes/game.js';
 import { terrainTileRoutes } from './routes/terrain-tiles.js';
 import { sessionRoutes } from './routes/sessions.js';
 import { claimRoutes } from './routes/claims.js';
+import { missionRoutes } from './routes/missions.js';
 import { isDatabaseEnabled, runMigrations } from './db/client.js';
 import { ensureAccessCodeSchema } from './db/access-code.js';
 
@@ -43,6 +44,7 @@ async function main(): Promise<void> {
   await app.register(terrainTileRoutes, { prefix: '/api' });
   await app.register(sessionRoutes, { prefix: '/api' });
   await app.register(claimRoutes, { prefix: '/api' });
+  await app.register(missionRoutes, { prefix: '/api' });
   await app.register(godModeRoutes, { prefix: '/api/god' });
 
   await app.listen({ port: PORT, host: '0.0.0.0' });

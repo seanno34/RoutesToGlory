@@ -224,9 +224,9 @@ namespace RoutesToGlory.EditorTools
             Texture albedo = FindAlbedoForBake(hullRoot);
             foreach (MeshRenderer renderer in hullRoot.GetComponentsInChildren<MeshRenderer>(true))
             {
-                Material[] runtimeMaterials = renderer.materials;
-                Material[] persistedMaterials = new Material[runtimeMaterials.Length];
-                for (int i = 0; i < runtimeMaterials.Length; i++)
+                Material[] sourceMaterials = renderer.sharedMaterials;
+                Material[] persistedMaterials = new Material[sourceMaterials.Length];
+                for (int i = 0; i < sourceMaterials.Length; i++)
                 {
                     string assetPath = i == 0
                         ? "Assets/Resources/RTG_PlayerShip/TripoGlider/TripoHull.mat"
@@ -235,16 +235,17 @@ namespace RoutesToGlory.EditorTools
                     Material existing = AssetDatabase.LoadAssetAtPath<Material>(assetPath);
                     if (existing != null)
                     {
-                        Object.DestroyImmediate(runtimeMaterials[i]);
                         RtgPlayerShipVisual.ApplyAlbedoToMaterial(existing, albedo);
                         EditorUtility.SetDirty(existing);
                         persistedMaterials[i] = existing;
                         continue;
                     }
 
-                    Material material = runtimeMaterials[i];
+                    Material material = sourceMaterials[i];
                     if (material == null)
                         material = urpLit != null ? new Material(urpLit) : new Material(Shader.Find("Standard"));
+                    else if (AssetDatabase.GetAssetPath(material) != assetPath)
+                        material = new Material(material);
 
                     material.name = Path.GetFileNameWithoutExtension(assetPath);
                     RtgPlayerShipVisual.ApplyAlbedoToMaterial(material, albedo);

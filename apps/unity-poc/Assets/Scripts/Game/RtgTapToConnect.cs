@@ -237,6 +237,9 @@ namespace RoutesToGlory.Game
 
             MarkConnected(result.connectedTargetId);
             RefreshAfterClaim(result);
+
+            var missions = RtgMissionProgress.FindOrCreate();
+            missions?.NotifyClaimSucceeded();
         }
 
         private static void MarkConnected(string targetId)

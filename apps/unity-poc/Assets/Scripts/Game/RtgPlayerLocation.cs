@@ -451,6 +451,7 @@ namespace RoutesToGlory.Game
             EnsureRouteSession();
             SyncRouteSessionSnapMode();
             EnsureTapToConnect();
+            EnsureMissionProgress();
             EnsureCesiumCreditsToggle();
             EnsureCockpitView();
             EnsureCockpitRearCamera();
@@ -1568,6 +1569,13 @@ namespace RoutesToGlory.Game
             gameObject.AddComponent<RtgTapToConnect>();
         }
 
+        private void EnsureMissionProgress()
+        {
+            if (!Application.isPlaying) return;
+            if (GetComponent<RtgMissionProgress>() != null) return;
+            gameObject.AddComponent<RtgMissionProgress>();
+        }
+
         private void EnsureCockpitView()
         {
             if (!Application.isPlaying) return;
@@ -1980,7 +1988,18 @@ namespace RoutesToGlory.Game
                 if (rect.Contains(guiPos))
                     return true;
             }
+
+            var missions = GetComponent<RtgMissionProgress>();
+            if (missions != null && missions.IsGuiPointOverHud(guiPos))
+                return true;
+
             return false;
+        }
+
+        /// <summary>Allow other IMGUI systems (missions HUD) to block map taps.</summary>
+        public void RegisterExternalGameUiRect(Rect rect)
+        {
+            RegisterGameUiRect(rect);
         }
 
         /// <summary>
@@ -2428,6 +2447,7 @@ namespace RoutesToGlory.Game
             bool showHullTuning = markerStyle == PlayerMarkerStyle.SpaceshipSprite;
             bool showTerrainClearance = Application.isPlaying;
             bool showXeniteTuning = Application.isPlaying;
+            bool showMissionDev = Application.isPlaying;
 
             const float panelWidthDesired = 300f * scale;
             const float rowH = 56f * scale;
@@ -2448,6 +2468,8 @@ namespace RoutesToGlory.Game
             if (showXeniteTuning)
                 scrollContentH += CalculateXeniteDepositTuningScrollHeight(
                     rowH, hullSectionHeaderH, hullButtonRowH, pad);
+            if (showMissionDev)
+                scrollContentH += pad * 0.5f + hullSectionHeaderH + hullButtonRowH + pad;
             if (showHullTuning)
                 scrollContentH += CalculateHullTuningScrollHeight(rowH, hullSectionHeaderH, hullButtonRowH, scale, pad);
 
@@ -2593,6 +2615,12 @@ namespace RoutesToGlory.Game
                 y += pad * 0.5f;
                 y = DrawXeniteDepositTuningSection(
                     contentPanel, y, rowH, hullSectionHeaderH, hullButtonRowH, scale);
+            }
+
+            if (showMissionDev)
+            {
+                y += pad * 0.5f;
+                y = DrawMissionDevSection(contentPanel, y, hullSectionHeaderH, hullButtonRowH, scale);
             }
 
             if (showHullTuning)
@@ -2752,6 +2780,46 @@ namespace RoutesToGlory.Game
                 SaveTerrainClearanceTuning();
             if (GUI.Button(reloadRect, "Reload"))
                 ReloadTerrainClearanceTuning();
+            GUI.skin.button.fontSize = prevBtn;
+            y += buttonRowH;
+
+            return y;
+        }
+
+        private float DrawMissionDevSection(
+            Rect panelRect,
+            float y,
+            float sectionHeaderH,
+            float buttonRowH,
+            float scale)
+        {
+            var sectionStyle = BrightLabel(
+                Mathf.RoundToInt(14f * scale),
+                new Color(0.88f, 0.94f, 1f),
+                FontStyle.Bold);
+            GUI.Label(
+                new Rect(panelRect.x, y, panelRect.width, sectionHeaderH),
+                "Missions (dev)",
+                sectionStyle);
+            y += sectionHeaderH;
+
+            var missions = GetComponent<RtgMissionProgress>();
+            bool canAccelerate = missions != null && missions.IsMissionCActive;
+
+            float buttonW = (panelRect.width - 8f * scale) * 0.5f;
+            var nearRect = new Rect(panelRect.x, y, buttonW, buttonRowH - 8f * scale);
+            var finishRect = new Rect(nearRect.xMax + 8f * scale, y, buttonW, buttonRowH - 8f * scale);
+            RegisterGameUiRect(nearRect);
+            RegisterGameUiRect(finishRect);
+
+            var prevBtn = GUI.skin.button.fontSize;
+            GUI.skin.button.fontSize = Mathf.RoundToInt(12f * scale);
+            GUI.enabled = canAccelerate;
+            if (GUI.Button(nearRect, "C → ~60s"))
+                missions.AccelerateMissionCNear();
+            if (GUI.Button(finishRect, "Skip C"))
+                missions.AccelerateMissionCFinish();
+            GUI.enabled = true;
             GUI.skin.button.fontSize = prevBtn;
             y += buttonRowH;
 

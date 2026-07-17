@@ -17,6 +17,8 @@ export interface ResetWorldProgressResult {
   routesDeleted: number;
   sessionsDeleted: number;
   extractorsDeleted: number;
+  baseCampsDeleted: number;
+  missionsDeleted: number;
   goodieHutsRestored: number;
   resourcesUnclaimed: number;
   settlementsUnowned: number;
@@ -62,9 +64,20 @@ export async function resetWorldProgress(
 
   await query(`DELETE FROM world_events WHERE world_id = ?`, [worldId]);
 
+  const missionsDeleted = await deleteRows(
+    `DELETE FROM empire_missions WHERE world_id = ?${empireId ? ' AND empire_id = ?' : ''}`,
+    bind(worldId, empireId),
+  );
+
   const extractorsDeleted = await deleteRows(
     `DELETE FROM settlements
      WHERE world_id = ? AND slug LIKE 'extractor-%'${empireId ? ' AND owner_empire_id = ?' : ''}`,
+    bind(worldId, empireId),
+  );
+
+  const baseCampsDeleted = await deleteRows(
+    `DELETE FROM settlements
+     WHERE world_id = ? AND slug LIKE 'base-camp-%'${empireId ? ' AND owner_empire_id = ?' : ''}`,
     bind(worldId, empireId),
   );
 
@@ -108,6 +121,8 @@ export async function resetWorldProgress(
     routesDeleted,
     sessionsDeleted,
     extractorsDeleted,
+    baseCampsDeleted,
+    missionsDeleted,
     goodieHutsRestored,
     resourcesUnclaimed,
     settlementsUnowned,

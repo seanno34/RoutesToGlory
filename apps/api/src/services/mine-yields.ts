@@ -1,4 +1,5 @@
 import { query } from '../db/client.js';
+import { parseMysqlJson } from '../db/mysql-json.js';
 
 export interface MineYieldResult {
   accrued: Record<string, number>;
@@ -27,7 +28,7 @@ export async function applyMineYields(
     return { accrued: {}, mineCount: 0 };
   }
 
-  const stockpileResult = await query<{ resources: string }>(
+  const stockpileResult = await query<{ resources: unknown }>(
     `SELECT resources FROM empire_stockpiles WHERE empire_id = ?`,
     [empireId],
   );
@@ -35,10 +36,9 @@ export async function applyMineYields(
     return { accrued: {}, mineCount: mines.rows.length };
   }
 
-  const stockpile = JSON.parse(stockpileResult.rows[0]?.resources ?? '{}') as Record<
-    string,
-    number
-  >;
+  const stockpile = {
+    ...parseMysqlJson<Record<string, number>>(stockpileResult.rows[0]?.resources, {}),
+  };
 
   const now = Date.now();
   const dayMs = 86_400_000;

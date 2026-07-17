@@ -179,9 +179,11 @@ Recent addition: Earth→alien biome mapping documented in `TERRAIN_BIOME_TAXONO
 
 ## 8. POC success criteria
 
-**Definition of done:** `docs/POC_SUCCESS_CRITERIA.md` — user PIN + game session select, sequential missions A–C (connect 5 Xenite → base camp → 24h reserves), Victory Stats, in-game Exit near Gear, New Game world gen on mobile + Editor.
+**Definition of done:** `docs/POC_SUCCESS_CRITERIA.md` — user PIN + game session select, sequential missions A–C (connect 5 Xenite → base camp → reserves at 1%/hr per connected xenite), Victory Stats, in-game Exit near Gear, New Game world gen on mobile + Editor.
 
-**Unity login (criterion 1):** Testers use a **4-digit user PIN** (`users.pin`) plus a **game session ID** (`worlds.access_code`). `RtgGameSessionLogin` calls `GET /worlds/saved?pin=…`, `GET /worlds/by-code/:code?pin=…`, and `POST /worlds` with `{ pin }` for **New Game**. Exit clears markers and returns to the overlay (PIN kept). Editor **Sample (Editor)** remains a secondary offline hatch only.
+**Unity login (criterion 1):** Testers use a **4-digit user PIN** (`users.pin`) plus a **game session ID** (`worlds.access_code`). `RtgGameSessionLogin` calls `GET /worlds/saved?pin=…`, `GET /worlds/by-code/:code?pin=…`, and `POST /worlds` with `{ pin }` for **New Game**. Exit clears markers and returns to the overlay (PIN kept). Editor **Sample (Editor)** remains a secondary offline hatch only. **API URL:** join overlay field + `PlayerPrefs` `rtg.apiBaseUrl` / `rtg-dev-world.json` — Editor: `http://localhost:3001/api` (retries `127.0.0.1`); device: Mac LAN IP e.g. `http://192.168.x.x:3001/api` (not localhost). Start API with `pnpm dev` or `pnpm dev:field`.
+
+**Sequential missions (criterion 2):** `RtgMissionProgress` + API `empire_missions` / `/worlds/:id/missions*`. A = connect 5 xenite; B = Found Base Camp on route; C = fill reserves at **1%/hour per connected xenite** (`fillPercent = min(100, count × hoursElapsed)`; live count). Settings **Missions (dev)** accelerate (`near` ~60s / `finish` Skip C) still works. Criterion **4 (Exit)** is Done.
 
 ## 9. Open / follow-up (not blocking)
 

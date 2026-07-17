@@ -14,6 +14,7 @@ namespace RoutesToGlory.Game
     {
         public const int DefaultTimeoutSeconds = 8;
         public const int CreateWorldTimeoutSeconds = 60;
+        public const string DefaultApiBaseUrl = "http://localhost:3001/api";
 
         /// <summary>Trim + uppercase access codes to match web <c>getWorldByCode</c>.</summary>
         public static string NormalizeAccessCode(string code) =>
@@ -30,6 +31,74 @@ namespace RoutesToGlory.Game
                     sb.Append(c);
             }
             return sb.Length == 4 ? sb.ToString() : "";
+        }
+
+        public static string JoinUrl(string baseUrl, string relativePath)
+        {
+            string b = (baseUrl ?? "").TrimEnd('/');
+            string p = (relativePath ?? "").TrimStart('/');
+            return $"{b}/{p}";
+        }
+
+        /// <summary>
+        /// Editor localhost fallback base (same idea as <see cref="RtgEchoSiteLoader"/>):
+        /// rewrite host to 127.0.0.1 so LAN-IP configs still work when the API is only
+        /// reachable on loopback. If the URL already uses 127.0.0.1, try <c>localhost</c>.
+        /// </summary>
+        public static string EditorLocalhostRetryBase(string baseUrl)
+        {
+            if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out Uri uri))
+                return "http://127.0.0.1:3001/api";
+
+            int port = uri.Port > 0 ? uri.Port : 3001;
+            string path = uri.AbsolutePath.TrimEnd('/');
+            if (string.IsNullOrEmpty(path))
+                path = "/api";
+
+            string host = uri.Host ?? "";
+            if (string.Equals(host, "127.0.0.1", StringComparison.OrdinalIgnoreCase))
+                return $"http://localhost:{port}{path}";
+
+            return $"http://127.0.0.1:{port}{path}";
+        }
+
+        /// <summary>True when UnityWebRequest failed before getting an HTTP status (code 0 / connect errors).</summary>
+        public static bool IsUnreachableError(string error)
+        {
+            if (string.IsNullOrWhiteSpace(error)) return false;
+            if (error.StartsWith("0 ", StringComparison.Ordinal) || error == "0")
+                return true;
+
+            return error.IndexOf("Cannot connect", StringComparison.OrdinalIgnoreCase) >= 0
+                || error.IndexOf("Could not connect", StringComparison.OrdinalIgnoreCase) >= 0
+                || error.IndexOf("Unable to connect", StringComparison.OrdinalIgnoreCase) >= 0
+                || error.IndexOf("Connection refused", StringComparison.OrdinalIgnoreCase) >= 0
+                || error.IndexOf("No route to host", StringComparison.OrdinalIgnoreCase) >= 0
+                || error.IndexOf("Network is unreachable", StringComparison.OrdinalIgnoreCase) >= 0
+                || error.IndexOf("timed out", StringComparison.OrdinalIgnoreCase) >= 0
+                || error.IndexOf("Timeout", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        /// <summary>
+        /// Human-readable join/list/create failure when the host cannot be reached.
+        /// </summary>
+        public static string FormatUnreachableHint(string apiBaseUrl, string rawError = null)
+        {
+            string baseUrl = string.IsNullOrWhiteSpace(apiBaseUrl) ? DefaultApiBaseUrl : apiBaseUrl.TrimEnd('/');
+            string detail = string.IsNullOrWhiteSpace(rawError) ? "Cannot connect to destination host" : rawError.Trim();
+            bool looksLocal =
+                baseUrl.IndexOf("localhost", StringComparison.OrdinalIgnoreCase) >= 0
+                || baseUrl.IndexOf("127.0.0.1", StringComparison.OrdinalIgnoreCase) >= 0;
+
+            string deviceHint = looksLocal
+                ? "On a phone/tablet use your Mac LAN IP (e.g. http://192.168.x.x:3001/api), not localhost."
+                : "Confirm the Mac and device share Wi‑Fi and the API listens on 0.0.0.0 (pnpm dev / pnpm dev:field).";
+
+            return
+                $"API unreachable at {baseUrl} ({detail}). " +
+                "Start the API (pnpm dev or pnpm dev:field). " +
+                deviceHint +
+                " Editor: localhost/127.0.0.1 is fine; set API base in the join panel or rtg-dev-world.json.";
         }
 
         /// <summary>
@@ -61,6 +130,69 @@ namespace RoutesToGlory.Game
             }
 
             done?.Invoke(req.downloadHandler?.text, null);
+        }
+
+        /// <summary>
+        /// GET relative to <paramref name="apiBaseUrl"/>; in the Editor, on unreachable
+        /// failure, retry via localhost↔127.0.0.1 (same pattern as map fetch).
+        /// <paramref name="done"/> receives (body, error, workingApiBaseUrl).
+        /// </summary>
+        public static IEnumerator GetWithEditorLocalhostRetry(
+            string apiBaseUrl,
+            string relativePath,
+            Action<string, string, string> done,
+            bool editorLocalhostRetry = true,
+            int timeoutSeconds = DefaultTimeoutSeconds)
+        {
+            string primaryBase = string.IsNullOrWhiteSpace(apiBaseUrl)
+                ? DefaultApiBaseUrl
+                : apiBaseUrl.TrimEnd('/');
+            string primaryUrl = JoinUrl(primaryBase, relativePath);
+            string body = null;
+            string error = null;
+            yield return Get(primaryUrl, (b, e) =>
+            {
+                body = b;
+                error = e;
+            }, timeoutSeconds);
+
+            if (string.IsNullOrEmpty(error))
+            {
+                done?.Invoke(body, null, primaryBase);
+                yield break;
+            }
+
+            if (!(Application.isEditor && editorLocalhostRetry && IsUnreachableError(error)))
+            {
+                done?.Invoke(body, error, primaryBase);
+                yield break;
+            }
+
+            string retryBase = EditorLocalhostRetryBase(primaryBase).TrimEnd('/');
+            if (string.Equals(retryBase, primaryBase, StringComparison.OrdinalIgnoreCase))
+            {
+                done?.Invoke(body, error, primaryBase);
+                yield break;
+            }
+
+            string retryUrl = JoinUrl(retryBase, relativePath);
+            Debug.LogWarning(
+                $"[RTG] API GET failed ({primaryUrl}). Retrying via editor localhost: {retryUrl}");
+            string retryBody = null;
+            string retryError = null;
+            yield return Get(retryUrl, (b, e) =>
+            {
+                retryBody = b;
+                retryError = e;
+            }, timeoutSeconds);
+
+            if (string.IsNullOrEmpty(retryError))
+            {
+                done?.Invoke(retryBody, null, retryBase);
+                yield break;
+            }
+
+            done?.Invoke(retryBody ?? body, retryError ?? error, primaryBase);
         }
 
         /// <summary>
@@ -100,11 +232,66 @@ namespace RoutesToGlory.Game
             done?.Invoke(req.downloadHandler?.text, null);
         }
 
-        public static string JoinUrl(string baseUrl, string relativePath)
+        /// <summary>
+        /// POST JSON relative to <paramref name="apiBaseUrl"/> with Editor localhost retry.
+        /// </summary>
+        public static IEnumerator PostJsonWithEditorLocalhostRetry(
+            string apiBaseUrl,
+            string relativePath,
+            string jsonBody,
+            Action<string, string, string> done,
+            bool editorLocalhostRetry = true,
+            int timeoutSeconds = DefaultTimeoutSeconds)
         {
-            string b = (baseUrl ?? "").TrimEnd('/');
-            string p = (relativePath ?? "").TrimStart('/');
-            return $"{b}/{p}";
+            string primaryBase = string.IsNullOrWhiteSpace(apiBaseUrl)
+                ? DefaultApiBaseUrl
+                : apiBaseUrl.TrimEnd('/');
+            string primaryUrl = JoinUrl(primaryBase, relativePath);
+            string body = null;
+            string error = null;
+            yield return PostJson(primaryUrl, jsonBody, (b, e) =>
+            {
+                body = b;
+                error = e;
+            }, timeoutSeconds);
+
+            if (string.IsNullOrEmpty(error))
+            {
+                done?.Invoke(body, null, primaryBase);
+                yield break;
+            }
+
+            if (!(Application.isEditor && editorLocalhostRetry && IsUnreachableError(error)))
+            {
+                done?.Invoke(body, error, primaryBase);
+                yield break;
+            }
+
+            string retryBase = EditorLocalhostRetryBase(primaryBase).TrimEnd('/');
+            if (string.Equals(retryBase, primaryBase, StringComparison.OrdinalIgnoreCase))
+            {
+                done?.Invoke(body, error, primaryBase);
+                yield break;
+            }
+
+            string retryUrl = JoinUrl(retryBase, relativePath);
+            Debug.LogWarning(
+                $"[RTG] API POST failed ({primaryUrl}). Retrying via editor localhost: {retryUrl}");
+            string retryBody = null;
+            string retryError = null;
+            yield return PostJson(retryUrl, jsonBody, (b, e) =>
+            {
+                retryBody = b;
+                retryError = e;
+            }, timeoutSeconds);
+
+            if (string.IsNullOrEmpty(retryError))
+            {
+                done?.Invoke(retryBody, null, retryBase);
+                yield break;
+            }
+
+            done?.Invoke(retryBody ?? body, retryError ?? error, primaryBase);
         }
     }
 }

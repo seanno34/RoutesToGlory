@@ -32,6 +32,7 @@ namespace RoutesToGlory.Game
         private bool _busy;
         private string _userPinDraft = "";
         private string _accessCodeDraft = "";
+        private string _apiBaseDraft = "";
         private string _rememberedAccessCode = "";
         private string _status = "";
         private string _error = "";
@@ -39,6 +40,7 @@ namespace RoutesToGlory.Game
         private readonly List<SavedWorldSummary> _savedWorlds = new();
         private int _selectedSavedIndex = -1;
         private string _lastListedPin = "";
+        private bool _editorLocalhostRetry = true;
 
         /// <summary>True after Join / New Game (or Editor sample) confirms a playable session.</summary>
         public bool HasSession => _sessionReady;
@@ -179,6 +181,7 @@ namespace RoutesToGlory.Game
 
             // Never silent-auto-join: prefill remembered PIN/session and require Join.
             PrefillFromPlayerPrefs();
+            PrefillApiBaseDraft();
             ShowLoginOverlay();
         }
 
@@ -186,12 +189,18 @@ namespace RoutesToGlory.Game
         {
             if (_loader != null) return;
             _loader = GetComponent<RtgEchoSiteLoader>();
-            if (_loader != null) return;
+            if (_loader != null)
+            {
+                _editorLocalhostRetry = _loader.editorLocalhostRetry;
+                return;
+            }
 #if UNITY_2023_1_OR_NEWER
             _loader = FindFirstObjectByType<RtgEchoSiteLoader>();
 #else
             _loader = FindObjectOfType<RtgEchoSiteLoader>();
 #endif
+            if (_loader != null)
+                _editorLocalhostRetry = _loader.editorLocalhostRetry;
         }
 
         private void GateWorldLoadUntilSession()
@@ -215,6 +224,22 @@ namespace RoutesToGlory.Game
                 _accessCodeDraft = _rememberedAccessCode;
         }
 
+        private void PrefillApiBaseDraft()
+        {
+            // PlayerPrefs (join-panel / last success) → loader (rtg-dev-world.json) → default.
+            string prefs = PlayerPrefs.GetString(PrefApiBaseUrl, "");
+            if (!string.IsNullOrWhiteSpace(prefs))
+                _apiBaseDraft = prefs.TrimEnd('/');
+            else if (_loader != null && !string.IsNullOrWhiteSpace(_loader.apiBaseUrl))
+                _apiBaseDraft = _loader.apiBaseUrl.TrimEnd('/');
+            else
+                _apiBaseDraft = RtgApiHttp.DefaultApiBaseUrl;
+
+            // Mirror onto loader so map/route/join share one reachable base.
+            if (_loader != null && !string.IsNullOrWhiteSpace(_apiBaseDraft))
+                _loader.apiBaseUrl = _apiBaseDraft;
+        }
+
         private void ShowLoginOverlay()
         {
             _sessionReady = false;
@@ -236,6 +261,11 @@ namespace RoutesToGlory.Game
             {
                 _status = "Enter your 4-digit user PIN, then pick a game session (or New Game).";
             }
+
+            _status += "\nAPI: " + ResolveApiBaseUrl()
+                + (Application.isEditor
+                    ? " — Editor may retry 127.0.0.1."
+                    : " — device needs Mac LAN IP, not localhost.");
 
             if (!string.IsNullOrEmpty(pin))
                 StartCoroutine(RefreshSavedWorlds());
@@ -414,12 +444,27 @@ namespace RoutesToGlory.Game
 
         private string ResolveApiBaseUrl()
         {
+            if (!string.IsNullOrWhiteSpace(_apiBaseDraft))
+                return _apiBaseDraft.TrimEnd('/');
             if (_loader != null && !string.IsNullOrWhiteSpace(_loader.apiBaseUrl))
                 return _loader.apiBaseUrl.TrimEnd('/');
             string prefs = PlayerPrefs.GetString(PrefApiBaseUrl, "");
             if (!string.IsNullOrWhiteSpace(prefs))
                 return prefs.TrimEnd('/');
-            return "http://localhost:3001/api";
+            return RtgApiHttp.DefaultApiBaseUrl;
+        }
+
+        /// <summary>Push a working API base onto the draft, loader, route session, and PlayerPrefs.</summary>
+        private void ApplyWorkingApiBase(string apiBase)
+        {
+            if (string.IsNullOrWhiteSpace(apiBase)) return;
+            string trimmed = apiBase.TrimEnd('/');
+            _apiBaseDraft = trimmed;
+            if (_loader != null)
+                _loader.apiBaseUrl = trimmed;
+            PlayerPrefs.SetString(PrefApiBaseUrl, trimmed);
+            PlayerPrefs.Save();
+            SyncRouteSession();
         }
 
         private bool CanJoin()
@@ -481,18 +526,30 @@ namespace RoutesToGlory.Game
                 yield break;
             }
 
-            string url = RtgApiHttp.JoinUrl(ResolveApiBaseUrl(), $"worlds/saved?pin={UnityEngine.Networking.UnityWebRequest.EscapeURL(pin)}");
+            // Persist typed API base so Join / map / route share it (including device LAN IP).
+            ApplyWorkingApiBase(ResolveApiBaseUrl());
+
+            string apiBase = ResolveApiBaseUrl();
             string body = null;
             string error = null;
-            yield return RtgApiHttp.Get(url, (b, e) =>
-            {
-                body = b;
-                error = e;
-            });
+            string workingBase = apiBase;
+            yield return RtgApiHttp.GetWithEditorLocalhostRetry(
+                apiBase,
+                $"worlds/saved?pin={UnityEngine.Networking.UnityWebRequest.EscapeURL(pin)}",
+                (b, e, baseUsed) =>
+                {
+                    body = b;
+                    error = e;
+                    workingBase = baseUsed;
+                },
+                _editorLocalhostRetry);
 
             // Ignore stale responses if the PIN changed while the request was in flight.
             if (RtgApiHttp.NormalizeUserPin(_userPinDraft) != pin)
                 yield break;
+
+            if (string.IsNullOrEmpty(error) && !string.IsNullOrEmpty(workingBase))
+                ApplyWorkingApiBase(workingBase);
 
             _savedWorlds.Clear();
             _selectedSavedIndex = -1;
@@ -501,7 +558,11 @@ namespace RoutesToGlory.Game
             if (!string.IsNullOrEmpty(error) || string.IsNullOrEmpty(body))
             {
                 if (string.IsNullOrEmpty(_error))
-                    _status = "Could not load your sessions (is the API running?). You can still join by session ID.";
+                {
+                    _status = RtgApiHttp.IsUnreachableError(error)
+                        ? RtgApiHttp.FormatUnreachableHint(workingBase, error)
+                        : "Could not load your sessions (is the API running?). You can still join by session ID.";
+                }
                 yield break;
             }
 
@@ -550,27 +611,39 @@ namespace RoutesToGlory.Game
             _error = "";
             _status = "Joining…";
 
-            string url = RtgApiHttp.JoinUrl(
-                ResolveApiBaseUrl(),
-                $"worlds/by-code/{UnityEngine.Networking.UnityWebRequest.EscapeURL(code)}?pin={UnityEngine.Networking.UnityWebRequest.EscapeURL(normalizedPin)}");
+            ApplyWorkingApiBase(ResolveApiBaseUrl());
+
+            string apiBase = ResolveApiBaseUrl();
             string body = null;
             string error = null;
-            yield return RtgApiHttp.Get(url, (b, e) =>
-            {
-                body = b;
-                error = e;
-            });
+            string workingBase = apiBase;
+            yield return RtgApiHttp.GetWithEditorLocalhostRetry(
+                apiBase,
+                $"worlds/by-code/{UnityEngine.Networking.UnityWebRequest.EscapeURL(code)}?pin={UnityEngine.Networking.UnityWebRequest.EscapeURL(normalizedPin)}",
+                (b, e, baseUsed) =>
+                {
+                    body = b;
+                    error = e;
+                    workingBase = baseUsed;
+                },
+                _editorLocalhostRetry);
 
             if (!string.IsNullOrEmpty(error) || string.IsNullOrEmpty(body))
             {
                 _busy = false;
                 string apiError = TryParseApiError(body);
-                _error = !string.IsNullOrEmpty(apiError)
-                    ? apiError
-                    : (string.IsNullOrEmpty(error) ? "Join failed." : $"Join failed: {error}");
+                if (!string.IsNullOrEmpty(apiError))
+                    _error = apiError;
+                else if (RtgApiHttp.IsUnreachableError(error))
+                    _error = RtgApiHttp.FormatUnreachableHint(workingBase, error);
+                else
+                    _error = string.IsNullOrEmpty(error) ? "Join failed." : $"Join failed: {error}";
                 _status = "";
                 yield break;
             }
+
+            if (!string.IsNullOrEmpty(workingBase))
+                ApplyWorkingApiBase(workingBase);
 
             BootstrapWorldResponse bootstrap = null;
             try
@@ -617,6 +690,8 @@ namespace RoutesToGlory.Game
             _error = "";
             _status = "Creating new world…";
 
+            ApplyWorkingApiBase(ResolveApiBaseUrl());
+
             ResolveNewGameSpawn(out double spawnLat, out double spawnLng);
             var reqBody = new CreateWorldRequest
             {
@@ -628,29 +703,40 @@ namespace RoutesToGlory.Game
             };
             string json = JsonUtility.ToJson(reqBody);
             Debug.Log($"[RTG] New Game seeding play area at {spawnLat:F4}, {spawnLng:F4}");
-            string url = RtgApiHttp.JoinUrl(ResolveApiBaseUrl(), "worlds");
+
+            string apiBase = ResolveApiBaseUrl();
             string body = null;
             string error = null;
-            yield return RtgApiHttp.PostJson(
-                url,
+            string workingBase = apiBase;
+            yield return RtgApiHttp.PostJsonWithEditorLocalhostRetry(
+                apiBase,
+                "worlds",
                 json,
-                (b, e) =>
+                (b, e, baseUsed) =>
                 {
                     body = b;
                     error = e;
+                    workingBase = baseUsed;
                 },
+                _editorLocalhostRetry,
                 RtgApiHttp.CreateWorldTimeoutSeconds);
 
             if (!string.IsNullOrEmpty(error) || string.IsNullOrEmpty(body))
             {
                 _busy = false;
                 string apiError = TryParseApiError(body);
-                _error = !string.IsNullOrEmpty(apiError)
-                    ? apiError
-                    : (string.IsNullOrEmpty(error) ? "New Game failed." : $"New Game failed: {error}");
+                if (!string.IsNullOrEmpty(apiError))
+                    _error = apiError;
+                else if (RtgApiHttp.IsUnreachableError(error))
+                    _error = RtgApiHttp.FormatUnreachableHint(workingBase, error);
+                else
+                    _error = string.IsNullOrEmpty(error) ? "New Game failed." : $"New Game failed: {error}";
                 _status = "";
                 yield break;
             }
+
+            if (!string.IsNullOrEmpty(workingBase))
+                ApplyWorkingApiBase(workingBase);
 
             BootstrapWorldResponse bootstrap = null;
             try
@@ -691,7 +777,7 @@ namespace RoutesToGlory.Game
             }
 
             string apiBase = ResolveApiBaseUrl();
-            _loader.apiBaseUrl = apiBase;
+            ApplyWorkingApiBase(apiBase);
             _loader.worldId = bootstrap.id.Trim();
             _loader.empireId = bootstrap.empireId.Trim();
             _loader.dataSource = RtgEchoSiteLoader.DataSource.LiveApi;
@@ -757,7 +843,7 @@ namespace RoutesToGlory.Game
             float scale = Mathf.Clamp(Screen.height / 900f, 0.85f, 1.6f);
             float pad = 20f * scale;
             float panelW = Mathf.Min(540f * scale, Screen.width - pad * 2f);
-            float panelH = Mathf.Min(680f * scale, Screen.height - pad * 2f);
+            float panelH = Mathf.Min(760f * scale, Screen.height - pad * 2f);
             var panel = new Rect((Screen.width - panelW) * 0.5f, (Screen.height - panelH) * 0.5f, panelW, panelH);
 
             Color prev = GUI.color;
@@ -789,10 +875,35 @@ namespace RoutesToGlory.Game
                 y += rowH + 4f * scale;
             }
 
-            GUI.Label(new Rect(x, y, innerW, rowH), "User PIN (4 digits)", bodyStyle);
+            GUI.Label(new Rect(x, y, innerW, rowH), "API base URL", bodyStyle);
             y += rowH;
 
             var prevFont = GUI.skin.textField.fontSize;
+            GUI.skin.textField.fontSize = Mathf.RoundToInt(13f * scale);
+            GUI.enabled = !_busy;
+            string nextApi = GUI.TextField(new Rect(x, y, innerW, 32f * scale), _apiBaseDraft ?? "");
+            if (nextApi != _apiBaseDraft)
+            {
+                _apiBaseDraft = nextApi ?? "";
+                if (_loader != null && !string.IsNullOrWhiteSpace(_apiBaseDraft))
+                    _loader.apiBaseUrl = _apiBaseDraft.TrimEnd('/');
+            }
+            GUI.skin.textField.fontSize = prevFont;
+            y += 36f * scale;
+
+            var apiHintStyle = BrightLabel(Mathf.RoundToInt(11f * scale), new Color(0.7f, 0.78f, 0.88f));
+            GUI.Label(
+                new Rect(x, y, innerW, rowH),
+                Application.isEditor
+                    ? "Editor: http://localhost:3001/api (auto-retries 127.0.0.1)"
+                    : "Device: Mac LAN IP, e.g. http://192.168.x.x:3001/api — not localhost",
+                apiHintStyle);
+            y += rowH + 6f * scale;
+
+            GUI.Label(new Rect(x, y, innerW, rowH), "User PIN (4 digits)", bodyStyle);
+            y += rowH;
+
+            prevFont = GUI.skin.textField.fontSize;
             GUI.skin.textField.fontSize = Mathf.RoundToInt(16f * scale);
             GUI.enabled = !_busy;
             string nextPin = GUI.TextField(new Rect(x, y, innerW, 36f * scale), _userPinDraft ?? "");
@@ -837,7 +948,7 @@ namespace RoutesToGlory.Game
             GUI.Label(new Rect(x, y, innerW, rowH), "Your sessions (select fills ID — then press Join)", bodyStyle);
             y += rowH;
 
-            float listH = Mathf.Max(90f * scale, panel.yMax - y - 230f * scale);
+            float listH = Mathf.Max(70f * scale, panel.yMax - y - 260f * scale);
             var listOuter = new Rect(x, y, innerW, listH);
             float contentH = Mathf.Max(listH, (_savedWorlds.Count + 1) * (rowH + 4f * scale) + 8f);
             _savedScroll = GUI.BeginScrollView(listOuter, _savedScroll, new Rect(0, 0, innerW - 16f * scale, contentH));
@@ -913,12 +1024,12 @@ namespace RoutesToGlory.Game
 
             if (!string.IsNullOrEmpty(_error))
             {
-                var errStyle = BrightLabel(Mathf.RoundToInt(13f * scale), new Color(1f, 0.55f, 0.5f));
-                GUI.Label(new Rect(x, y, innerW, rowH * 2f), _error, errStyle);
+                var errStyle = BrightLabel(Mathf.RoundToInt(12f * scale), new Color(1f, 0.55f, 0.5f));
+                GUI.Label(new Rect(x, y, innerW, rowH * 3.5f), _error, errStyle);
             }
             else if (!string.IsNullOrEmpty(_status))
             {
-                GUI.Label(new Rect(x, y, innerW, rowH * 2.5f), _status, bodyStyle);
+                GUI.Label(new Rect(x, y, innerW, rowH * 3f), _status, bodyStyle);
             }
         }
 
