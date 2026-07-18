@@ -44,7 +44,6 @@ namespace RoutesToGlory.EditorTools
         private const string AlienMaterialPath = "Assets/Materials/RTG_AlienTerrain.mat";
         private const string BiomeMaterialPath = "Assets/Materials/RTG_AlienTerrainBiome.mat";
         private const string AlienSkyboxPath = "Assets/Materials/RTG_AlienSky.mat";
-        private const string CelestialBodiesName = RtgCelestialBodies.RootName;
 
         private const string TripoSourceFolder =
             "Assets/TripoModels/futuristic_fighter_3d_model";
@@ -141,7 +140,7 @@ namespace RoutesToGlory.EditorTools
             Selection.activeGameObject = georeference.gameObject;
             MarkDirty(georeference);
             Debug.Log(
-                "[RTG] Regenerated playable world — biome terrain, atmosphere, horizon planets, echo sites, " +
+                "[RTG] Regenerated playable world — biome terrain, atmosphere, echo sites, " +
                 "deposits, player ship art" + (syncedArt ? "" : " (art skipped)") +
                 ", Tripo hull" + (syncedHull ? "" : " (hull skipped)") +
                 ", and glider refreshed. Enter Play mode (or stay in Play) to test. Save with Cmd+S.");
@@ -784,9 +783,7 @@ namespace RoutesToGlory.EditorTools
             ApplyAtmosphereInternal();
             if (!Application.isPlaying)
                 EditorSceneManager.MarkAllScenesDirty();
-            Debug.Log(
-                "[RTG] Night sky (stars), horizon planets, fog, and moonlight applied. " +
-                "Save with Cmd+S.");
+            Debug.Log("[RTG] Night sky (stars + planets), fog, and moonlight applied. Save with Cmd+S.");
         }
 
         [MenuItem("Routes to Glory/Advanced/Setup Fly Camera", priority = 24)]
@@ -1194,7 +1191,7 @@ namespace RoutesToGlory.EditorTools
 
         private static void ApplyAtmosphereInternal()
         {
-            // True night sky: custom procedural skybox (stars + milky band).
+            // True night sky: custom procedural skybox (stars + alien planets).
             RenderSettings.skybox = GetOrCreateAlienSkybox();
 
             // Deep night haze. Linear fog is predictable at terrain (km) scale;
@@ -1219,44 +1216,8 @@ namespace RoutesToGlory.EditorTools
                 sun.transform.rotation = Quaternion.Euler(72f, 210f, 0f);
             }
 
-            // Horizon Tripo planets on a fixed celestial sphere (shader skips fog).
-            CesiumGeoreference georeference = FindByName<CesiumGeoreference>(GeoreferenceName);
-            if (georeference != null)
-                EnsureCelestialBodiesInternal(georeference);
-
             // Recompute ambient/reflection probes from the new skybox.
             DynamicGI.UpdateEnvironment();
-        }
-
-        /// <summary>
-        /// Parents the existing Tripo planet PrefabInstances under
-        /// CelestialBodies/RingedPlanet|RinglessPlanet and applies serialized placement.
-        /// </summary>
-        private static void EnsureCelestialBodiesInternal(CesiumGeoreference georeference)
-        {
-            if (georeference == null) return;
-
-            Transform existing = georeference.transform.Find(CelestialBodiesName);
-            GameObject go = existing != null ? existing.gameObject : null;
-            if (go == null)
-            {
-                go = new GameObject(CelestialBodiesName);
-                Undo.RegisterCreatedObjectUndo(go, "Create CelestialBodies");
-                go.transform.SetParent(georeference.transform, false);
-                go.transform.localPosition = Vector3.zero;
-                go.transform.localRotation = Quaternion.identity;
-                go.transform.localScale = Vector3.one;
-            }
-
-            RtgCelestialBodies celestial = go.GetComponent<RtgCelestialBodies>();
-            if (celestial == null)
-                celestial = Undo.AddComponent<RtgCelestialBodies>(go);
-
-            celestial.EnsureHierarchy();
-            celestial.StripNonVisualComponents();
-            celestial.ApplyPlacement();
-            EditorUtility.SetDirty(celestial);
-            EditorUtility.SetDirty(go);
         }
 
         private static void SetupFlyCameraInternal(CesiumGeoreference georeference)
@@ -1264,8 +1225,7 @@ namespace RoutesToGlory.EditorTools
             GameObject camGo = GetOrCreateCameraObject(georeference);
 
             Camera cam = camGo.GetComponent<Camera>();
-            // Far enough for celestial-sphere planets (~88 km) plus planet radius margin.
-            cam.farClipPlane = Mathf.Max(cam.farClipPlane, 120000f);
+            cam.farClipPlane = Mathf.Max(cam.farClipPlane, 100000f);
             cam.nearClipPlane = Mathf.Min(cam.nearClipPlane, 1f);
 
             // CesiumOriginShift requires a CesiumGlobeAnchor (added automatically),
@@ -1464,8 +1424,8 @@ namespace RoutesToGlory.EditorTools
                 sky.shader = nightSky;
             }
 
-            // Deep blackish-purple night + dense stars + soft milky band.
-            // Horizon planets are mesh instances via RtgCelestialBodies (not skybox discs).
+            // Re-apply settings every run so tuning takes effect on rebuild.
+            // Deep blackish-purple night + dense stars + medium alien worlds (no sun disc).
             sky.SetColor("_ZenithColor", new Color(0.02f, 0.01f, 0.05f));
             sky.SetColor("_HorizonColor", new Color(0.08f, 0.03f, 0.14f));
             sky.SetColor("_GroundColor", new Color(0.02f, 0.015f, 0.04f));
@@ -1480,6 +1440,51 @@ namespace RoutesToGlory.EditorTools
             sky.SetColor("_BandColor", new Color(0.22f, 0.12f, 0.38f));
             sky.SetFloat("_BandStrength", 0.22f);
             sky.SetFloat("_BandWidth", 0.28f);
+
+            // Rose medium world + rings (high).
+            sky.SetVector("_PlanetADir", new Vector4(0.55f, 0.62f, 0.35f, 0f));
+            sky.SetColor("_PlanetAColor", new Color(0.78f, 0.42f, 0.58f));
+            sky.SetFloat("_PlanetASize", 0.026f);
+            sky.SetFloat("_PlanetABright", 0.95f);
+            sky.SetFloat("_PlanetARing", 1f);
+            sky.SetFloat("_PlanetARingWidth", 1.55f);
+            sky.SetFloat("_PlanetARingBright", 0.75f);
+
+            // Cool blue medium world (mid sky).
+            sky.SetVector("_PlanetBDir", new Vector4(-0.72f, 0.48f, 0.22f, 0f));
+            sky.SetColor("_PlanetBColor", new Color(0.32f, 0.48f, 0.88f));
+            sky.SetFloat("_PlanetBSize", 0.022f);
+            sky.SetFloat("_PlanetBBright", 0.9f);
+            sky.SetFloat("_PlanetBRing", 0f);
+            sky.SetFloat("_PlanetBRingWidth", 1.4f);
+            sky.SetFloat("_PlanetBRingBright", 0.6f);
+
+            // Violet companion — replaced former large amber "sun" disc.
+            sky.SetVector("_PlanetCDir", new Vector4(0.15f, 0.42f, -0.85f, 0f));
+            sky.SetColor("_PlanetCColor", new Color(0.55f, 0.38f, 0.72f));
+            sky.SetFloat("_PlanetCSize", 0.02f);
+            sky.SetFloat("_PlanetCBright", 0.75f);
+            sky.SetFloat("_PlanetCRing", 0f);
+            sky.SetFloat("_PlanetCRingWidth", 1.4f);
+            sky.SetFloat("_PlanetCRingBright", 0.6f);
+
+            // Small teal moon (near zenith).
+            sky.SetVector("_PlanetDDir", new Vector4(-0.25f, 0.78f, -0.45f, 0f));
+            sky.SetColor("_PlanetDColor", new Color(0.48f, 0.88f, 0.72f));
+            sky.SetFloat("_PlanetDSize", 0.011f);
+            sky.SetFloat("_PlanetDBright", 0.8f);
+            sky.SetFloat("_PlanetDRing", 0f);
+            sky.SetFloat("_PlanetDRingWidth", 1.3f);
+            sky.SetFloat("_PlanetDRingBright", 0.5f);
+
+            // Lavender medium world + rings (low azimuth).
+            sky.SetVector("_PlanetEDir", new Vector4(0.82f, 0.28f, -0.35f, 0f));
+            sky.SetColor("_PlanetEColor", new Color(0.62f, 0.55f, 0.78f));
+            sky.SetFloat("_PlanetESize", 0.024f);
+            sky.SetFloat("_PlanetEBright", 0.85f);
+            sky.SetFloat("_PlanetERing", 1f);
+            sky.SetFloat("_PlanetERingWidth", 1.7f);
+            sky.SetFloat("_PlanetERingBright", 0.7f);
 
             EditorUtility.SetDirty(sky);
             AssetDatabase.SaveAssets();
