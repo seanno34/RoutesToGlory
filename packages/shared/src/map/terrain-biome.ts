@@ -26,73 +26,68 @@ export interface TerrainBiomeDefinition {
   shaderActive: boolean;
 }
 
-/**
- * POC map skin (Jul 2026): unified dark blackish-purple ground + neon pink veins.
- * Hex values stay in the purple family; biome ids still drive gameplay / deposits.
- * See apps/unity-poc/docs/TERRAIN_SKIN_POC.md.
- */
 export const TERRAIN_BIOME_DEFINITIONS: Record<TerrainBiome, TerrainBiomeDefinition> = {
   xeno_plains: {
     id: 'xeno_plains',
     displayName: 'Alien Plains',
     earthSignals: ['grassland', 'open plain', 'low slope mid elevation'],
-    colorHex: '#170B24',
+    colorHex: '#B88C38',
     shaderActive: true,
   },
   xeno_wasteland: {
     id: 'xeno_wasteland',
     displayName: 'Dust Expanse',
     earthSignals: ['desert', 'barren', 'sparse scrub'],
-    colorHex: '#1C0F21',
+    colorHex: '#8C6B4A',
     shaderActive: true,
   },
   xeno_wetland: {
     id: 'xeno_wetland',
     displayName: 'Fungal Marsh',
     earthSignals: ['marsh', 'wetland', 'water adjacency'],
-    colorHex: '#0D0A1C',
+    colorHex: '#2D5A6B',
     shaderActive: true,
   },
   xeno_fungal_forest: {
     id: 'xeno_fungal_forest',
     displayName: 'Fungal Forest',
     earthSignals: ['forest', 'woodland', 'tree cover'],
-    colorHex: '#140E29',
+    colorHex: '#1E9A4A',
     shaderActive: true,
   },
   xeno_highland: {
     id: 'xeno_highland',
     displayName: 'Crystal Highland',
     earthSignals: ['mountains', 'high elevation', 'rocky ridge'],
-    colorHex: '#291A3D',
+    colorHex: '#9EC8EB',
     shaderActive: true,
   },
   xeno_rift: {
     id: 'xeno_rift',
     displayName: 'Volcanic Rift',
     earthSignals: ['steep slope', 'cliff', 'canyon wall'],
-    colorHex: '#330D2E',
+    colorHex: '#EB6020',
     shaderActive: true,
   },
   xeno_water: {
     id: 'xeno_water',
     displayName: 'Deep Violet Sea',
     earthSignals: ['river', 'lake', 'ocean', 'coast'],
-    colorHex: '#060512',
+    colorHex: '#1A2848',
     shaderActive: true,
   },
   xeno_frost: {
     id: 'xeno_frost',
     displayName: 'Frost Expanse',
     earthSignals: ['arctic', 'snow', 'tundra'],
-    colorHex: '#2A2040',
+    colorHex: '#C8E8F0',
     shaderActive: false,
   },
   xeno_urban_echo: {
     id: 'xeno_urban_echo',
     displayName: 'Settlement Scar',
     earthSignals: ['urban', 'residential', 'commercial'],
-    colorHex: '#1A1428',
+    colorHex: '#6A5A7A',
     shaderActive: false,
   },
 };

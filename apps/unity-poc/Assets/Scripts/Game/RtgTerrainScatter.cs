@@ -17,8 +17,8 @@ namespace RoutesToGlory.Game
         private enum PropKind { Tree, Rock, Brush }
 
         [Header("Activation")]
-        [Tooltip("Scatter trees/rocks/brush while playing. POC default off — xenite deposits only.")]
-        public bool enabledInPlay = false;
+        [Tooltip("Scatter props while playing.")]
+        public bool enabledInPlay = true;
 
         [Header("Coverage")]
         [Tooltip("Fog tile size (m) — must match RtgFogOfWar.tileSizeM.")]

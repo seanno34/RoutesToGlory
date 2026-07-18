@@ -4355,7 +4355,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: af275691206764bf985c52220c5d3d61, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::RoutesToGlory.Game.RtgTerrainScatter
-  enabledInPlay: 0
+  enabledInPlay: 1
   tileSizeM: 400
   tileRadius: 4
   requireRevealedTiles: 0
@@ -20665,8 +20665,6 @@ MonoBehaviour:
   nearTapOffsetM: 450
   farTapOffsetM: 1800
   goodieHutCorridorFraction: 0.55
-  spawnGoodieHuts: 0
-  spawnTerrainScatterProps: 0
 --- !u!1 &1956192474
 GameObject:
   m_ObjectHideFlags: 0

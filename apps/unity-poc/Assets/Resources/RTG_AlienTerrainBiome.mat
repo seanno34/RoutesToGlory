@@ -31,37 +31,28 @@ Material:
     m_Ints: []
     m_Floats:
     - _DetailScale: 0.06
-    - _DetailStrength: 0.1
+    - _DetailStrength: 0.12
     - _HeightScaleM: 55
     - _HighlandHeightCutoff: 0.22
     - _MacroBorderSoftM: 320
     - _MacroRegionSizeM: 4200
     - _MacroWarpStrength: 0.42
-    - _Saturation: 1.08
+    - _Saturation: 1.4
     - _SlopeBlend: 1.2
     - _SlopeRiftStart: 0.36
-    - _VeinBlend: 0.52
-    - _VeinCellSizeM: 720
-    - _VeinDensity: 0.68
-    - _VeinEmission: 0.38
-    - _VeinFilamentScaleM: 140
-    - _VeinSharpness: 8.5
-    - _VeinWarp: 0.48
-    - _VeinWidthM: 9
     - _WaterHeightCutoff: -0.28
     - _WaterWetnessMin: 0.55
     - _WetBasinFraction: 0.18
     - _WetlandHeightCutoff: -0.12
     - _WetlandWetnessMin: 0.45
     m_Colors:
-    - _ForestColor: {r: 0.08, g: 0.055, b: 0.16, a: 1}
-    - _HighlandColor: {r: 0.16, g: 0.1, b: 0.24, a: 1}
-    - _PlainColor: {r: 0.09, g: 0.045, b: 0.14, a: 1}
-    - _RiftColor: {r: 0.2, g: 0.05, b: 0.18, a: 1}
-    - _VeinColor: {r: 1, g: 0.22, b: 0.65, a: 1}
-    - _WastelandColor: {r: 0.11, g: 0.06, b: 0.13, a: 1}
-    - _WaterColor: {r: 0.025, g: 0.02, b: 0.07, a: 1}
-    - _WetlandColor: {r: 0.05, g: 0.04, b: 0.11, a: 1}
+    - _ForestColor: {r: 0.12, g: 0.6, b: 0.29, a: 1}
+    - _HighlandColor: {r: 0.62, g: 0.78, b: 0.92, a: 1}
+    - _PlainColor: {r: 0.72, g: 0.55, b: 0.22, a: 1}
+    - _RiftColor: {r: 0.92, g: 0.38, b: 0.12, a: 1}
+    - _WastelandColor: {r: 0.55, g: 0.42, b: 0.29, a: 1}
+    - _WaterColor: {r: 0.1, g: 0.16, b: 0.28, a: 1}
+    - _WetlandColor: {r: 0.18, g: 0.35, b: 0.42, a: 1}
     - _baseColorFactor: {r: 1, g: 1, b: 1, a: 1}
   m_BuildTextureStacks: []
   m_AllowLocking: 1

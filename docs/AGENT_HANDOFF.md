@@ -24,13 +24,12 @@ Last major push: **`0f3362d`** on `main` — Tripo hull editor + device renderin
 
 ### What works (verified Jul 2026)
 
-- **Biome terrain** — unified dark blackish-purple skin + neon pink veins (`AlienTerrainBiome` + `RtgBiomePalette`); see `TERRAIN_SKIN_POC.md`, `TERRAIN_BIOME_TAXONOMY.md`.
+- **Biome terrain** — alien shader + classifier (not flat teal); see `TERRAIN_BIOME_TAXONOMY.md`, `RtgBiomePalette`, enhanced `AlienTerrainBiome` shader.
 - **Regenerate Playable World** — editor menu in `RtgMapBuilder.cs`: biome terrain, atmosphere, echo sites, ship art sync, Tripo hull bake, presentation refresh.
 - **Player ship (Tripo hull)** — textured Tripo fighter in **editor Play** and on **iOS/Android** after Resources bake.
 - **Ship orientation** — tuned via `Assets/StreamingAssets/rtg-ship-tuning.json` (do not force zero euler / skip tuning on load).
 - **Exhaust VFX** — engine ports, cavities, color stops from same tuning file.
 - **Xenite deposits** — Tripo crystal prefab path + tuning sliders; stacking bug fixed (`DestroyImmediate` + clear before rebuild).
-- **POC spawn filter** — goodie huts and terrain scatter (trees/rocks/brush) **off by default**; only xenite deposits + Echo Sites/capitals as world markers. See `apps/unity-poc/docs/XENITE_SPAWN_HANDOFF.md` (§ POC world-object filter).
 - **Mobile build preprocessor** — `RtgPlayerShipBuildPreprocessor.cs` syncs hull into Resources and fails build if device assets invalid.
 
 ### Primary editor workflow
@@ -228,9 +227,7 @@ Key files: `RtgClaimedGoodieHuts`, `RtgTapToConnect`, `RtgEchoSiteLoader`, `RtgM
 
 ## 7. Shared package (biome taxonomy)
 
-Earth→alien biome mapping in `TERRAIN_BIOME_TAXONOMY.md`; classifier in `packages/shared`; 7 biome types in shader (Plains, Wasteland, Wetland, Fungal Forest, Highland, Rift, Water).
-
-**POC visual skin:** dark blackish-purple family + procedural neon pink veins — `apps/unity-poc/docs/TERRAIN_SKIN_POC.md`. Regenerate Playable World / Apply Biome Terrain picks it up via `RtgBiomePalette.ApplyToMaterial`.
+Recent addition: Earth→alien biome mapping documented in `TERRAIN_BIOME_TAXONOMY.md`; classifier in `packages/shared`; 7 biome types in shader (Plains, Wasteland, Wetland, Fungal Forest, Highland, Rift, Water).
 
 ---
 
