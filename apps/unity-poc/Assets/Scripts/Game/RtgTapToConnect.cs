@@ -316,7 +316,7 @@ namespace RoutesToGlory.Game
             missions?.NotifyClaimSucceeded();
         }
 
-        private static void MarkGoodieClaimedLocal(string targetId, bool treatAsGoodie = false)
+        private void MarkGoodieClaimedLocal(string targetId, bool treatAsGoodie = false)
         {
             if (string.IsNullOrEmpty(targetId)) return;
             RtgMapMarker marker = RtgMapMarkerRegistry.FindByTargetId(targetId);
@@ -332,7 +332,27 @@ namespace RoutesToGlory.Game
             if (asGoodie)
                 marker.MarkGoodieClaimed();
             else
+            {
                 marker.SetConnected(true);
+                // Live claim has no map reload — vapor already present from spawn; intensify light only.
+                RtgTerrainDeposit.ApplyClaimedHaloForMarker(marker);
+                MarkResourceOwnedInLastMap(marker.targetId);
+            }
+        }
+
+        private void MarkResourceOwnedInLastMap(string resourceId)
+        {
+            if (string.IsNullOrEmpty(resourceId) || _echoLoader?.LastMap?.resources == null)
+                return;
+            string empire = _session != null ? _session.empireId : null;
+            foreach (RtgResourceNode node in _echoLoader.LastMap.resources)
+            {
+                if (node == null || node.id != resourceId)
+                    continue;
+                if (string.IsNullOrEmpty(node.owner_empire_id))
+                    node.owner_empire_id = string.IsNullOrEmpty(empire) ? "local" : empire;
+                break;
+            }
         }
 
         private void RefreshAfterClaim(RtgRouteSession.ClaimResult result)
