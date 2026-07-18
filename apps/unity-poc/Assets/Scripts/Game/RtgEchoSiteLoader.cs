@@ -13,6 +13,10 @@ namespace RoutesToGlory.Game
     /// Echo Site (settlement) and resource node as a georeferenced, glowing beacon
     /// under the Cesium georeference.
     ///
+    /// POC filter: by default only xenite deposits + non-goodie Echo Sites/capitals
+    /// spawn (<see cref="spawnGoodieHuts"/> / <see cref="spawnTerrainScatterProps"/> off;
+    /// deposits via <see cref="RtgTerrainDepositGuards.ActivePocDepositResourceIds"/>).
+    ///
     /// Data source is a single switch: <see cref="dataSource"/>. In Play mode the
     /// live path uses UnityWebRequest; the editor "Load Echo Sites" menu command
     /// uses the synchronous sample path so you can preview placement without Play
@@ -91,6 +95,13 @@ namespace RoutesToGlory.Game
 
         [Tooltip("Goodie huts are pinned on the corridor tour north leg (matches RtgPlayerLocation.CorridorTourLoop).")]
         public float goodieHutCorridorFraction = 0.55f;
+
+        [Header("POC world-object filter")]
+        [Tooltip("When false (default), skip goodie hut markers. Capitals / normal Echo Sites still spawn.")]
+        public bool spawnGoodieHuts = false;
+
+        [Tooltip("When false (default), do not dress tiles with procedural trees/rocks/brush.")]
+        public bool spawnTerrainScatterProps = false;
 
         private const string MarkerContainerName = "Markers";
         private int _scatterIndex;
@@ -652,15 +663,22 @@ namespace RoutesToGlory.Game
             Transform container = ResetContainer();
             _scatterIndex = 0;
             _pendingTerrainAnchors.Clear();
-            _corridorGoodieId = SelectCorridorGoodieTarget(map);
+            _corridorGoodieId = spawnGoodieHuts ? SelectCorridorGoodieTarget(map) : null;
             if (!string.IsNullOrEmpty(_corridorGoodieId))
                 RtgClaimedGoodieHuts.BindCorridorPin(_corridorGoodieId);
             int settlements = 0, resources = 0, xeniteTripo = 0, xeniteProcedural = 0;
+            int skippedGoodieHuts = 0;
 
             if (map.settlements != null)
             {
                 foreach (RtgSettlement s in map.settlements)
                 {
+                    if (!spawnGoodieHuts && IsGoodieHutSettlement(s))
+                    {
+                        skippedGoodieHuts++;
+                        continue;
+                    }
+
                     SpawnSettlement(s, container);
                     settlements++;
                 }
@@ -704,6 +722,11 @@ namespace RoutesToGlory.Game
 
             LastSpawnSummary = FormatSpawnSummary(settlements, resources, xeniteTripo, xeniteProcedural);
             Debug.Log($"[RTG] {LastSpawnSummary}");
+            if (skippedGoodieHuts > 0)
+            {
+                Debug.Log(
+                    $"[RTG] Skipped {skippedGoodieHuts} goodie hut marker(s) — POC spawnGoodieHuts=false.");
+            }
             if (settlements == 0 && resources == 0)
             {
                 Debug.LogError(
@@ -975,8 +998,23 @@ namespace RoutesToGlory.Game
         private void SetupTerrainScatter()
         {
             if (!Application.isPlaying) return;
+
+            // POC: keep player / routes / xenite only — clear any existing tree/rock chunks.
+            if (!spawnTerrainScatterProps)
+            {
+                RtgTerrainScatter existing = RtgTerrainScatter.Find();
+                if (existing != null)
+                {
+                    existing.enabledInPlay = false;
+                    existing.OnMapSpawned();
+                }
+                return;
+            }
+
             RtgTerrainScatter scatter = RtgTerrainScatter.Ensure(this);
-            scatter?.OnMapSpawned();
+            if (scatter == null) return;
+            scatter.enabledInPlay = true;
+            scatter.OnMapSpawned();
         }
 
         private void SetupFogOfWar(Transform markersContainer, RtgRoute[] routes = null)
@@ -1105,15 +1143,22 @@ namespace RoutesToGlory.Game
             return go.transform;
         }
 
+        private static bool IsGoodieHutSettlement(RtgSettlement s)
+        {
+            if (s == null) return false;
+            return s.is_goodie_hut != 0 || s.tier == "goodie_hut";
+        }
+
         private void SpawnSettlement(RtgSettlement s, Transform container)
         {
             bool owned = !string.IsNullOrEmpty(s.owner_empire_id);
             bool sessionClaimed = RtgClaimedGoodieHuts.Contains(s.id);
             // One-time claim: owned / converted / session-claimed huts are never claimable.
             bool isUnclaimedGoodie =
-                !owned
+                spawnGoodieHuts
+                && !owned
                 && !sessionClaimed
-                && (s.is_goodie_hut != 0 || s.tier == "goodie_hut");
+                && IsGoodieHutSettlement(s);
             string displayTier = isUnclaimedGoodie
                 ? "goodie_hut"
                 : (s.tier == "goodie_hut" || sessionClaimed ? "settlement" : s.tier);

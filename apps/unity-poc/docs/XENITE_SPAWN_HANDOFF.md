@@ -10,6 +10,19 @@ Xenite is the **only resource deposit rendered in the POC** today. Nodes come fr
 
 Other resource ids may exist in map data but are **skipped** until added to `ActivePocDepositResourceIds`.
 
+### POC world-object filter (Jul 2026)
+
+Unity starts with **xenite deposits + Echo Sites / capitals** only. Decorative props and goodie huts are off by default (existing saves included — client filter, not API reseed):
+
+| Object | Default | Control |
+|--------|---------|---------|
+| **Xenite deposits** | Spawn | `RtgTerrainDepositGuards.ActivePocDepositResourceIds` (`xenite` only) |
+| **Echo Sites / capitals** | Spawn | `RtgEchoSiteLoader.SpawnSettlement` (non-goodie tiers) |
+| **Goodie huts** | **Skipped** | `RtgEchoSiteLoader.spawnGoodieHuts` (default `false`) |
+| **Trees / rocks / brush** | **Off** | `spawnTerrainScatterProps` + `RtgTerrainScatter.enabledInPlay` (default `false`) |
+
+Re-enable props via **Routes to Glory → Advanced → Setup Terrain Scatter**, or toggle the Echo Sites inspector flags.
+
 ---
 
 ## Data → spawn pipeline

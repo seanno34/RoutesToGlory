@@ -7,13 +7,24 @@ Shader "RoutesToGlory/AlienTerrainBiome"
         [NoScaleOffset] _baseColorTexture ("Base Color Texture", 2D) = "white" {}
 
         [Header(BiomeColors)]
-        _PlainColor ("Alien Plains", Color) = (0.72, 0.55, 0.22, 1)
-        _WastelandColor ("Dust Expanse", Color) = (0.55, 0.42, 0.29, 1)
-        _WetlandColor ("Fungal Marsh", Color) = (0.18, 0.35, 0.42, 1)
-        _ForestColor ("Fungal Forest", Color) = (0.12, 0.60, 0.29, 1)
-        _HighlandColor ("Crystal Highland", Color) = (0.62, 0.78, 0.92, 1)
-        _RiftColor ("Volcanic Rift", Color) = (0.92, 0.38, 0.12, 1)
-        _WaterColor ("Deep Violet Sea", Color) = (0.10, 0.16, 0.28, 1)
+        _PlainColor ("Alien Plains", Color) = (0.09, 0.045, 0.14, 1)
+        _WastelandColor ("Dust Expanse", Color) = (0.11, 0.06, 0.13, 1)
+        _WetlandColor ("Fungal Marsh", Color) = (0.05, 0.04, 0.11, 1)
+        _ForestColor ("Fungal Forest", Color) = (0.08, 0.055, 0.16, 1)
+        _HighlandColor ("Crystal Highland", Color) = (0.16, 0.10, 0.24, 1)
+        _RiftColor ("Volcanic Rift", Color) = (0.20, 0.05, 0.18, 1)
+        _WaterColor ("Deep Violet Sea", Color) = (0.025, 0.02, 0.07, 1)
+
+        [Header(NeonVeins)]
+        _VeinColor ("Vein Color", Color) = (1.0, 0.22, 0.65, 1)
+        _VeinCellSizeM ("Vein Cell Size (m)", Float) = 720
+        _VeinWidthM ("Vein Width (m)", Float) = 9
+        _VeinWarp ("Vein Warp", Range(0, 1)) = 0.48
+        _VeinDensity ("Vein Density (higher=sparser)", Range(0, 1)) = 0.68
+        _VeinSharpness ("Vein Sharpness", Range(1, 12)) = 8.5
+        _VeinEmission ("Vein Emission", Range(0, 3)) = 0.38
+        _VeinBlend ("Vein Blend", Range(0, 1)) = 0.52
+        _VeinFilamentScaleM ("Filament Scale (m)", Float) = 140
 
         [Header(HeightSlope)]
         _HeightScaleM ("Height Band (world units)", Float) = 55
@@ -35,8 +46,8 @@ Shader "RoutesToGlory/AlienTerrainBiome"
 
         [Header(Detail)]
         _DetailScale ("Fine Detail Scale", Float) = 0.06
-        _DetailStrength ("Fine Detail Strength", Range(0, 1)) = 0.12
-        _Saturation ("Color Saturation", Range(0.5, 2)) = 1.4
+        _DetailStrength ("Fine Detail Strength", Range(0, 1)) = 0.1
+        _Saturation ("Color Saturation", Range(0.5, 2)) = 1.08
     }
 
     SubShader
@@ -98,6 +109,15 @@ Shader "RoutesToGlory/AlienTerrainBiome"
                 float4 _HighlandColor;
                 float4 _RiftColor;
                 float4 _WaterColor;
+                float4 _VeinColor;
+                float _VeinCellSizeM;
+                float _VeinWidthM;
+                float _VeinWarp;
+                float _VeinDensity;
+                float _VeinSharpness;
+                float _VeinEmission;
+                float _VeinBlend;
+                float _VeinFilamentScaleM;
                 float _HeightScaleM;
                 float _SlopeRiftStart;
                 float _SlopeBlend;
@@ -212,6 +232,54 @@ Shader "RoutesToGlory/AlienTerrainBiome"
                 return result;
             }
 
+            // Sparse organic rift veins in world XZ — Voronoi edges + ridge filaments.
+            float SampleVeinMask(float2 worldXZ)
+            {
+                float cellSize = max(_VeinCellSizeM, 80.0);
+                float invCell = 1.0 / cellSize;
+
+                float2 warp = (float2(
+                    ValueNoise(worldXZ * invCell * 0.37 + 41.3),
+                    ValueNoise(worldXZ * invCell * 0.37 + 88.1)) - 0.5) * _VeinWarp * cellSize;
+                float2 warpedXZ = worldXZ + warp;
+
+                float2 cellId = floor(warpedXZ * invCell);
+                float2 cellUv = frac(warpedXZ * invCell);
+
+                float bestDist = 1e5;
+                float secondDist = 1e5;
+                float2 bestCell = cellId;
+
+                float d;
+                d = VoronoiDist(cellId, cellUv, float2(-1, -1)); if (d < bestDist) { secondDist = bestDist; bestDist = d; bestCell = cellId + float2(-1, -1); } else if (d < secondDist) secondDist = d;
+                d = VoronoiDist(cellId, cellUv, float2(0, -1));  if (d < bestDist) { secondDist = bestDist; bestDist = d; bestCell = cellId + float2(0, -1); }  else if (d < secondDist) secondDist = d;
+                d = VoronoiDist(cellId, cellUv, float2(1, -1));  if (d < bestDist) { secondDist = bestDist; bestDist = d; bestCell = cellId + float2(1, -1); }  else if (d < secondDist) secondDist = d;
+                d = VoronoiDist(cellId, cellUv, float2(-1, 0));  if (d < bestDist) { secondDist = bestDist; bestDist = d; bestCell = cellId + float2(-1, 0); }  else if (d < secondDist) secondDist = d;
+                d = VoronoiDist(cellId, cellUv, float2(0, 0));   if (d < bestDist) { secondDist = bestDist; bestDist = d; bestCell = cellId; }                  else if (d < secondDist) secondDist = d;
+                d = VoronoiDist(cellId, cellUv, float2(1, 0));   if (d < bestDist) { secondDist = bestDist; bestDist = d; bestCell = cellId + float2(1, 0); }   else if (d < secondDist) secondDist = d;
+                d = VoronoiDist(cellId, cellUv, float2(-1, 1));  if (d < bestDist) { secondDist = bestDist; bestDist = d; bestCell = cellId + float2(-1, 1); }  else if (d < secondDist) secondDist = d;
+                d = VoronoiDist(cellId, cellUv, float2(0, 1));   if (d < bestDist) { secondDist = bestDist; bestDist = d; bestCell = cellId + float2(0, 1); }   else if (d < secondDist) secondDist = d;
+                d = VoronoiDist(cellId, cellUv, float2(1, 1));   if (d < bestDist) { secondDist = bestDist; bestDist = d; bestCell = cellId + float2(1, 1); }   else if (d < secondDist) secondDist = d;
+
+                float edgeM = (sqrt(secondDist) - sqrt(bestDist)) * cellSize;
+                float halfWidth = max(_VeinWidthM, 1.0) * 0.5;
+                float crack = 1.0 - smoothstep(0.0, halfWidth, edgeM);
+
+                // Only light a subset of cell borders so the network stays sparse.
+                float presence = smoothstep(_VeinDensity - 0.12, _VeinDensity + 0.05, Hash21(bestCell * 3.17 + 2.4));
+                crack *= presence;
+
+                // Secondary ridge filaments for organic scatter between major cracks.
+                float filamentScale = 1.0 / max(_VeinFilamentScaleM, 20.0);
+                float ridge = ValueNoise(worldXZ * filamentScale + float2(13.7, 29.1));
+                ridge = 1.0 - abs(ridge * 2.0 - 1.0);
+                float filament = pow(saturate(ridge), _VeinSharpness);
+                float filamentMask = smoothstep(0.72, 0.92, ValueNoise(worldXZ * 0.00055 + float2(4.2, 19.8)));
+                filament *= filamentMask * 0.28;
+
+                return saturate(max(crack, filament));
+            }
+
             float3 SaturateColor(float3 color, float amount)
             {
                 float luma = dot(color, float3(0.299, 0.587, 0.114));
@@ -278,7 +346,15 @@ Shader "RoutesToGlory/AlienTerrainBiome"
                 baseColor *= _baseColorFactor.rgb;
                 baseColor = SaturateColor(baseColor, _Saturation);
 
-                return half4(baseColor, 1.0);
+                // Neon pink veins sit on top of the unified purple ground (single pass).
+                float vein = SampleVeinMask(input.positionWS.xz);
+                // Slightly denser veins on steep rift faces for fracture readability.
+                vein = saturate(vein + riftMask * vein * 0.35);
+                float3 veinRgb = _VeinColor.rgb;
+                baseColor = lerp(baseColor, veinRgb, vein * _VeinBlend);
+                baseColor += veinRgb * vein * _VeinEmission;
+
+                return half4(saturate(baseColor), 1.0);
             }
             ENDHLSL
         }

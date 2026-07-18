@@ -127,9 +127,15 @@ namespace RoutesToGlory.EditorTools
             bool syncedHull = RtgPlayerShipAssetSync.SyncTripoHullFromSources(player);
             player.RegeneratePresentation();
 
-            RtgTerrainScatter scatter = RtgTerrainScatter.Ensure(loader);
-            if (scatter != null && Application.isPlaying)
-                scatter.OnMapSpawned();
+            // POC: trees/rocks/brush stay off unless RTG Echo Sites.spawnTerrainScatterProps.
+            RtgTerrainScatter scatter = RtgTerrainScatter.Find();
+            if (scatter != null)
+            {
+                if (loader != null && !loader.spawnTerrainScatterProps)
+                    scatter.enabledInPlay = false;
+                if (Application.isPlaying)
+                    scatter.OnMapSpawned();
+            }
 
             Selection.activeGameObject = georeference.gameObject;
             MarkDirty(georeference);
@@ -777,7 +783,7 @@ namespace RoutesToGlory.EditorTools
             ApplyAtmosphereInternal();
             if (!Application.isPlaying)
                 EditorSceneManager.MarkAllScenesDirty();
-            Debug.Log("[RTG] Atmosphere, fog, and lighting applied. Save with Cmd+S.");
+            Debug.Log("[RTG] Night sky (stars + planets), fog, and moonlight applied. Save with Cmd+S.");
         }
 
         [MenuItem("Routes to Glory/Advanced/Setup Fly Camera", priority = 24)]
@@ -870,11 +876,16 @@ namespace RoutesToGlory.EditorTools
                 return;
             }
 
+            scatter.enabledInPlay = true;
+            if (loader != null)
+                loader.spawnTerrainScatterProps = true;
+
             Selection.activeGameObject = scatter.gameObject;
             MarkDirty(georeference);
             Debug.Log(
-                "[RTG] Terrain scatter added. In Play mode it dresses revealed tiles around " +
-                "the player with procedural alien trees, rocks, and brush. Save with Cmd+S.");
+                "[RTG] Terrain scatter added and enabled. POC defaults keep trees/rocks off — " +
+                "this menu turns them back on (spawnTerrainScatterProps + enabledInPlay). " +
+                "Save with Cmd+S.");
         }
 
         [MenuItem("Routes to Glory/Advanced/Setup Pathfinder Beam", priority = 29)]
@@ -1067,7 +1078,7 @@ namespace RoutesToGlory.EditorTools
         }
 
         /// <summary>
-        /// Applies the Voronoi biome shader (xeno_rift, crystal flats, etc.) instead of flat teal.
+        /// Applies AlienTerrainBiome (unified dark purple skin + neon veins) instead of flat teal.
         /// </summary>
         private static void ApplyBiomeTerrainInternal(CesiumGeoreference georeference)
         {
@@ -1180,29 +1191,29 @@ namespace RoutesToGlory.EditorTools
 
         private static void ApplyAtmosphereInternal()
         {
-            // Alien sky (procedural skybox tinted violet, dark-teal ground).
+            // True night sky: custom procedural skybox (stars + alien planets).
             RenderSettings.skybox = GetOrCreateAlienSkybox();
 
-            // Moody alien haze. Linear fog is predictable at terrain (km) scale;
+            // Deep night haze. Linear fog is predictable at terrain (km) scale;
             // fog color is matched to the sky horizon so they blend.
             RenderSettings.fog = true;
-            RenderSettings.fogColor = new Color(0.34f, 0.22f, 0.46f); // violet haze
+            RenderSettings.fogColor = new Color(0.06f, 0.03f, 0.11f); // near-black violet night
             RenderSettings.fogMode = FogMode.Linear;
-            RenderSettings.fogStartDistance = 1500f;
-            RenderSettings.fogEndDistance = 18000f;
+            RenderSettings.fogStartDistance = 1400f;
+            RenderSettings.fogEndDistance = 15000f;
 
-            // Derive ambient light from the alien sky for a cohesive mood.
-            RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Skybox;
+            // Flat ambient so unlit-adjacent lit props stay readable under a dark skybox.
+            RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Flat;
+            RenderSettings.ambientLight = new Color(0.07f, 0.045f, 0.11f);
 
             Light sun = FindMainDirectionalLight();
             if (sun != null)
             {
-                // Use plain Color mode so the tint applies directly (not blended
-                // through a Kelvin color-temperature filter).
+                // Dim moonlight — no daytime procedural sun fighting the night look.
                 sun.useColorTemperature = false;
-                sun.color = new Color(0.80f, 0.60f, 1.00f); // alien sun tint
-                sun.intensity = 1.15f;
-                sun.transform.rotation = Quaternion.Euler(28f, 150f, 0f);
+                sun.color = new Color(0.42f, 0.38f, 0.72f);
+                sun.intensity = 0.18f;
+                sun.transform.rotation = Quaternion.Euler(72f, 210f, 0f);
             }
 
             // Recompute ambient/reflection probes from the new skybox.
@@ -1391,21 +1402,91 @@ namespace RoutesToGlory.EditorTools
 
         private static Material GetOrCreateAlienSkybox()
         {
+            Shader nightSky = Shader.Find("RoutesToGlory/AlienNightSky");
+            if (nightSky == null)
+            {
+                Debug.LogError(
+                    "[RTG] Missing shader RoutesToGlory/AlienNightSky. " +
+                    "Expected Assets/Shaders/AlienNightSky.shader — reimport that asset.");
+                return AssetDatabase.LoadAssetAtPath<Material>(AlienSkyboxPath);
+            }
+
             Material sky = AssetDatabase.LoadAssetAtPath<Material>(AlienSkyboxPath);
             if (sky == null)
             {
                 if (!AssetDatabase.IsValidFolder("Assets/Materials"))
                     AssetDatabase.CreateFolder("Assets", "Materials");
-                sky = new Material(Shader.Find("Skybox/Procedural"));
+                sky = new Material(nightSky);
                 AssetDatabase.CreateAsset(sky, AlienSkyboxPath);
+            }
+            else if (sky.shader != nightSky)
+            {
+                sky.shader = nightSky;
             }
 
             // Re-apply settings every run so tuning takes effect on rebuild.
-            sky.SetColor("_SkyTint", new Color(0.42f, 0.30f, 0.62f));    // violet sky
-            sky.SetColor("_GroundColor", new Color(0.10f, 0.13f, 0.14f)); // dark teal
-            sky.SetFloat("_AtmosphereThickness", 1.35f);                  // thicker haze
-            sky.SetFloat("_Exposure", 1.1f);
-            sky.SetFloat("_SunSize", 0.045f);
+            // Deep blackish-purple night + dense stars + medium alien worlds (no sun disc).
+            sky.SetColor("_ZenithColor", new Color(0.02f, 0.01f, 0.05f));
+            sky.SetColor("_HorizonColor", new Color(0.08f, 0.03f, 0.14f));
+            sky.SetColor("_GroundColor", new Color(0.02f, 0.015f, 0.04f));
+            sky.SetFloat("_HorizonGlow", 0.35f);
+            sky.SetFloat("_Exposure", 1.0f);
+
+            sky.SetFloat("_StarDensity", 95f);
+            sky.SetFloat("_StarThreshold", 0.965f);
+            sky.SetFloat("_StarBrightness", 1.35f);
+            sky.SetFloat("_StarTwinkle", 0.15f);
+
+            sky.SetColor("_BandColor", new Color(0.22f, 0.12f, 0.38f));
+            sky.SetFloat("_BandStrength", 0.22f);
+            sky.SetFloat("_BandWidth", 0.28f);
+
+            // Rose medium world + rings (high).
+            sky.SetVector("_PlanetADir", new Vector4(0.55f, 0.62f, 0.35f, 0f));
+            sky.SetColor("_PlanetAColor", new Color(0.78f, 0.42f, 0.58f));
+            sky.SetFloat("_PlanetASize", 0.026f);
+            sky.SetFloat("_PlanetABright", 0.95f);
+            sky.SetFloat("_PlanetARing", 1f);
+            sky.SetFloat("_PlanetARingWidth", 1.55f);
+            sky.SetFloat("_PlanetARingBright", 0.75f);
+
+            // Cool blue medium world (mid sky).
+            sky.SetVector("_PlanetBDir", new Vector4(-0.72f, 0.48f, 0.22f, 0f));
+            sky.SetColor("_PlanetBColor", new Color(0.32f, 0.48f, 0.88f));
+            sky.SetFloat("_PlanetBSize", 0.022f);
+            sky.SetFloat("_PlanetBBright", 0.9f);
+            sky.SetFloat("_PlanetBRing", 0f);
+            sky.SetFloat("_PlanetBRingWidth", 1.4f);
+            sky.SetFloat("_PlanetBRingBright", 0.6f);
+
+            // Violet companion — replaced former large amber "sun" disc.
+            sky.SetVector("_PlanetCDir", new Vector4(0.15f, 0.42f, -0.85f, 0f));
+            sky.SetColor("_PlanetCColor", new Color(0.55f, 0.38f, 0.72f));
+            sky.SetFloat("_PlanetCSize", 0.02f);
+            sky.SetFloat("_PlanetCBright", 0.75f);
+            sky.SetFloat("_PlanetCRing", 0f);
+            sky.SetFloat("_PlanetCRingWidth", 1.4f);
+            sky.SetFloat("_PlanetCRingBright", 0.6f);
+
+            // Small teal moon (near zenith).
+            sky.SetVector("_PlanetDDir", new Vector4(-0.25f, 0.78f, -0.45f, 0f));
+            sky.SetColor("_PlanetDColor", new Color(0.48f, 0.88f, 0.72f));
+            sky.SetFloat("_PlanetDSize", 0.011f);
+            sky.SetFloat("_PlanetDBright", 0.8f);
+            sky.SetFloat("_PlanetDRing", 0f);
+            sky.SetFloat("_PlanetDRingWidth", 1.3f);
+            sky.SetFloat("_PlanetDRingBright", 0.5f);
+
+            // Lavender medium world + rings (low azimuth).
+            sky.SetVector("_PlanetEDir", new Vector4(0.82f, 0.28f, -0.35f, 0f));
+            sky.SetColor("_PlanetEColor", new Color(0.62f, 0.55f, 0.78f));
+            sky.SetFloat("_PlanetESize", 0.024f);
+            sky.SetFloat("_PlanetEBright", 0.85f);
+            sky.SetFloat("_PlanetERing", 1f);
+            sky.SetFloat("_PlanetERingWidth", 1.7f);
+            sky.SetFloat("_PlanetERingBright", 0.7f);
+
+            EditorUtility.SetDirty(sky);
             AssetDatabase.SaveAssets();
             return sky;
         }

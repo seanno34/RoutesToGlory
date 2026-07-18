@@ -158,7 +158,7 @@ Cesium provides elevation mesh only. Macro zones from Voronoi cells; meso from h
 [RTG] Alien terrain biome material applied (shader-based, no Earth raster).
 ```
 
-**Look for:** Ochre plains, tan wasteland patches, blue-green marsh (localized), bright green forest blobs, crystal blue ridges, orange rifts, dark violet water pockets.
+**Look for:** Unified dark blackish-purple ground (subtle biome shade shifts), neon pink/magenta organic veins, near-black violet water pockets. See [TERRAIN_SKIN_POC.md](TERRAIN_SKIN_POC.md).
 
 **Tuning:** `RTG_AlienTerrainBiome` material → `_MacroRegionSizeM` (patch size), `_MacroBorderSoftM` (edge blend), `_WetBasinFraction`.
 
