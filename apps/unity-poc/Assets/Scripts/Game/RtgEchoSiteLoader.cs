@@ -269,6 +269,8 @@ namespace RoutesToGlory.Game
         {
             LastMap = null;
             _reloadingAfterWorldReset = true;
+            // Server restores goodie huts on reset — clear the session gate too.
+            RtgClaimedGoodieHuts.Clear();
 
             if (dataSource == DataSource.SampleFile)
             {
@@ -651,6 +653,8 @@ namespace RoutesToGlory.Game
             _scatterIndex = 0;
             _pendingTerrainAnchors.Clear();
             _corridorGoodieId = SelectCorridorGoodieTarget(map);
+            if (!string.IsNullOrEmpty(_corridorGoodieId))
+                RtgClaimedGoodieHuts.BindCorridorPin(_corridorGoodieId);
             int settlements = 0, resources = 0, xeniteTripo = 0, xeniteProcedural = 0;
 
             if (map.settlements != null)
@@ -1103,18 +1107,28 @@ namespace RoutesToGlory.Game
 
         private void SpawnSettlement(RtgSettlement s, Transform container)
         {
-            Color color = AlignmentColor(s.alignment, s.is_goodie_hut != 0);
+            bool owned = !string.IsNullOrEmpty(s.owner_empire_id);
+            bool sessionClaimed = RtgClaimedGoodieHuts.Contains(s.id);
+            // One-time claim: owned / converted / session-claimed huts are never claimable.
+            bool isUnclaimedGoodie =
+                !owned
+                && !sessionClaimed
+                && (s.is_goodie_hut != 0 || s.tier == "goodie_hut");
+            string displayTier = isUnclaimedGoodie
+                ? "goodie_hut"
+                : (s.tier == "goodie_hut" || sessionClaimed ? "settlement" : s.tier);
+
+            Color color = AlignmentColor(s.alignment, isUnclaimedGoodie);
 
             double lat = s.lat, lng = s.lng;
-            bool isGoodieHut = s.is_goodie_hut != 0 || s.tier == "goodie_hut";
-            bool pinOnCorridor = isGoodieHut && s.id == _corridorGoodieId;
+            bool pinOnCorridor = isUnclaimedGoodie && s.id == _corridorGoodieId;
             string tapTag = ApplyTapTestScatter(ref lat, ref lng, pinOnCorridor, s.id);
 
-            GameObject root = CreateMarkerRoot($"Echo Site — {s.name} ({s.tier})", container);
+            GameObject root = CreateMarkerRoot($"Echo Site — {s.name} ({displayTier})", container);
             RtgGroundMarkerVisual.BuildResult visual = RtgGroundMarkerVisual.BuildSettlement(
                 root.transform,
-                s.tier,
-                isGoodieHut,
+                displayTier,
+                isUnclaimedGoodie,
                 color,
                 GetEmissiveMaterial(color),
                 GetGlowPadMaterial(color));
@@ -1129,10 +1143,16 @@ namespace RoutesToGlory.Game
                     SurfaceClearanceM = groundMarkerClearanceM,
                 });
             }
-            AddLabel(root.transform, $"{s.name}\n{TierLabel(s.tier)} · {s.alignment}{tapTag}",
+            AddLabel(root.transform, $"{s.name}\n{TierLabel(displayTier)} · {s.alignment}{tapTag}",
                 visual.LabelHeightM, groundLabelSizeFactor);
             root.AddComponent<RtgMapMarker>().Configure(
-                RtgMapMarker.Kind.Settlement, s.id, s.name, s.tier, lat, lng);
+                RtgMapMarker.Kind.Settlement,
+                s.id,
+                s.name,
+                displayTier,
+                lat,
+                lng,
+                s.owner_empire_id);
             RtgMapMarkerRegistry.Register(root.GetComponent<RtgMapMarker>());
         }
 
@@ -1179,17 +1199,54 @@ namespace RoutesToGlory.Game
         {
             if (map?.settlements == null) return null;
 
+            // Corridor tap-test slot is single-use: once the pinned hut is claimed,
+            // never place a different unclaimed hut on the same interactive spot.
+            if (RtgClaimedGoodieHuts.CorridorPinRetired)
+                return null;
+
+            string stickyId = RtgClaimedGoodieHuts.CorridorPinSettlementId;
+            if (!string.IsNullOrEmpty(stickyId))
+            {
+                if (RtgClaimedGoodieHuts.Contains(stickyId))
+                {
+                    RtgClaimedGoodieHuts.RetireCorridorPin(stickyId);
+                    return null;
+                }
+                if (MapHasUnclaimedGoodie(map, stickyId))
+                    return stickyId;
+                // Sticky hut vanished without a session claim — retire rather than swap.
+                RtgClaimedGoodieHuts.RetireCorridorPin(stickyId);
+                return null;
+            }
+
             string bestId = null;
             double bestDist = double.MaxValue;
             foreach (RtgSettlement s in map.settlements)
             {
-                if (s == null || (s.is_goodie_hut == 0 && s.tier != "goodie_hut")) continue;
+                if (s == null) continue;
+                if (!string.IsNullOrEmpty(s.owner_empire_id)) continue;
+                if (RtgClaimedGoodieHuts.Contains(s.id)) continue;
+                if (s.is_goodie_hut == 0 && s.tier != "goodie_hut") continue;
                 double dist = HaversineM(scatterCenterLat, scatterCenterLng, s.lat, s.lng);
                 if (dist > scatterRadiusMeters || dist >= bestDist) continue;
                 bestDist = dist;
                 bestId = s.id;
             }
             return bestId;
+        }
+
+        private static bool MapHasUnclaimedGoodie(RtgWorldMap map, string settlementId)
+        {
+            if (map?.settlements == null || string.IsNullOrEmpty(settlementId))
+                return false;
+            foreach (RtgSettlement s in map.settlements)
+            {
+                if (s == null || s.id != settlementId) continue;
+                if (!string.IsNullOrEmpty(s.owner_empire_id)) return false;
+                if (RtgClaimedGoodieHuts.Contains(s.id)) return false;
+                return s.is_goodie_hut != 0 || s.tier == "goodie_hut";
+            }
+            return false;
         }
 
         /// <summary>

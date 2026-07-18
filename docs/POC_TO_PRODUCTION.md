@@ -35,6 +35,7 @@ These proved out in POC and should **not** be re-invented in production:
 | **Field-test workflow** | `pnpm dev:field` (caffeinate + API) for Mac-as-server driving tests | `scripts/field-test-server.sh` |
 | **Shader / pipeline artifacts** | Light Road glow concept, alien overlay shader approach, tile pipeline scripts | Copy Shader Graphs + pipeline docs, not POC placeholders |
 | **Route elevation + materials** | Terrain-sample persisted routes (not fixed `groundHeightMeters`); clearance stack travel +3 / connector +7 / glider +15; `sharedMaterial` + purge unmanaged LineRenderers | [LIGHT_ROAD_ROUTES_HANDOFF.md](../apps/unity-poc/docs/LIGHT_ROAD_ROUTES_HANDOFF.md), `RtgPersistedRouteDrawer`, `RtgLightRoad`, `RtgTerrainElevationGuards` |
+| **Goodie hut one-time claim** | Server atomic claim (`is_goodie_hut=1 AND owner_empire_id IS NULL` → 409); client session claimed-ID set + modal lock; skip owned/converted; SampleFile local claim (no fake live ids). Corridor scatter pin is **single-use** (no post-claim swap) — POC tap-test only | [GOODIE_HUT_CLAIM_HANDOFF.md](../apps/unity-poc/docs/GOODIE_HUT_CLAIM_HANDOFF.md), `RtgClaimedGoodieHuts`, `route-claim.ts` |
 
 **Production scene hygiene:** do not ship sample LineRenderers under `RTG Persisted Routes`; purge-on-load is only a safety net.
 
@@ -90,6 +91,7 @@ Documented during POC; acceptable for field testing, **not** for massive route n
 
 ### Claims (server) — partially scaled
 - **Today:** Bbox filter around probe point before corridor math (`route-claim.ts`). Good pattern—reuse client-side.
+- **Goodie huts:** one-time claim is **server-authoritative** (atomic UPDATE + 409). Client session set / corridor-pin retire are UX nets; do not rely on HashSet-by-id alone if any shared interactive slot can rebind to a new settlement id. See [GOODIE_HUT_CLAIM_HANDOFF.md](../apps/unity-poc/docs/GOODIE_HUT_CLAIM_HANDOFF.md).
 
 ### Rendering
 - **Today:** One `LineRenderer` per route, decimated to 256 display points.
@@ -150,3 +152,4 @@ When Phase 2 is done:
 | 2026-07-14 | Priority shift: **realistic terrain/map tiles** replaces hostile ordnance as active POC |
 | 2026-07-14 | Unity fog of war **disabled** — pre-surveyed world fiction; GPU budget for terrain tiles |
 | 2026-07-17 | Persisted Light Road terrain-sample + magenta material/orphan purge; see LIGHT_ROAD_ROUTES_HANDOFF.md |
+| 2026-07-17 | Goodie hut one-time claim: session set + single-use corridor pin + SampleFile local path + atomic server claim; see GOODIE_HUT_CLAIM_HANDOFF.md |

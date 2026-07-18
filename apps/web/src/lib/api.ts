@@ -59,7 +59,8 @@ export interface Settlement {
   terrestrial_label: string;
   tier: string;
   alignment: string;
-  is_goodie_hut: boolean;
+  /** API normalizes to 0|1; older payloads may send boolean. */
+  is_goodie_hut: boolean | number;
   owner_empire_id?: string | null;
   lat: number;
   lng: number;

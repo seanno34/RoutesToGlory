@@ -309,15 +309,21 @@ export function MapView({
       })}
 
       {visibleSettlements.map((s) => {
-        const isGoodie = s.is_goodie_hut || s.tier === 'goodie_hut';
         const lat = Number(s.lat);
         const lng = Number(s.lng);
-        const alreadyOwned =
-          Boolean(s.owner_empire_id) && !isGoodie;
+        const owned = Boolean(s.owner_empire_id);
+        const goodieFlag =
+          s.is_goodie_hut === true ||
+          s.is_goodie_hut === 1 ||
+          String(s.is_goodie_hut) === '1';
+        // One-time claim: owned settlements never reopen the goodie choice modal.
+        const isUnclaimedGoodie =
+          !owned && (goodieFlag || s.tier === 'goodie_hut');
+        const alreadyOwned = owned;
         const claimable = !alreadyOwned && isClaimable(lat, lng);
         return (
           <Marker key={s.id} longitude={lng} latitude={lat} anchor="center">
-            {isGoodie ? (
+            {isUnclaimedGoodie ? (
               <button
                 type="button"
                 className={`goodie-hut-marker${claimable ? ' claimable' : ''}`}

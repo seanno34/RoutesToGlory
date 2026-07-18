@@ -360,6 +360,18 @@ function coerceCoords<T extends Record<string, unknown>>(
       out[key] = Number(out[key]);
     }
   }
+  // TINYINT / BIT may arrive as number, bool, string, or Buffer — normalize to 0|1
+  // so web clients never treat Buffer([0]) as a still-claimable goodie hut.
+  if ('is_goodie_hut' in out) {
+    const v = out.is_goodie_hut;
+    if (typeof v === 'boolean') out.is_goodie_hut = v ? 1 : 0;
+    else if (typeof v === 'string') {
+      const t = v.trim().toLowerCase();
+      out.is_goodie_hut = t === '' || t === '0' || t === 'false' ? 0 : 1;
+    } else if (Buffer.isBuffer(v)) {
+      out.is_goodie_hut = v.length > 0 && v[0] !== 0 ? 1 : 0;
+    } else out.is_goodie_hut = Number(v) ? 1 : 0;
+  }
   return out as T;
 }
 

@@ -103,6 +103,11 @@ namespace RoutesToGlory.Game
 
             if (marker.IsConnected)
             {
+                if (RtgClaimedGoodieHuts.Contains(marker.targetId) || marker.GoodieInteractionBlocked)
+                {
+                    Debug.Log(
+                        $"[RTG] Goodie claim blocked — already claimed id={marker.targetId}");
+                }
                 ShowToast($"{marker.displayName} is already connected.");
                 return;
             }
@@ -129,12 +134,50 @@ namespace RoutesToGlory.Game
                 return;
             }
 
-            if (marker.IsGoodieHut)
+            // Session gate: same settlement id never re-opens the choice modal.
+            if (RtgClaimedGoodieHuts.Contains(marker.targetId))
             {
+                Debug.Log(
+                    $"[RTG] Goodie claim blocked — already claimed id={marker.targetId}");
+                ShowToast($"{marker.displayName} has already been claimed.");
+                if (marker.IsGoodieHut)
+                    marker.MarkGoodieClaimed();
+                else
+                    marker.BlockGoodieInteraction();
+                return;
+            }
+
+            // Instance lock: modal already opened / choice in flight on this GameObject.
+            if (marker.GoodieInteractionBlocked && marker.IsGoodieHut)
+            {
+                Debug.Log(
+                    $"[RTG] Goodie claim blocked — already claimed id={marker.targetId}");
+                ShowToast($"{marker.displayName} has already been claimed.");
+                return;
+            }
+
+            if (marker.IsUnclaimedGoodieHut)
+            {
+                // Lock this marker immediately so a second tap cannot queue another modal.
+                marker.BlockGoodieInteraction();
                 _pendingGoodie = marker;
                 _pendingGoodiePath = activeLeg != null
                     ? new List<RtgRouteGeometry.LatLng>(activeLeg)
                     : null;
+                return;
+            }
+
+            if (marker.IsGoodieHut)
+            {
+                Debug.Log(
+                    $"[RTG] Goodie claim blocked — already claimed id={marker.targetId}");
+                ShowToast($"{marker.displayName} has already been claimed.");
+                RtgClaimedGoodieHuts.Remember(marker.targetId);
+                RtgClaimedGoodieHuts.RetireCorridorPin(marker.targetId);
+                marker.MarkGoodieClaimed(
+                    string.IsNullOrEmpty(marker.subLabel) || marker.subLabel == "goodie_hut"
+                        ? "settlement"
+                        : marker.subLabel);
                 return;
             }
 
@@ -220,13 +263,41 @@ namespace RoutesToGlory.Game
             _pendingGoodie = null;
             _pendingGoodiePath = null;
             if (marker == null || _session == null) return;
-            StartCoroutine(_session.ClaimNearRoute(marker, choice, OnClaimDone, path));
+
+            string targetId = marker.targetId;
+            // Gate immediately so a second tap during the claim request cannot reopen the modal.
+            RtgClaimedGoodieHuts.Remember(targetId);
+            // Corridor tap-test pin is single-use — reload must not swap in another hut.
+            RtgClaimedGoodieHuts.RetireCorridorPin(targetId);
+            marker.MarkGoodieClaimed();
+
+            bool sampleMap = _echoLoader != null
+                && (_echoLoader.dataSource == RtgEchoSiteLoader.DataSource.SampleFile
+                    || _echoLoader.LoadedFromSampleFallback);
+
+            StartCoroutine(_session.ClaimNearRoute(marker, choice, result =>
+            {
+                // Sample / offline: keep the gate even if the local claim path fails.
+                // LiveApi: only unlock on hard failure (not 409 already-claimed).
+                if (!result.ok && !result.alreadyConnected && !sampleMap)
+                    RtgClaimedGoodieHuts.Forget(targetId);
+                OnClaimDone(result);
+            }, path));
         }
 
         private void OnClaimDone(RtgRouteSession.ClaimResult result)
         {
             if (result.alreadyConnected)
             {
+                RtgMapMarker existing = string.IsNullOrEmpty(result.connectedTargetId)
+                    ? null
+                    : RtgMapMarkerRegistry.FindByTargetId(result.connectedTargetId);
+                bool wasGoodie = existing != null && (
+                    existing.IsGoodieHut || RtgClaimedGoodieHuts.Contains(result.connectedTargetId));
+                MarkGoodieClaimedLocal(result.connectedTargetId, treatAsGoodie: wasGoodie);
+                ShowToast(wasGoodie
+                    ? "Already claimed — this hut cannot be claimed again."
+                    : "Already connected to your network.");
                 RefreshAfterClaim(result);
                 return;
             }
@@ -235,18 +306,32 @@ namespace RoutesToGlory.Game
 
             if (!result.ok) return;
 
-            MarkConnected(result.connectedTargetId);
+            // Goodie claims always pass goodieChoice → reloadMap; also gated via Remember above.
+            bool goodieClaim = result.reloadMap
+                || RtgClaimedGoodieHuts.Contains(result.connectedTargetId);
+            MarkGoodieClaimedLocal(result.connectedTargetId, treatAsGoodie: goodieClaim);
             RefreshAfterClaim(result);
 
             var missions = RtgMissionProgress.FindOrCreate();
             missions?.NotifyClaimSucceeded();
         }
 
-        private static void MarkConnected(string targetId)
+        private static void MarkGoodieClaimedLocal(string targetId, bool treatAsGoodie = false)
         {
             if (string.IsNullOrEmpty(targetId)) return;
             RtgMapMarker marker = RtgMapMarkerRegistry.FindByTargetId(targetId);
-            if (marker != null)
+            bool asGoodie = treatAsGoodie
+                || RtgClaimedGoodieHuts.Contains(targetId)
+                || (marker != null && marker.IsGoodieHut);
+            if (asGoodie)
+            {
+                RtgClaimedGoodieHuts.Remember(targetId);
+                RtgClaimedGoodieHuts.RetireCorridorPin(targetId);
+            }
+            if (marker == null) return;
+            if (asGoodie)
+                marker.MarkGoodieClaimed();
+            else
                 marker.SetConnected(true);
         }
 
@@ -304,6 +389,18 @@ namespace RoutesToGlory.Game
         {
             if (_pendingGoodie == null) return;
 
+            // Stale pending after claim/reload — never draw the choice UI again.
+            // Note: GoodieInteractionBlocked is set on open and must NOT clear the modal.
+            if (RtgClaimedGoodieHuts.Contains(_pendingGoodie.targetId)
+                || !_pendingGoodie.IsUnclaimedGoodieHut)
+            {
+                Debug.Log(
+                    $"[RTG] Goodie claim blocked — already claimed id={_pendingGoodie.targetId}");
+                _pendingGoodie = null;
+                _pendingGoodiePath = null;
+                return;
+            }
+
             GUI.color = new Color(0f, 0f, 0f, 0.55f);
             GUI.DrawTexture(new Rect(0f, 0f, Screen.width, Screen.height), Texture2D.whiteTexture);
             GUI.color = Color.white;
@@ -337,8 +434,10 @@ namespace RoutesToGlory.Game
             GUILayout.Space(4f);
             if (GUILayout.Button("Cancel", GUILayout.Height(34f)))
             {
+                RtgMapMarker cancelled = _pendingGoodie;
                 _pendingGoodie = null;
                 _pendingGoodiePath = null;
+                cancelled?.UnblockGoodieInteractionIfUnclaimed();
             }
 
             GUILayout.EndArea();

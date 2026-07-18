@@ -1,8 +1,9 @@
 import type { GameConfig, GoodieHutChoice } from '@empire/shared';
 import { ALIEN_RESOURCES } from '@empire/shared';
+import type { ResultSetHeader } from 'mysql2';
 import { resolveGoodieHutConnect } from './goodie-hut.js';
 import { configStore } from './config-store.js';
-import { query, newId } from '../db/client.js';
+import { getPool, query, newId } from '../db/client.js';
 import {
   bboxesOverlap,
   decimatePath,
@@ -14,6 +15,29 @@ import {
   pathBbox,
   type PathPoint,
 } from './route-geometry.js';
+
+/** MySQL TINYINT / string / Buffer → real 0|1 for goodie-hut checks. */
+function goodieHutFlag(value: unknown): number {
+  if (value == null) return 0;
+  if (typeof value === 'boolean') return value ? 1 : 0;
+  if (typeof value === 'number') return value === 0 ? 0 : 1;
+  if (typeof value === 'string') {
+    const trimmed = value.trim().toLowerCase();
+    if (trimmed === '' || trimmed === '0' || trimmed === 'false') return 0;
+    return 1;
+  }
+  if (Buffer.isBuffer(value)) return value.length > 0 && value[0] !== 0 ? 1 : 0;
+  return Number(value) ? 1 : 0;
+}
+
+function isUnclaimedGoodieHut(site: {
+  is_goodie_hut: unknown;
+  tier: string;
+  owner_empire_id: string | null;
+}): boolean {
+  if (site.owner_empire_id) return false;
+  return goodieHutFlag(site.is_goodie_hut) === 1 || site.tier === 'goodie_hut';
+}
 
 export interface ClaimNearRouteInput {
   worldId: string;
@@ -307,6 +331,32 @@ async function claimSettlement(
     throw Object.assign(new Error('Settlement owned by another empire'), { statusCode: 403 });
   }
 
+  const unclaimedGoodie = isUnclaimedGoodieHut(site);
+
+  // Already owned by this empire — heal leftover goodie flags, never re-roll rewards.
+  if (site.owner_empire_id === input.empireId) {
+    const wasGoodie =
+      goodieHutFlag(site.is_goodie_hut) === 1 || site.tier === 'goodie_hut';
+    if (wasGoodie) {
+      await getPool().execute(
+        `UPDATE settlements SET is_goodie_hut = 0,
+            tier = IF(tier = 'goodie_hut', 'settlement', tier)
+         WHERE id = ? AND owner_empire_id = ?`,
+        [site.id, input.empireId],
+      );
+    }
+    if (await isSettlementAlreadyConnected(input.worldId, input.empireId, site.id)) {
+      throw Object.assign(
+        new Error(
+          wasGoodie
+            ? 'Goodie hut already claimed'
+            : 'Settlement already connected to your network',
+        ),
+        { statusCode: 409 },
+      );
+    }
+  }
+
   let lat = Number(site.lat);
   let lng = Number(site.lng);
 
@@ -316,7 +366,7 @@ async function claimSettlement(
   let corridorLat = lat;
   let corridorLng = lng;
   const useApproach =
-    site.is_goodie_hut &&
+    unclaimedGoodie &&
     input.approachLat != null &&
     input.approachLng != null;
 
@@ -349,7 +399,7 @@ async function claimSettlement(
   let message = `Connected to ${site.name}.`;
   let reward: unknown;
 
-  if (site.is_goodie_hut) {
+  if (unclaimedGoodie) {
     const choice = input.goodieChoice ?? 'found_town';
     const resolution = resolveGoodieHutConnect(
       config,
@@ -368,26 +418,35 @@ async function claimSettlement(
       },
     );
 
+    // Atomic claim: only one successful goodie conversion per hut.
+    let claimed = false;
     if (choice === 'found_town') {
       const newName = site.name.replace(/^Goodie Hut/i, 'Town');
       const tier = resolution.choice === 'found_town' ? resolution.tier : 'town';
-      await query(
+      const [header] = await getPool().execute<ResultSetHeader>(
         `UPDATE settlements
          SET tier = ?, is_goodie_hut = 0, owner_empire_id = ?,
              name = ?, planet_display_name = ?, lat = ?, lng = ?
-         WHERE id = ?`,
-        [tier, input.empireId, newName, newName, lat, lng, site.id],
+         WHERE id = ? AND world_id = ? AND is_goodie_hut = 1 AND owner_empire_id IS NULL`,
+        [tier, input.empireId, newName, newName, lat, lng, site.id, input.worldId],
       );
+      claimed = (header.affectedRows ?? 0) > 0;
       message = `Founded ${newName} — connector route established.`;
     } else if (resolution.choice === 'claim_reward') {
       reward = resolution.reward;
-      await query(
-        `UPDATE settlements SET owner_empire_id = ?, is_goodie_hut = 0, tier = 'settlement',
-         lat = ?, lng = ?
-         WHERE id = ?`,
-        [input.empireId, lat, lng, site.id],
+      const [header] = await getPool().execute<ResultSetHeader>(
+        `UPDATE settlements
+         SET owner_empire_id = ?, is_goodie_hut = 0, tier = 'settlement',
+             lat = ?, lng = ?
+         WHERE id = ? AND world_id = ? AND is_goodie_hut = 1 AND owner_empire_id IS NULL`,
+        [input.empireId, lat, lng, site.id, input.worldId],
       );
+      claimed = (header.affectedRows ?? 0) > 0;
       message = `Claimed reward at ${site.name}.${rewardSummary(reward)}`;
+    }
+
+    if (!claimed) {
+      throw Object.assign(new Error('Goodie hut already claimed'), { statusCode: 409 });
     }
   } else if (!site.owner_empire_id) {
     await query(`UPDATE settlements SET owner_empire_id = ? WHERE id = ?`, [

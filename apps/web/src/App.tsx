@@ -463,8 +463,19 @@ export function App() {
   };
 
   const handleTapSettlement = (settlement: Settlement) => {
-    if (settlement.is_goodie_hut || settlement.tier === 'goodie_hut') {
+    const owned = Boolean(settlement.owner_empire_id);
+    const goodieFlag =
+      settlement.is_goodie_hut === true ||
+      (settlement.is_goodie_hut as unknown) === 1 ||
+      String(settlement.is_goodie_hut) === '1';
+    const isUnclaimedGoodie =
+      !owned && (goodieFlag || settlement.tier === 'goodie_hut');
+    if (isUnclaimedGoodie) {
       setPendingGoodie(settlement);
+      return;
+    }
+    if (owned && (goodieFlag || settlement.tier === 'goodie_hut')) {
+      setStatus(`${settlement.name} has already been claimed.`);
       return;
     }
     void runClaim('settlement', settlement.id);

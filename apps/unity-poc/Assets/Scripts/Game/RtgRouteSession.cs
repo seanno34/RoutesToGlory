@@ -436,6 +436,27 @@ namespace RoutesToGlory.Game
             Action<ClaimResult> done,
             List<RtgRouteGeometry.LatLng> pathOverride = null)
         {
+            SyncConfigFromEchoLoader();
+
+            // SampleFile / offline fallback: no server persistence — complete locally.
+            // LiveApi always hits the claim endpoint (server rejects duplicate goodie claims).
+            bool sampleMap = _echoLoader != null
+                && (_echoLoader.dataSource == RtgEchoSiteLoader.DataSource.SampleFile
+                    || _echoLoader.LoadedFromSampleFallback);
+            if (sampleMap)
+            {
+                string msg;
+                if (goodieChoice == "found_town")
+                    msg = $"Founded town at {marker.displayName} (sample).";
+                else if (goodieChoice == "claim_reward")
+                    msg = $"Claimed reward at {marker.displayName} (sample).";
+                else
+                    msg = $"Connected to {marker.displayName} (sample).";
+                // No API map to reload — client set + MarkGoodieClaimedLocal handle persistence.
+                done?.Invoke(ClaimResult.Ok(msg, reloadMap: false, marker.targetId));
+                yield break;
+            }
+
             List<RtgRouteGeometry.LatLng> path;
             if (pathOverride != null && pathOverride.Count > 0)
                 path = RtgRoutePathUtil.DecimateForClaim(pathOverride);
@@ -524,7 +545,13 @@ namespace RoutesToGlory.Game
                 new ClaimResult { ok = false, message = message };
 
             public static ClaimResult AlreadyConnected(string targetId = null) =>
-                new ClaimResult { ok = false, alreadyConnected = true, connectedTargetId = targetId };
+                new ClaimResult
+                {
+                    ok = false,
+                    alreadyConnected = true,
+                    connectedTargetId = targetId,
+                    reloadMap = true,
+                };
         }
 
         private static string TryParseError(string json)

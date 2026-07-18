@@ -745,6 +745,7 @@ MonoBehaviour:
   subLabel: settlement
   lat: 42.7502
   lng: -105.37308017476342
+  ownerEmpireId: 
 --- !u!114 &37942385
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1374,6 +1375,7 @@ MonoBehaviour:
   subLabel: city
   lat: 42.7724
   lng: -105.4009
+  ownerEmpireId: 
 --- !u!114 &125557852
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1567,6 +1569,7 @@ MonoBehaviour:
   subLabel: rich
   lat: 42.7638
   lng: -105.3762
+  ownerEmpireId: 
 --- !u!114 &141923978
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -6714,6 +6717,7 @@ MonoBehaviour:
   subLabel: city
   lat: 42.7597
   lng: -105.35987679894659
+  ownerEmpireId: 
 --- !u!114 &578222136
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -9852,6 +9856,7 @@ MonoBehaviour:
   subLabel: goodie_hut
   lat: 42.766300000143055
   lng: -105.3819
+  ownerEmpireId: 
 --- !u!114 &846894578
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -15588,6 +15593,7 @@ MonoBehaviour:
   subLabel: town
   lat: 42.7455
   lng: -105.35729546107447
+  ownerEmpireId: 
 --- !u!114 &1469593425
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -19908,6 +19914,7 @@ MonoBehaviour:
   subLabel: town
   lat: 42.7681
   lng: -105.3705
+  ownerEmpireId: 
 --- !u!114 &1870229245
 MonoBehaviour:
   m_ObjectHideFlags: 0

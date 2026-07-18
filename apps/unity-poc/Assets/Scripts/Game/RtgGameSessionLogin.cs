@@ -332,6 +332,7 @@ namespace RoutesToGlory.Game
                 _loader.SetSessionLoadAllowed(false);
             }
 
+            RtgClaimedGoodieHuts.Clear();
             SyncRouteSession();
             EndActiveRouteSession();
 
@@ -349,6 +350,7 @@ namespace RoutesToGlory.Game
         private void ApplyLiveSessionAndLoad()
         {
             if (_loader == null) return;
+            RtgClaimedGoodieHuts.Clear();
             _loader.dataSource = RtgEchoSiteLoader.DataSource.LiveApi;
             _loader.loadOnPlay = false;
             _loader.SetSessionLoadAllowed(true);
@@ -840,6 +842,7 @@ namespace RoutesToGlory.Game
             _loader.dataSource = RtgEchoSiteLoader.DataSource.SampleFile;
             _loader.loadOnPlay = false;
             _loader.SetSessionLoadAllowed(true);
+            RtgClaimedGoodieHuts.Clear();
             _sessionReady = true;
             _overlayVisible = false;
             _error = "";

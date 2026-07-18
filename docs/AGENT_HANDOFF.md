@@ -183,6 +183,7 @@ Unity mobile build: preprocessor runs automatically; or run **Regenerate Playabl
 | Echo sites / deposits | `RtgEchoSiteLoader.cs`, `RtgTerrainDeposit.cs` (**XENITE TRIPO GUARDRAILS**) |
 | Terrain guards | `RtgTerrainDepositGuards.cs`, `RtgTerrainElevationGuards.cs`, `RtgTerrainClearanceTuningConfig.cs` |
 | Persisted / live routes | `RtgPersistedRouteDrawer.cs`, `RtgLightRoad.cs` — see §6b |
+| Goodie hut claim | `RtgClaimedGoodieHuts.cs`, `RtgTapToConnect.cs`, `route-claim.ts` — see §6c |
 | Biome | `packages/shared` biome types + `RtgBiomePalette.cs`, alien terrain shader |
 
 ### 6b. Light Road + persisted routes (elevation + magenta) — production cutover
@@ -198,6 +199,29 @@ Unity mobile build: preprocessor runs automatically; or run **Regenerate Playabl
 | **Production** | Do **not** bake sample LineRenderers into shipped scenes; purge-on-load is a safety net only. |
 
 Key files: `RtgPersistedRouteDrawer`, `RtgLightRoad`, `RtgTerrainElevationGuards`.
+
+### 6c. Goodie hut one-time claim — production cutover
+
+**Focused doc:** `apps/unity-poc/docs/GOODIE_HUT_CLAIM_HANDOFF.md`
+
+| Topic | Rule |
+|-------|------|
+| **Root cause** | After claim + map reload, corridor tap pin **swapped** a new unclaimed hut onto the same spot (new settlement id) → HashSet-by-id never blocked. SampleFile claims against live API with fake ids also left markers claimable. |
+| **Session gate** | `RtgClaimedGoodieHuts` HashSet survives respawn; Clear on login / New Game / world reset. |
+| **Corridor pin** | **Single-use** — `BindCorridorPin` / `RetireCorridorPin`; never re-select nearest unclaimed for that slot after claim. |
+| **Modal lock** | `BlockGoodieInteraction` on modal open; Remember + Retire on choice. |
+| **SampleFile** | Local claim path in `RtgRouteSession` — do not POST fake ids to live API. |
+| **Server** | Atomic `UPDATE … WHERE is_goodie_hut = 1 AND owner_empire_id IS NULL`; 409 if `affectedRows = 0`; coerce TINYINT/Buffer flags. |
+| **Spawn / web** | Skip owned / converted / session-claimed huts as claimable goodies. |
+
+### Past regressions (goodie claim — avoid repeating)
+
+1. **Corridor pin rebind after claim** — same screen spot, different id; HashSet misses.
+2. **SampleFile → live claim** — fake ids; marker state never sticks.
+3. **Non-atomic goodie UPDATE** — double-tap / race can re-roll rewards.
+4. **Raw MySQL `is_goodie_hut` as bool** — Buffer/`0`/`1` fools “still claimable” checks.
+
+Key files: `RtgClaimedGoodieHuts`, `RtgTapToConnect`, `RtgEchoSiteLoader`, `RtgMapMarker`, `RtgRouteSession`, `apps/api/src/services/route-claim.ts`.
 
 ---
 
@@ -264,9 +288,10 @@ Recent agent work focused on:
 7. Guardrail comments in ship pipeline code  
 8. Xenite Tripo albedo Persist / yellow-wash fix + **XENITE TRIPO GUARDRAILS** docs/comments  
 9. **Persisted Light Road elevation** (terrain-sample + clearance stack) + **magenta** material/`sharedMaterial` + orphan purge under `RTG Persisted Routes` — see §6b / `LIGHT_ROAD_ROUTES_HANDOFF.md`
+10. **Goodie hut one-time claim** — session claimed set + single-use corridor pin + SampleFile local claim + server atomic UPDATE — see §6c / `GOODIE_HUT_CLAIM_HANDOFF.md`
 
 Prior transcript (Tripo hull debugging arc): agent session `8e33b70d-51fa-4ef9-a06b-4a5c938af2d1` in Cursor agent transcripts.
 
 ---
 
-*Update this doc when ship/deposit/route pipeline or primary workflows change materially.*
+*Update this doc when ship/deposit/route/claim pipeline or primary workflows change materially.*
