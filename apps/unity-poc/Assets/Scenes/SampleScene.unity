@@ -20636,7 +20636,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::RoutesToGlory.Game.RtgEchoSiteLoader
   dataSource: 0
-  apiBaseUrl: http://192.168.1.219:3001/api
+  apiBaseUrl: https://8082ventures.com/rtg_api/api
   worldId: 27159a5a-5c62-4340-8c40-4eb4c421361c
   empireId: f9efe845-bf99-4ccd-8c90-4762094c185e
   sampleFileName: sample-world-map.json

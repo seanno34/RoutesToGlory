@@ -23,6 +23,8 @@ Definition of done for the Unity POC. The POC is achieved when all criteria belo
 
 **How testers get/set a PIN:** pick any 4-digit number (e.g. `1234`) and use it consistently. First **New Game** or join that creates/looks up the user stores `users.pin`. Share PINs only within your tester group; sessions are isolated per PIN.
 
+**API base URL:** public mobile uses **`https://8082ventures.com/rtg_api/api`**; Unity Editor uses `http://localhost:3001/api`. Override in the join panel for local/LAN/tunnel.
+
 ---
 
 ## 2. Game objective — sequential missions

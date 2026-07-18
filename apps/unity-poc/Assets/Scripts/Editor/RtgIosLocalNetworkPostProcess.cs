@@ -8,9 +8,11 @@ using UnityEditor.iOS.Xcode;
 namespace RoutesToGlory.EditorTools
 {
     /// <summary>
-    /// iOS 14+ blocks HTTP to LAN IPs (e.g. a dev API at 192.168.x.x) unless
+    /// iOS 14+ blocks HTTP to LAN IPs (e.g. a local API at 192.168.x.x) unless
     /// NSLocalNetworkUsageDescription is present and the user grants Local Network access.
-    /// Unity does not expose this in Player Settings, so we inject it at export time.
+    /// Prefer production HTTPS (<c>https://8082ventures.com/rtg_api/api</c>) for off-LAN
+    /// devices — that path needs no Local Network permission. Keep this injector for
+    /// same-Wi‑Fi LAN field tests. Unity does not expose the plist keys in Player Settings.
     /// </summary>
     public static class RtgIosLocalNetworkPostProcess
     {

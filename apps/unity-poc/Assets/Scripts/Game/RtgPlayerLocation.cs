@@ -1040,10 +1040,15 @@ namespace RoutesToGlory.Game
         /// of visiting every beacon, so scattered markers sit beside the route for
         /// tap-to-connect testing.
         /// </summary>
-        private static RtgWaypoint[] CorridorTourLoop()
+        /// <summary>
+        /// ~3 km rectangular corridor through the tour center. The pin follows this road instead
+        /// of visiting every beacon, so scattered markers sit beside the route for
+        /// tap-to-connect testing.
+        /// </summary>
+        private RtgWaypoint[] CorridorTourLoop()
         {
-            const double cLat = 42.7597;
-            const double cLng = -105.3819;
+            double cLat = tourCenterLatitude;
+            double cLng = tourCenterLongitude;
             const double dLat = 0.012;  // ~1.3 km north/south
             const double dLng = 0.016;  // ~1.3 km east/west at this latitude
 
@@ -1975,6 +1980,75 @@ namespace RoutesToGlory.Game
             lat = _markerAnchor.latitude;
             lng = _markerAnchor.longitude;
             return true;
+        }
+
+        /// <summary>
+        /// After LiveApi Join: if Manual GPS (or a stale pin) is far from world deposits,
+        /// Mission HUD still shows connected xenite from the DB while the camera sits
+        /// elsewhere with an empty map. Relocate to Auto Pilot at the play area.
+        /// </summary>
+        public void EnsureNearWorldPlayArea(double playLat, double playLng, float maxDistanceMeters = 25000f)
+        {
+            if (double.IsNaN(playLat) || double.IsNaN(playLng)
+                || double.IsInfinity(playLat) || double.IsInfinity(playLng))
+                return;
+            if (playLat < -90.0 || playLat > 90.0 || playLng < -180.0 || playLng > 180.0)
+                return;
+
+            double distM = double.MaxValue;
+            if (TryGetPlayerLatLng(out double lat, out double lng))
+                distM = DistanceMeters(lat, lng, playLat, playLng);
+            else if (DistanceMeters(tourCenterLatitude, tourCenterLongitude, playLat, playLng)
+                     <= maxDistanceMeters)
+                distM = 0;
+
+            if (distM <= maxDistanceMeters)
+                return;
+
+            Debug.LogWarning(
+                $"[RTG] Player is {distM / 1000.0:0.#} km from world deposits " +
+                $"({playLat:F4}, {playLng:F4}). Switching to Auto Pilot at the play area " +
+                "so xenite appears on the map (Mission counts are DB-backed). " +
+                "Use Manual when physically on-site near Douglas.");
+
+            tourCenterLatitude = playLat;
+            tourCenterLongitude = playLng;
+            routeMode = RouteMode.TourNearbySites;
+            _cachedSimulatedWaypoints = null;
+
+            EnsureMarker();
+            if (_markerAnchor != null)
+            {
+                _markerAnchor.SetPositionLongitudeLatitudeHeight(
+                    playLng, playLat, groundHeightMeters + markerHeight);
+            }
+
+            _panned = false;
+            _hasHeadingSample = false;
+            if (_marker != null)
+            {
+                _focusTarget = _marker.position;
+                _focus = _focusTarget;
+            }
+
+            if (followWithCamera)
+                SetFollowActive(true);
+
+            if (_activeSource != LocationSource.AutoPilot)
+            {
+                SetLocationSource(LocationSource.AutoPilot);
+                return;
+            }
+
+            if (_tourCoroutine != null)
+            {
+                StopCoroutine(_tourCoroutine);
+                _tourCoroutine = null;
+            }
+
+            _provider?.End();
+            _provider = null;
+            BeginLocationProvider();
         }
 
         public bool IsAutoPilotActive => _activeSource == LocationSource.AutoPilot;

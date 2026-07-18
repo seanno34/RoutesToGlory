@@ -4,6 +4,42 @@ Target: **https://8082ventures.com/rtg/**
 
 SPanel hosts the **static PWA** in your web root and runs the **Node API** via **NodeJS Manager** (not cPanel). MySQL tables live in your existing database (e.g. `ventures_rtg_test`).
 
+## Public API URL (Unity / mobile)
+
+| Client | API base URL |
+|---|---|
+| **Phone / tablet (off-LAN)** | **`https://8082ventures.com/rtg_api/api`** |
+| Unity Editor (`pnpm dev`) | `http://localhost:3001/api` |
+| Same Wi‑Fi LAN field test | `http://<Mac-LAN-IP>:3001/api` |
+| Local API over the internet | HTTPS URL from `pnpm dev:tunnel` + `/api` |
+
+**Verify production:**
+
+```bash
+curl https://8082ventures.com/rtg_api/health
+# → {"ok":true,"database":true}
+
+curl https://8082ventures.com/rtg_api/api/config/public
+
+# After picking a real world id + empire id from /worlds/saved:
+WID=<world-uuid>
+EID=<empire-uuid>
+curl -sS -w "\nHTTP:%{http_code}\n" \
+  "https://8082ventures.com/rtg_api/api/worlds/$WID/map" | head -c 200
+# → 200 + settlements/routes/resources JSON
+
+curl -sS -w "\nHTTP:%{http_code}\n" \
+  "https://8082ventures.com/rtg_api/api/worlds/$WID/missions?empireId=$EID"
+# → 200 + currentMission/objective (NOT Fastify "Route GET:/api/worlds/.../missions not found")
+```
+
+**Stale API symptom:** login + saved list + map work, but Mission HUD shows
+`Route GET:/api/worlds/<guid>/missions… not found`. That means production Node is an
+older build missing `missionRoutes`. Rebuild and redeploy the API (see
+[Updating after a release](#updating-after-a-release)).
+
+Note: **`/rtg/api`** may return Apache **403** on this host (mod_proxy blocked in `.htaccess`). Use **`/rtg_api`** (PHP proxy in `deploy/spanel/rtg_api/`) for public clients. CORS is open (`origin: true` on Fastify + `Access-Control-Allow-Origin: *` on the PHP proxy). HTTPS satisfies iOS ATS / Android cleartext rules for production.
+
 ---
 
 ## What goes where
@@ -194,6 +230,15 @@ curl https://8082ventures.com/rtg/api/health
 # → {"ok":true,"database":true}
 ```
 
+If that returns **403**, use the working public path instead (already deployed on 8082ventures):
+
+```bash
+curl https://8082ventures.com/rtg_api/health
+curl https://8082ventures.com/rtg_api/api/config/public
+```
+
+Unity / mobile should use **`https://8082ventures.com/rtg_api/api`** as the API base (see [Public API URL](#public-api-url-unity--mobile) above).
+
 ---
 
 ## 5. Environment variables (API)
@@ -305,7 +350,26 @@ Keep it running with PM2 if available: `pm2 start index.js --name rtg-api`. The 
 
 ## Updating after a release
 
-1. Build locally (web + api)
-2. Upload new `apps/web/dist/` → `public_html/rtg/`
-3. Upload new `apps/api/dist/` → `rtg-api/dist/`
-4. SPanel NodeJS Manager → **Actions → Restart**
+Preferred (self-contained upload matching ScalaHosting layout):
+
+```bash
+cd /path/to/routestoglory
+./scripts/bundle-rtg-api.sh
+# → deploy/rtg_api_bundle/  (includes dist/routes/missions.js + migration 005)
+```
+
+Then on the server (FTP / File Manager / SFTP):
+
+1. Upload **contents** of `deploy/rtg_api_bundle/` into `/home/ventures/rtg_api/`
+   (replace `dist/`, `index.js`, `migrations/`, `package.json`, `vendor/`, `node_modules/` as needed)
+2. **Keep** the existing server `.env` (do not overwrite MySQL secrets)
+3. SPanel **NodeJS Manager** → **Actions → Restart** (migrations run on boot; `005_empire_missions.sql` creates `empire_missions` if missing)
+4. Re-verify missions (see curls above) — must be **200**, not Fastify route-not-found
+
+Manual alternative (no bundle script):
+
+1. `pnpm --filter @empire/shared build && pnpm --filter @empire/api build`
+2. Upload new `apps/web/dist/` → `public_html/rtg/` (PWA only)
+3. Upload new `apps/api/dist/` → `rtg-api/dist/` (must include `routes/missions.js`)
+4. Upload new `apps/api/migrations/` if new SQL files were added
+5. SPanel NodeJS Manager → **Actions → Restart**

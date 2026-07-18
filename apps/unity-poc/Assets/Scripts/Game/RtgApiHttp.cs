@@ -14,7 +14,19 @@ namespace RoutesToGlory.Game
     {
         public const int DefaultTimeoutSeconds = 8;
         public const int CreateWorldTimeoutSeconds = 60;
-        public const string DefaultApiBaseUrl = "http://localhost:3001/api";
+
+        /// <summary>Local <c>pnpm dev</c> API — Unity Editor on the same Mac.</summary>
+        public const string LocalApiBaseUrl = "http://localhost:3001/api";
+
+        /// <summary>
+        /// Production API on 8082ventures (SPanel PHP proxy → Node). Prefer this for
+        /// iOS/Android field tests off the Mac LAN. Health: <c>/rtg_api/health</c>.
+        /// </summary>
+        public const string PublicApiBaseUrl = "https://8082ventures.com/rtg_api/api";
+
+        /// <summary>Editor → localhost; device builds → production HTTPS.</summary>
+        public static string DefaultApiBaseUrl =>
+            Application.isEditor ? LocalApiBaseUrl : PublicApiBaseUrl;
 
         /// <summary>Trim + uppercase access codes to match web <c>getWorldByCode</c>.</summary>
         public static string NormalizeAccessCode(string code) =>
@@ -48,7 +60,7 @@ namespace RoutesToGlory.Game
         public static string EditorLocalhostRetryBase(string baseUrl)
         {
             if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out Uri uri))
-                return "http://127.0.0.1:3001/api";
+                return LocalApiBaseUrl.Replace("localhost", "127.0.0.1");
 
             int port = uri.Port > 0 ? uri.Port : 3001;
             string path = uri.AbsolutePath.TrimEnd('/');
@@ -89,16 +101,35 @@ namespace RoutesToGlory.Game
             bool looksLocal =
                 baseUrl.IndexOf("localhost", StringComparison.OrdinalIgnoreCase) >= 0
                 || baseUrl.IndexOf("127.0.0.1", StringComparison.OrdinalIgnoreCase) >= 0;
+            bool looksLan =
+                baseUrl.IndexOf("192.168.", StringComparison.OrdinalIgnoreCase) >= 0
+                || baseUrl.IndexOf("10.", StringComparison.OrdinalIgnoreCase) >= 0
+                || baseUrl.IndexOf("172.", StringComparison.OrdinalIgnoreCase) >= 0;
 
-            string deviceHint = looksLocal
-                ? "On a phone/tablet use your Mac LAN IP (e.g. http://192.168.x.x:3001/api), not localhost."
-                : "Confirm the Mac and device share Wi‑Fi and the API listens on 0.0.0.0 (pnpm dev / pnpm dev:field).";
+            string deviceHint;
+            if (looksLocal)
+            {
+                deviceHint =
+                    $"On a phone/tablet use production HTTPS ({PublicApiBaseUrl}), not localhost. " +
+                    "Same-Wi‑Fi LAN (http://192.168.x.x:3001/api) or pnpm dev:tunnel only for local-API field tests.";
+            }
+            else if (looksLan)
+            {
+                deviceHint =
+                    "LAN IP only works on the same Wi‑Fi. Off-LAN use " +
+                    $"{PublicApiBaseUrl} (or a HTTPS tunnel from pnpm dev:tunnel).";
+            }
+            else
+            {
+                deviceHint =
+                    "Confirm production is up (curl https://8082ventures.com/rtg_api/health) " +
+                    "or override the join-panel API URL for local pnpm dev / tunnel.";
+            }
 
             return
                 $"API unreachable at {baseUrl} ({detail}). " +
-                "Start the API (pnpm dev or pnpm dev:field). " +
                 deviceHint +
-                " Editor: localhost/127.0.0.1 is fine; set API base in the join panel or rtg-dev-world.json.";
+                " Editor default: localhost; public mobile: " + PublicApiBaseUrl + ".";
         }
 
         /// <summary>

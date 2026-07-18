@@ -90,3 +90,55 @@ export async function getUserByPin(pin: string): Promise<PinUser | null> {
   if (!row) return null;
   return { id: row.id, displayName: row.display_name, pin: row.pin };
 }
+
+/**
+ * Bind a 4-digit PIN onto a legacy user who has no PIN yet.
+ * Succeeds only when the PIN is unused (or already on this user) and the row
+ * is still unbound. Safe under the unique `uq_users_pin` index.
+ */
+export async function tryClaimUserPin(
+  userId: string,
+  pin: string,
+): Promise<boolean> {
+  await ensureUserPinSchema();
+  const normalized = normalizeUserPin(pin);
+  if (!normalized || !userId) return false;
+
+  const existing = await getUserByPin(normalized);
+  if (existing) {
+    return existing.id === userId;
+  }
+
+  try {
+    await query(`UPDATE users SET pin = ? WHERE id = ? AND pin IS NULL`, [
+      normalized,
+      userId,
+    ]);
+  } catch {
+    // Unique race: another request claimed this PIN first.
+    const afterRace = await getUserByPin(normalized);
+    return afterRace?.id === userId;
+  }
+
+  const self = await query<{ pin: string | null }>(
+    `SELECT pin FROM users WHERE id = ? LIMIT 1`,
+    [userId],
+  );
+  return normalizeUserPin(self.rows[0]?.pin) === normalized;
+}
+
+/**
+ * Shared list/join filter: a world belongs to `filterPin` when the owner PIN
+ * matches, or the owner is still unbound (legacy pre-PIN world — join may claim).
+ * With no filter PIN, every world matches (legacy/web list-all).
+ */
+export function worldMatchesPinOwnership(
+  ownerPin: string | null | undefined,
+  filterPin: string | null | undefined,
+): boolean {
+  if (!filterPin) return true;
+  const normalizedOwner = normalizeUserPin(ownerPin);
+  if (normalizedOwner === filterPin) return true;
+  if (normalizedOwner == null) return true;
+  return false;
+}

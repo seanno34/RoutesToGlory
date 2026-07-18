@@ -248,7 +248,7 @@ namespace RoutesToGlory.EditorTools
             RtgEchoSiteLoader loader = GetOrCreateEchoSiteLoader(georeference);
             loader.dataSource = RtgEchoSiteLoader.DataSource.LiveApi;
             loader.apiBaseUrl = string.IsNullOrWhiteSpace(dev.apiBaseUrl)
-                ? "http://localhost:3001/api"
+                ? RtgApiHttp.LocalApiBaseUrl
                 : dev.apiBaseUrl;
             loader.worldId = dev.worldId;
             loader.empireId = dev.empireId;
@@ -987,9 +987,8 @@ namespace RoutesToGlory.EditorTools
         private static bool CallResetProgressApi(RtgDevWorld dev)
         {
             string apiBase = string.IsNullOrWhiteSpace(dev.apiBaseUrl)
-                ? "http://localhost:3001/api"
-                : dev.apiBaseUrl.TrimEnd('/');
-            string url = $"{apiBase}/worlds/{dev.worldId}/reset-progress";
+                ? RtgApiHttp.LocalApiBaseUrl
+                : dev.apiBaseUrl.TrimEnd('/');            string url = $"{apiBase}/worlds/{dev.worldId}/reset-progress";
             string json = $"{{\"confirm\":true,\"empireId\":\"{dev.empireId}\"}}";
 
             try

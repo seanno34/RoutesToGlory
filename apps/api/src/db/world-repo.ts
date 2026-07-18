@@ -11,7 +11,10 @@ import {
 import {
   ensureUserPinSchema,
   findOrCreateUserByPin,
+  getUserByPin,
   normalizeUserPin,
+  tryClaimUserPin,
+  worldMatchesPinOwnership,
 } from './user-pin.js';
 
 export interface CreateWorldInput {
@@ -163,10 +166,12 @@ export async function listSavedWorlds(
   await ensureUserPinSchema();
 
   const normalizedPin = normalizeUserPin(pin);
+  // Same ownership rule as join: matching PIN, or unbound legacy (NULL pin).
+  // Unbound rows are claimable on first successful by-code join with that PIN.
   const params: string[] = [];
   let pinClause = '';
   if (normalizedPin) {
-    pinClause = ' AND u.pin = ?';
+    pinClause = ' AND (u.pin = ? OR u.pin IS NULL)';
     params.push(normalizedPin);
   }
 
@@ -178,11 +183,12 @@ export async function listSavedWorlds(
     empire_id: string;
     user_id: string;
     player_name: string;
+    user_pin: string | null;
     settlement_count: number;
     created_at: string;
   }>(
     `SELECT w.access_code, w.id AS world_id, w.slug, w.name, w.created_at,
-            e.id AS empire_id, e.user_id, u.display_name AS player_name,
+            e.id AS empire_id, e.user_id, u.display_name AS player_name, u.pin AS user_pin,
             (SELECT COUNT(*) FROM settlements s WHERE s.world_id = w.id) AS settlement_count
      FROM worlds w
      JOIN empires e ON e.world_id = w.id
@@ -192,22 +198,24 @@ export async function listSavedWorlds(
     params,
   );
 
-  return result.rows.map((row) => ({
-    accessCode: row.access_code,
-    id: row.world_id,
-    slug: row.slug,
-    name: row.name,
-    empireId: row.empire_id,
-    userId: row.user_id,
-    playerName: row.player_name,
-    settlementCount: Number(row.settlement_count),
-    createdAt: row.created_at,
-  }));
+  return result.rows
+    .filter((row) => worldMatchesPinOwnership(row.user_pin, normalizedPin))
+    .map((row) => ({
+      accessCode: row.access_code,
+      id: row.world_id,
+      slug: row.slug,
+      name: row.name,
+      empireId: row.empire_id,
+      userId: row.user_id,
+      playerName: row.player_name,
+      settlementCount: Number(row.settlement_count),
+      createdAt: row.created_at,
+    }));
 }
 
 export type WorldBootstrapLookup =
   | { ok: true; world: SavedWorldSummary }
-  | { ok: false; reason: 'not_found' | 'pin_mismatch' };
+  | { ok: false; reason: 'not_found' | 'pin_mismatch' | 'pin_claim_conflict' };
 
 export async function getWorldBootstrapByAccessCode(
   code: string,
@@ -246,8 +254,32 @@ export async function getWorldBootstrapByAccessCode(
   }
 
   const normalizedPin = normalizeUserPin(pin);
-  if (normalizedPin && row.user_pin !== normalizedPin) {
-    return { ok: false, reason: 'pin_mismatch' };
+  const ownerPin = normalizeUserPin(row.user_pin);
+  let userId = row.user_id;
+
+  if (normalizedPin) {
+    if (ownerPin === normalizedPin) {
+      // already owned by this PIN
+    } else if (ownerPin == null) {
+      // Legacy unbound world (dev-…@rtg.local / pre-PIN): claim or attach.
+      const claimed = await tryClaimUserPin(row.user_id, normalizedPin);
+      if (!claimed) {
+        const pinUser = await getUserByPin(normalizedPin);
+        if (!pinUser) {
+          return { ok: false, reason: 'pin_claim_conflict' };
+        }
+        // PIN already belongs to another user — move this empire under that user
+        // so Join works for the PIN holder without stealing other bound worlds.
+        await query(`UPDATE empires SET user_id = ? WHERE id = ? AND user_id = ?`, [
+          pinUser.id,
+          row.empire_id,
+          row.user_id,
+        ]);
+        userId = pinUser.id;
+      }
+    } else {
+      return { ok: false, reason: 'pin_mismatch' };
+    }
   }
 
   return {
@@ -258,7 +290,7 @@ export async function getWorldBootstrapByAccessCode(
       slug: row.slug,
       name: row.name,
       empireId: row.empire_id,
-      userId: row.user_id,
+      userId,
       playerName: row.player_name,
       settlementCount: Number(row.settlement_count),
       createdAt: row.created_at,

@@ -372,6 +372,12 @@ export const worldRoutes: FastifyPluginAsync = async (app) => {
           error: 'This game session belongs to a different user PIN',
         });
       }
+      if (lookup.reason === 'pin_claim_conflict') {
+        return reply.status(409).send({
+          error:
+            'This legacy game session has no PIN yet, but that PIN could not be claimed. Try again or use a different PIN.',
+        });
+      }
       return reply.status(404).send({ error: 'Game not found' });
     }
 

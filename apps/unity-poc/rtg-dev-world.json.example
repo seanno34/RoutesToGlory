@@ -1,6 +1,6 @@
 {
-  "_comment": "Copy to rtg-dev-world.json (gitignored) and fill in a world seeded in your local MySQL. Unity loads this automatically in Play mode (Editor: apps/unity-poc/rtg-dev-world.json; device: copy the same file to Assets/StreamingAssets/rtg-dev-world.json before building). Create a world with: curl -X POST http://localhost:3001/api/worlds -H 'Content-Type: application/json' -d '{\"name\":\"Douglas Survey\",\"spawnLat\":42.7597,\"spawnLng\":-105.3822}'. For iPhone on the same Wi‑Fi, apiBaseUrl must be your Mac LAN IP (e.g. http://172.20.10.10:3001/api when on iPhone hotspot) — localhost only works in the Unity Editor on the same machine.",
-  "apiBaseUrl": "http://localhost:3001/api",
+  "_comment": "Copy to rtg-dev-world.json (gitignored). Unity loads it in Play (Editor: apps/unity-poc/rtg-dev-world.json; device build: Assets/StreamingAssets/rtg-dev-world.json). API bases: Editor local = http://localhost:3001/api (pnpm dev); public mobile = https://8082ventures.com/rtg_api/api; same-Wi‑Fi LAN optional = http://192.168.x.x:3001/api; temporary public local API = HTTPS URL from pnpm dev:tunnel. Create a world: curl -X POST https://8082ventures.com/rtg_api/api/worlds -H 'Content-Type: application/json' -d '{\"name\":\"Douglas Survey\",\"spawnLat\":42.7597,\"spawnLng\":-105.3822,\"pin\":\"1234\"}'.",
+  "apiBaseUrl": "https://8082ventures.com/rtg_api/api",
   "worldId": "00000000-0000-0000-0000-000000000000",
   "empireId": "00000000-0000-0000-0000-000000000000",
   "accessCode": "XXXXXX",

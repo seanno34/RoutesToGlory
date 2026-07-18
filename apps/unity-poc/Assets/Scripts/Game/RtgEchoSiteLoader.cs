@@ -26,8 +26,8 @@ namespace RoutesToGlory.Game
         [Header("Data source")]
         public DataSource dataSource = DataSource.SampleFile;
 
-        [Tooltip("Base URL of @empire/api, e.g. http://localhost:3001/api")]
-        public string apiBaseUrl = "http://localhost:3001/api";
+        [Tooltip("Base URL of @empire/api. Device default: production HTTPS. Editor override: http://localhost:3001/api")]
+        public string apiBaseUrl = RtgApiHttp.PublicApiBaseUrl;
 
         [Tooltip("World id (UUID) to load when dataSource = LiveApi")]
         public string worldId = "";
@@ -376,7 +376,7 @@ namespace RoutesToGlory.Game
         {
             try
             {
-                using var client = new HttpClient { Timeout = System.TimeSpan.FromSeconds(8) };
+                using var client = new HttpClient { Timeout = System.TimeSpan.FromSeconds(30) };
                 return client.GetStringAsync(url).GetAwaiter().GetResult();
             }
             catch (System.Exception ex)
@@ -484,16 +484,16 @@ namespace RoutesToGlory.Game
 
             Debug.LogError(
                 $"[RTG] Echo Site load failed ({primaryUrl}). " +
-                "Is @empire/api running (pnpm --filter @empire/api dev)? " +
-                "On iPhone, apiBaseUrl must be your Mac LAN IP, not localhost. " +
-                "Check rtg-dev-world.json / RTG Echo Sites in the scene.");
+                RtgApiHttp.FormatUnreachableHint(apiBaseUrl) +
+                " Check rtg-dev-world.json / join-panel API URL / RTG Echo Sites in the scene.");
             done?.Invoke(null);
         }
 
         private static IEnumerator TryFetchMapJson(string url, System.Action<string> done)
         {
             using UnityWebRequest req = UnityWebRequest.Get(url);
-            req.timeout = 8;
+            // Large saved worlds (100+ routes with dense path_json) need more than 8s on cellular.
+            req.timeout = 30;
             yield return req.SendWebRequest();
 
             if (req.result != UnityWebRequest.Result.Success)
@@ -534,9 +534,103 @@ namespace RoutesToGlory.Game
 
         private static RtgWorldMap Parse(string json)
         {
-            RtgWorldMap map = JsonUtility.FromJson<RtgWorldMap>(json);
-            if (map == null) Debug.LogError("[RTG] Failed to parse world map JSON.");
+            if (string.IsNullOrEmpty(json))
+            {
+                Debug.LogError("[RTG] Failed to parse world map JSON — empty body.");
+                return null;
+            }
+
+            // Production uses snake_case; tolerate camelCase from alternate serializers.
+            string normalized = NormalizeMapJsonFieldNames(json);
+            RtgWorldMap map = JsonUtility.FromJson<RtgWorldMap>(normalized);
+            if (map == null)
+            {
+                Debug.LogError("[RTG] Failed to parse world map JSON.");
+                return null;
+            }
+
+            int rawXenite = CountJsonResourceId(json, "xenite");
+            int parsedXenite = 0;
+            if (map.resources != null)
+            {
+                foreach (RtgResourceNode r in map.resources)
+                {
+                    if (r != null && r.resource_id == "xenite")
+                        parsedXenite++;
+                }
+            }
+
+            if (rawXenite > 0 && parsedXenite == 0)
+            {
+                Debug.LogError(
+                    $"[RTG] Map JSON mentions {rawXenite} xenite node(s) but JsonUtility parsed 0. " +
+                    "Field-name mismatch or truncated body — deposits will be missing while Mission HUD " +
+                    "can still show connected xenite from /missions.");
+            }
+            else if (rawXenite > 0)
+            {
+                Debug.Log(
+                    $"[RTG] Map parse OK — {parsedXenite}/{rawXenite} xenite node(s), " +
+                    $"{map.settlements?.Length ?? 0} settlement(s), {map.routes?.Length ?? 0} route(s).");
+            }
+
             return map;
+        }
+
+        /// <summary>
+        /// JsonUtility only maps exact field names. Normalize common camelCase aliases
+        /// used by some API serializers so LiveApi maps still spawn deposits.
+        /// </summary>
+        private static string NormalizeMapJsonFieldNames(string json)
+        {
+            if (string.IsNullOrEmpty(json))
+                return json;
+
+            bool needsNormalize =
+                json.IndexOf("resourceId", System.StringComparison.Ordinal) >= 0
+                || json.IndexOf("ownerEmpireId", System.StringComparison.Ordinal) >= 0
+                || json.IndexOf("yieldPerDay", System.StringComparison.Ordinal) >= 0
+                || json.IndexOf("pathJson", System.StringComparison.Ordinal) >= 0
+                || json.IndexOf("\"empireId\"", System.StringComparison.Ordinal) >= 0
+                || json.IndexOf("fromSettlementId", System.StringComparison.Ordinal) >= 0;
+
+            if (!needsNormalize)
+                return json;
+
+            return json
+                .Replace("\"resourceId\"", "\"resource_id\"")
+                .Replace("\"ownerEmpireId\"", "\"owner_empire_id\"")
+                .Replace("\"yieldPerDay\"", "\"yield_per_day\"")
+                .Replace("\"pathJson\"", "\"path_json\"")
+                .Replace("\"empireId\"", "\"empire_id\"")
+                .Replace("\"fromSettlementId\"", "\"from_settlement_id\"")
+                .Replace("\"toSettlementId\"", "\"to_settlement_id\"")
+                .Replace("\"empireColor\"", "\"empire_color\"")
+                .Replace("\"isGoodieHut\"", "\"is_goodie_hut\"")
+                .Replace("\"geofenceRadiusM\"", "\"geofence_radius_m\"")
+                .Replace("\"planetDisplayName\"", "\"planet_display_name\"")
+                .Replace("\"distanceM\"", "\"distance_m\"");
+        }
+
+        private static int CountJsonResourceId(string json, string resourceId)
+        {
+            if (string.IsNullOrEmpty(json) || string.IsNullOrEmpty(resourceId)) return 0;
+            int count = 0;
+            string snake = $"\"resource_id\":\"{resourceId}\"";
+            string camel = $"\"resourceId\":\"{resourceId}\"";
+            for (int i = 0; i < json.Length;)
+            {
+                int a = json.IndexOf(snake, i, System.StringComparison.Ordinal);
+                int b = json.IndexOf(camel, i, System.StringComparison.Ordinal);
+                int next;
+                if (a < 0) next = b;
+                else if (b < 0) next = a;
+                else next = System.Math.Min(a, b);
+                if (next < 0) break;
+                count++;
+                i = next + 1;
+            }
+            return count;
         }
 
         // ------------------------------------------------------------------ //
@@ -579,12 +673,20 @@ namespace RoutesToGlory.Game
                         continue;
                     }
 
-                    bool usedTripo = SpawnResource(r, container);
-                    resources++;
-                    if (r.resource_id == "xenite")
+                    try
                     {
-                        if (usedTripo) xeniteTripo++;
-                        else xeniteProcedural++;
+                        bool usedTripo = SpawnResource(r, container);
+                        resources++;
+                        if (r.resource_id == "xenite")
+                        {
+                            if (usedTripo) xeniteTripo++;
+                            else xeniteProcedural++;
+                        }
+                    }
+                    catch (System.Exception ex)
+                    {
+                        Debug.LogError(
+                            $"[RTG] Failed to spawn deposit {r.resource_id} ({r.id}): {ex.Message}");
                     }
                 }
 
@@ -638,9 +740,101 @@ namespace RoutesToGlory.Game
                 _reloadingAfterWorldReset = false;
             }
             SetupTerrainScatter();
+            EnsurePlayerNearSpawnedDeposits(map);
 
             if (ShouldAnchorMarkersToTerrain())
                 StartTerrainAnchorRoutine();
+        }
+
+        /// <summary>
+        /// Mission HUD reads owned xenite from /missions (DB). The map camera follows Manual
+        /// GPS — when the player is off-site, deposits exist but never enter the view.
+        /// </summary>
+        private void EnsurePlayerNearSpawnedDeposits(RtgWorldMap map)
+        {
+            if (!Application.isPlaying || map?.resources == null) return;
+            if (!TryResolvePlayFocus(map, out double playLat, out double playLng))
+                return;
+
+#if UNITY_2023_1_OR_NEWER
+            RtgPlayerLocation player = Object.FindFirstObjectByType<RtgPlayerLocation>();
+#else
+            RtgPlayerLocation player = Object.FindObjectOfType<RtgPlayerLocation>();
+#endif
+            player?.EnsureNearWorldPlayArea(playLat, playLng);
+            // Device GPS often arrives after map spawn — re-check once so a late home fix
+            // still relocates into the Douglas play area.
+            StartCoroutine(ReensurePlayerNearDepositsSoon(playLat, playLng));
+        }
+
+        private IEnumerator ReensurePlayerNearDepositsSoon(double playLat, double playLng)
+        {
+            yield return new WaitForSeconds(4f);
+#if UNITY_2023_1_OR_NEWER
+            RtgPlayerLocation player = Object.FindFirstObjectByType<RtgPlayerLocation>();
+#else
+            RtgPlayerLocation player = Object.FindObjectOfType<RtgPlayerLocation>();
+#endif
+            player?.EnsureNearWorldPlayArea(playLat, playLng);
+        }
+
+        private bool TryResolvePlayFocus(RtgWorldMap map, out double lat, out double lng)
+        {
+            // Tap-test scatter pulls nearby deposits onto the Douglas corridor — meet them there.
+            lat = scatterCenterLat;
+            lng = scatterCenterLng;
+            if (scatterForTapTest)
+                return true;
+
+            if (map?.resources == null) return true;
+
+            string empire = empireId;
+            double bestOwned = double.MaxValue;
+            double bestAny = double.MaxValue;
+            double ownedLat = lat, ownedLng = lng;
+            double anyLat = lat, anyLng = lng;
+            bool hasOwned = false, hasAny = false;
+
+            foreach (RtgResourceNode r in map.resources)
+            {
+                if (r == null || !RtgTerrainDepositGuards.IsActivePocDeposit(r.resource_id))
+                    continue;
+
+                double dist = HaversineM(scatterCenterLat, scatterCenterLng, r.lat, r.lng);
+                if (dist < bestAny)
+                {
+                    bestAny = dist;
+                    anyLat = r.lat;
+                    anyLng = r.lng;
+                    hasAny = true;
+                }
+
+                if (!string.IsNullOrEmpty(empire)
+                    && r.owner_empire_id == empire
+                    && dist < bestOwned)
+                {
+                    bestOwned = dist;
+                    ownedLat = r.lat;
+                    ownedLng = r.lng;
+                    hasOwned = true;
+                }
+            }
+
+            if (hasOwned)
+            {
+                lat = ownedLat;
+                lng = ownedLng;
+                return true;
+            }
+
+            if (hasAny)
+            {
+                lat = anyLat;
+                lng = anyLng;
+                return true;
+            }
+
+            return true;
         }
 
         private static string FormatSpawnSummary(
@@ -1295,7 +1489,10 @@ namespace RoutesToGlory.Game
         private static void DestroyObject(UnityEngine.Object obj)
         {
             if (obj == null) return;
-            DestroyImmediate(obj);
+            if (Application.isPlaying)
+                Destroy(obj);
+            else
+                DestroyImmediate(obj);
         }
     }
 }

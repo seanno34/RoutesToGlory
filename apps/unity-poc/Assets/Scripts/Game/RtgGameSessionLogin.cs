@@ -226,18 +226,34 @@ namespace RoutesToGlory.Game
 
         private void PrefillApiBaseDraft()
         {
-            // PlayerPrefs (join-panel / last success) → loader (rtg-dev-world.json) → default.
+            // PlayerPrefs (join-panel / last success) wins.
+            // Editor with no prefs → localhost (pnpm dev).
+            // Device with no prefs → scene / StreamingAssets loader, else production HTTPS.
+            // Device with loopback prefs → production (localhost never works on phone).
             string prefs = PlayerPrefs.GetString(PrefApiBaseUrl, "");
             if (!string.IsNullOrWhiteSpace(prefs))
+            {
                 _apiBaseDraft = prefs.TrimEnd('/');
+                if (!Application.isEditor && IsLoopbackApiBase(_apiBaseDraft))
+                    _apiBaseDraft = RtgApiHttp.PublicApiBaseUrl;
+            }
+            else if (Application.isEditor)
+                _apiBaseDraft = RtgApiHttp.LocalApiBaseUrl;
             else if (_loader != null && !string.IsNullOrWhiteSpace(_loader.apiBaseUrl))
                 _apiBaseDraft = _loader.apiBaseUrl.TrimEnd('/');
             else
-                _apiBaseDraft = RtgApiHttp.DefaultApiBaseUrl;
+                _apiBaseDraft = RtgApiHttp.PublicApiBaseUrl;
 
             // Mirror onto loader so map/route/join share one reachable base.
             if (_loader != null && !string.IsNullOrWhiteSpace(_apiBaseDraft))
                 _loader.apiBaseUrl = _apiBaseDraft;
+        }
+
+        private static bool IsLoopbackApiBase(string apiBaseUrl)
+        {
+            if (string.IsNullOrWhiteSpace(apiBaseUrl)) return false;
+            return apiBaseUrl.IndexOf("localhost", StringComparison.OrdinalIgnoreCase) >= 0
+                || apiBaseUrl.IndexOf("127.0.0.1", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         private void ShowLoginOverlay()
@@ -265,7 +281,7 @@ namespace RoutesToGlory.Game
             _status += "\nAPI: " + ResolveApiBaseUrl()
                 + (Application.isEditor
                     ? " — Editor may retry 127.0.0.1."
-                    : " — device needs Mac LAN IP, not localhost.");
+                    : " — public HTTPS; override for local/tunnel.");
 
             if (!string.IsNullOrEmpty(pin))
                 StartCoroutine(RefreshSavedWorlds());
@@ -893,10 +909,10 @@ namespace RoutesToGlory.Game
 
             var apiHintStyle = BrightLabel(Mathf.RoundToInt(11f * scale), new Color(0.7f, 0.78f, 0.88f));
             GUI.Label(
-                new Rect(x, y, innerW, rowH),
+                new Rect(x, y, innerW, rowH * 1.35f),
                 Application.isEditor
                     ? "Editor: http://localhost:3001/api (auto-retries 127.0.0.1)"
-                    : "Device: Mac LAN IP, e.g. http://192.168.x.x:3001/api — not localhost",
+                    : "Device: https://8082ventures.com/rtg_api/api (editable; LAN/tunnel OK)",
                 apiHintStyle);
             y += rowH + 6f * scale;
 

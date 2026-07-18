@@ -378,13 +378,45 @@ namespace RoutesToGlory.Game
                 return false;
             if (msg.IndexOf("is not valid JSON", StringComparison.OrdinalIgnoreCase) >= 0)
                 return false;
+            // Fastify default 404: "Route GET:/api/worlds/.../missions?… not found"
+            if (msg.StartsWith("Route GET:", StringComparison.OrdinalIgnoreCase)
+                || msg.StartsWith("Route POST:", StringComparison.OrdinalIgnoreCase)
+                || msg.StartsWith("Route PUT:", StringComparison.OrdinalIgnoreCase)
+                || msg.StartsWith("Route PATCH:", StringComparison.OrdinalIgnoreCase)
+                || msg.StartsWith("Route DELETE:", StringComparison.OrdinalIgnoreCase))
+                return false;
             return true;
+        }
+
+        /// <summary>True when the body is Fastify's default missing-route 404 JSON.</summary>
+        private static bool LooksLikeFastifyRouteNotFound(string body)
+        {
+            if (string.IsNullOrEmpty(body)) return false;
+            return body.IndexOf("Route GET:", StringComparison.Ordinal) >= 0
+                || body.IndexOf("Route POST:", StringComparison.Ordinal) >= 0
+                || body.IndexOf("Route PUT:", StringComparison.Ordinal) >= 0
+                || body.IndexOf("Route PATCH:", StringComparison.Ordinal) >= 0
+                || body.IndexOf("Route DELETE:", StringComparison.Ordinal) >= 0;
         }
 
         private static string FormatRequestError(string body, string transportErr, string fallback)
         {
+            if (LooksLikeFastifyRouteNotFound(body))
+            {
+                return string.IsNullOrEmpty(fallback)
+                    ? "API route missing on server — redeploy rtg_api."
+                    : $"{fallback} — API route missing on server (redeploy rtg_api).";
+            }
+
             string apiMsg = TryParseError(body);
             if (!string.IsNullOrEmpty(apiMsg)) return apiMsg;
+
+            // Prefer fallback over raw "404 HTTP/1.1 404 Not Found" when status is clear.
+            if (!string.IsNullOrEmpty(transportErr)
+                && transportErr.StartsWith("404", StringComparison.Ordinal)
+                && !string.IsNullOrEmpty(fallback))
+                return fallback;
+
             if (!string.IsNullOrEmpty(transportErr)) return transportErr;
             if (!string.IsNullOrEmpty(body) && body.Length < 160 && body[0] != '{' && body[0] != '[')
                 return body;

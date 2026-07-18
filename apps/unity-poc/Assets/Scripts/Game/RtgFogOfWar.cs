@@ -19,7 +19,7 @@ namespace RoutesToGlory.Game
         private const float DefaultFogSheetSizeM = 14_000f;
 
         [Header("API (filled by Echo Site loader / 6b)")]
-        public string apiBaseUrl = "http://localhost:3001/api";
+        public string apiBaseUrl = RtgApiHttp.PublicApiBaseUrl;
         public string worldId = "";
         public string empireId = "";
 

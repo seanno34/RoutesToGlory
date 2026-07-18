@@ -137,20 +137,35 @@ From repo root (`/Users/seancalderon/Projects/routestoglory`):
 ```bash
 pnpm install
 
-# API only (port 3001)
+# API only (port 3001) — Unity Editor default
 pnpm dev
 
-# API + macOS caffeinate (field testing — keeps Mac awake)
+# API + macOS caffeinate (keeps Mac awake for LAN field testing)
 pnpm dev:field
 
 # API + web
 pnpm dev:field:all
+
+# Optional: public HTTPS tunnel to local :3001 (only if production API is down / you need local code)
+# Requires cloudflared or ngrok. Paste https://…/api into the Unity join panel.
+pnpm dev:tunnel
 
 # Web PWA only
 pnpm dev:web
 
 pnpm db:migrate   # needs MYSQL_* or DATABASE_URL
 ```
+
+### API base URLs (Editor vs public mobile)
+
+| Context | URL |
+|---------|-----|
+| **Unity Editor** | `http://localhost:3001/api` (auto-retries `127.0.0.1`) |
+| **Public mobile (preferred)** | **`https://8082ventures.com/rtg_api/api`** |
+| Same Wi‑Fi LAN | `http://192.168.x.x:3001/api` (needs Local Network on iOS) |
+| Tunnel to local API | `https://<tunnel-host>/api` from `pnpm dev:tunnel` |
+
+Join overlay field + `PlayerPrefs` `rtg.apiBaseUrl` + `rtg-dev-world.json` are editable overrides. If an old LAN URL is stuck in PlayerPrefs, clear it in the join panel (paste the public HTTPS URL) or delete the key.
 
 Unity mobile build: preprocessor runs automatically; or run **Regenerate Playable World** before building.
 
@@ -196,7 +211,7 @@ Recent addition: Earth→alien biome mapping documented in `TERRAIN_BIOME_TAXONO
 
 **Definition of done:** `docs/POC_SUCCESS_CRITERIA.md` — user PIN + game session select, sequential missions A–C (connect 5 Xenite → base camp → reserves at 1%/hr per connected xenite), Victory Stats, in-game Exit near Gear, New Game world gen on mobile + Editor.
 
-**Unity login (criterion 1):** Testers use a **4-digit user PIN** (`users.pin`) plus a **game session ID** (`worlds.access_code`). `RtgGameSessionLogin` calls `GET /worlds/saved?pin=…`, `GET /worlds/by-code/:code?pin=…`, and `POST /worlds` with `{ pin }` for **New Game**. Exit clears markers and returns to the overlay (PIN kept). Editor **Sample (Editor)** remains a secondary offline hatch only. **API URL:** join overlay field + `PlayerPrefs` `rtg.apiBaseUrl` / `rtg-dev-world.json` — Editor: `http://localhost:3001/api` (retries `127.0.0.1`); device: Mac LAN IP e.g. `http://192.168.x.x:3001/api` (not localhost). Start API with `pnpm dev` or `pnpm dev:field`.
+**Unity login (criterion 1):** Testers use a **4-digit user PIN** (`users.pin`) plus a **game session ID** (`worlds.access_code`). `RtgGameSessionLogin` calls `GET /worlds/saved?pin=…`, `GET /worlds/by-code/:code?pin=…`, and `POST /worlds` with `{ pin }` for **New Game**. Exit clears markers and returns to the overlay (PIN kept). Editor **Sample (Editor)** remains a secondary offline hatch only. **API URL:** join overlay + `PlayerPrefs` `rtg.apiBaseUrl` / `rtg-dev-world.json` — **Editor = `http://localhost:3001/api`** (retries `127.0.0.1`); **public mobile = `https://8082ventures.com/rtg_api/api`**. Editable override for local `pnpm dev` / LAN / `pnpm dev:tunnel`. See §5 and `docs/DEPLOY.md`.
 
 **Sequential missions (criterion 2):** `RtgMissionProgress` + API `empire_missions` / `/worlds/:id/missions*`. A = connect 5 xenite; B = Found Base Camp on route; C = fill reserves at **1%/hour per connected xenite** (`fillPercent = min(100, count × hoursElapsed)`; live count). Settings **Missions (dev)** accelerate (`near` ~60s / `finish` Skip C) still works. Criterion **4 (Exit)** is Done.
 
@@ -214,7 +229,7 @@ Recent addition: Earth→alien biome mapping documented in `TERRAIN_BIOME_TAXONO
 
 - **Branch:** `main` (pushed through `0f3362d`)
 - **Do not commit:** `.env`, `tilesource.local.json`, local tuning JSON (gitignored), build artifacts, `deploy/rtg_api_bundle/`, Unity `Assets/_Recovery/`, `*.tsbuildinfo` unless intentional.
-- **Deploy:** see `docs/DEPLOY.md` — PWA to `public_html/rtg/`, API outside public_html.
+- **Deploy:** see `docs/DEPLOY.md` — PWA to `public_html/rtg/`, API outside public_html; **public Unity API base = `https://8082ventures.com/rtg_api/api`** (not `/rtg/api`).
 
 ---
 

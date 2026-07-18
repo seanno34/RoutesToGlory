@@ -15,8 +15,8 @@ namespace RoutesToGlory.Game
     /// </summary>
     public class RtgRouteSession : MonoBehaviour
     {
-        [Tooltip("Base URL of @empire/api, e.g. http://localhost:3001/api")]
-        public string apiBaseUrl = "http://localhost:3001/api";
+        [Tooltip("Base URL of @empire/api. Device default: production HTTPS. Editor override: http://localhost:3001/api")]
+        public string apiBaseUrl = RtgApiHttp.PublicApiBaseUrl;
 
         public string worldId = "";
         public string empireId = "";
@@ -587,9 +587,7 @@ namespace RoutesToGlory.Game
                         StatusText = "Route: API unreachable";
                         Debug.LogError(
                             $"[RTG] Begin route failed: API unreachable at {apiBaseUrl.TrimEnd('/')}/sessions. " +
-                            $"Is @empire/api running (pnpm --filter @empire/api dev)? " +
-                            $"On device, apiBaseUrl must be your Mac LAN IP, not localhost. " +
-                            $"Detail: {text}");
+                            RtgApiHttp.FormatUnreachableHint(apiBaseUrl, text));
                     }
                     else
                     {

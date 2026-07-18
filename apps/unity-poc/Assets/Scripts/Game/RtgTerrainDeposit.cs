@@ -85,7 +85,16 @@ namespace RoutesToGlory.Game
                 return;
 
             for (int i = root.childCount - 1; i >= 0; i--)
-                Object.DestroyImmediate(root.GetChild(i).gameObject);
+                DestroyDepositObject(root.GetChild(i).gameObject);
+        }
+
+        private static void DestroyDepositObject(UnityEngine.Object obj)
+        {
+            if (obj == null) return;
+            if (Application.isPlaying)
+                Object.Destroy(obj);
+            else
+                Object.DestroyImmediate(obj);
         }
 
         /// <summary>
@@ -121,7 +130,7 @@ namespace RoutesToGlory.Game
                 UnityEngine.Debug.LogWarning(
                     $"[RTG] Xenite prefab '{prefab.name}' instantiated without a usable mesh/material — " +
                     "falling back to procedural deposit. Re-run Routes to Glory → Sync Xenite Deposit (Tripo).");
-                Object.DestroyImmediate(instance);
+                DestroyDepositObject(instance);
                 return false;
             }
 
