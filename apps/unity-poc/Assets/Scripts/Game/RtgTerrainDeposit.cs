@@ -41,11 +41,6 @@ namespace RoutesToGlory.Game
         }
 
         /// <summary>Build an embedded deposit rooted at local Y = 0 (terrain surface).</summary>
-        /// <param name="claimed">
-        /// Ownership flag. Xenite always gets ground-hugging orange vent vapor (mist + embers
-        /// + soft point light); claimed slightly intensifies the vent light. Does not tint
-        /// Tripo materials — VFX are separate children only.
-        /// </param>
         public static BuildResult BuildEmbedded(
             Transform root,
             string resourceId,
@@ -53,8 +48,7 @@ namespace RoutesToGlory.Game
             string biome,
             Color color,
             Material bodyMaterial,
-            Material glowMaterial,
-            bool claimed = false)
+            Material glowMaterial)
         {
             ClearDepositVisuals(root);
             float footprint = RichnessFootprint(richness);
@@ -62,9 +56,6 @@ namespace RoutesToGlory.Game
             if (resourceId == "xenite"
                 && TryBuildXeniteFromPrefab(root, biome, footprint, glowMaterial, out float prefabLabelY))
             {
-                RtgXeniteClaimedVentVfx.EnsureBuilt(root);
-                if (claimed)
-                    RtgXeniteClaimedVentVfx.IntensifyForClaim(root);
                 return new BuildResult(footprint, prefabLabelY, usedTripoPrefab: true);
             }
 
@@ -81,33 +72,11 @@ namespace RoutesToGlory.Game
             // Root anchor = terrain surface; geometry builds upward from Y=0 (not buried).
             float embedDepth = footprint * 0.02f;
 
-            // Xenite always gets vent vapor; unclaimed procedural also keeps the subtle ground ring.
-            // Claimed xenite: vapor only (no green extractor pad — that settlement is skipped at spawn).
-            if (resourceId == "xenite")
-            {
-                RtgXeniteClaimedVentVfx.EnsureBuilt(root);
-                if (claimed)
-                    RtgXeniteClaimedVentVfx.IntensifyForClaim(root);
-            }
-
-            if (resourceId != "xenite" || !claimed)
-                AddSubtleGlow(root, footprint * 0.55f, glowMaterial);
-
+            AddSubtleGlow(root, footprint * 0.55f, glowMaterial);
             AddEmbeddedBody(root, resourceId, biome, color, bodyMaterial, bodyScale, bodyHeight, embedDepth);
 
             float labelY = Mathf.Max(bodyHeight * 0.55f, footprint * 0.06f);
             return new BuildResult(footprint, labelY);
-        }
-
-        /// <summary>
-        /// After a live tap-connect (no map reload): ensure vent vapor exists, then intensify light.
-        /// Idempotent — vapor is already present from spawn; claim must not recreate playing systems.
-        /// </summary>
-        public static void ApplyClaimedHaloForMarker(RtgMapMarker marker)
-        {
-            if (marker == null || marker.kind != RtgMapMarker.Kind.Resource)
-                return;
-            RtgXeniteClaimedVentVfx.IntensifyForClaim(marker.transform);
         }
 
         private static void ClearDepositVisuals(Transform root)

@@ -668,7 +668,6 @@ namespace RoutesToGlory.Game
                 RtgClaimedGoodieHuts.BindCorridorPin(_corridorGoodieId);
             int settlements = 0, resources = 0, xeniteTripo = 0, xeniteProcedural = 0;
             int skippedGoodieHuts = 0;
-            int skippedExtractors = 0;
 
             if (map.settlements != null)
             {
@@ -677,15 +676,6 @@ namespace RoutesToGlory.Game
                     if (!spawnGoodieHuts && IsGoodieHutSettlement(s))
                     {
                         skippedGoodieHuts++;
-                        continue;
-                    }
-
-                    // Claimed xenite creates a friendly "Xenite Extractor" settlement at the
-                    // same lat/lng — its green GlowPad was reading as a green base under the
-                    // deposit. Skip the extractor marker; vent vapor is always on the deposit.
-                    if (IsExtractorSettlement(s))
-                    {
-                        skippedExtractors++;
                         continue;
                     }
 
@@ -736,12 +726,6 @@ namespace RoutesToGlory.Game
             {
                 Debug.Log(
                     $"[RTG] Skipped {skippedGoodieHuts} goodie hut marker(s) — POC spawnGoodieHuts=false.");
-            }
-            if (skippedExtractors > 0)
-            {
-                Debug.Log(
-                    $"[RTG] Skipped {skippedExtractors} extractor settlement marker(s) — " +
-                    "xenite deposits use vent vapor instead of green GlowPad.");
             }
             if (settlements == 0 && resources == 0)
             {
@@ -1165,17 +1149,6 @@ namespace RoutesToGlory.Game
             return s.is_goodie_hut != 0 || s.tier == "goodie_hut";
         }
 
-        /// <summary>
-        /// API <c>createExtractorSettlement</c> names mines like "Xenite Extractor" with
-        /// friendly alignment — Unity previously drew those as green GlowPads on top of the deposit.
-        /// </summary>
-        private static bool IsExtractorSettlement(RtgSettlement s)
-        {
-            if (s == null || string.IsNullOrEmpty(s.name))
-                return false;
-            return s.name.IndexOf("Extractor", System.StringComparison.OrdinalIgnoreCase) >= 0;
-        }
-
         private void SpawnSettlement(RtgSettlement s, Transform container)
         {
             bool owned = !string.IsNullOrEmpty(s.owner_empire_id);
@@ -1234,8 +1207,6 @@ namespace RoutesToGlory.Game
             if (r.resource_id == "xenite")
                 RtgTerrainDepositGuards.WarnIfXeniteColorDrift(color);
 
-            bool claimed = !string.IsNullOrEmpty(r.owner_empire_id);
-
             double lat = r.lat, lng = r.lng;
             string tapTag = ApplyTapTestScatter(ref lat, ref lng, false, r.id);
 
@@ -1247,8 +1218,7 @@ namespace RoutesToGlory.Game
                 r.biome,
                 color,
                 GetEmissiveMaterial(color),
-                GetDepositGlowMaterial(color),
-                claimed);
+                GetDepositGlowMaterial(color));
             AnchorAt(root, lng, lat, groundHeightMeters);
             if (anchorDepositsToTerrain)
             {

@@ -60,14 +60,6 @@ namespace RoutesToGlory.Game
         public static readonly Color XeniteCanonicalColor = new Color(0.976f, 0.451f, 0.086f);
 
         /// <summary>
-        /// Legacy deep-orange tint kept for any remaining callers; vent cue is
-        /// <see cref="RtgXeniteClaimedVentVfx"/> (ground mist / embers / point light #f97316)
-        /// on every xenite deposit — claim only intensifies the light.
-        /// Separate from crystal materials — never wash Tripo albedo.
-        /// </summary>
-        public static readonly Color XeniteClaimedGlowColor = new Color(0.78f, 0.22f, 0.02f, 1f);
-
-        /// <summary>
         /// Resource ids with v1 embedded deposit art — only these spawn in the Unity POC map.
         /// Add ids here as each deposit brief ships; others stay in data but are not rendered.
         /// </summary>
@@ -108,12 +100,6 @@ namespace RoutesToGlory.Game
 
         /// <summary>Max deposit glow ring alpha — higher values read as floating pins.</summary>
         public const float MaxDepositGlowAlpha = 0.22f;
-
-        /// <summary>
-        /// Mist particle start alpha for xenite vent vapor (soft translucent gas).
-        /// Kept high enough to read outdoors against Cesium terrain.
-        /// </summary>
-        public const float MaxClaimedHaloAlpha = 0.72f;
 
         /// <summary>
         /// Embedded deposits must sit near local Y=0 on the anchored root (terrain surface).

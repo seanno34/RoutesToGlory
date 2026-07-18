@@ -110,9 +110,8 @@ Source import candidates: `RtgTerrainDepositGuards.XeniteTripoImportCandidatePat
 1. **POC filter** — only ids in `ActivePocDepositResourceIds` spawn (`xenite` only for now).
 2. **Stacking fix** — `ClearDepositVisuals()` before rebuild; `DestroyObject()` uses **`DestroyImmediate`** so refresh doesn’t queue destroys and spawn duplicates.
 3. **No orange DepositGlow quad** on Tripo prefab path (removed for Tripo; procedural still uses subtle glow).
-4. **Claimed xenite** — skip friendly **extractor** settlement markers (they drew a green GlowPad under the deposit). Owned deposits get **ground-hugging orange vent vapor** (`ClaimedVentVfx`: soft billboard mist + sparse embers + Perlin-pulsed point light `#f97316`) — never a sphere/dome halo, never tint Tripo crystal mats.
-5. **Terrain anchoring** — deposits use `depositSurfaceClearanceM` + retry while Cesium tiles stream (`DepositAnchorMaxAttempts`).
-6. **Canonical color** — `#f97316` for procedural/map icons only; Tripo path must keep albedo (see below).
+4. **Terrain anchoring** — deposits use `depositSurfaceClearanceM` + retry while Cesium tiles stream (`DepositAnchorMaxAttempts`).
+5. **Canonical color** — `#f97316` for procedural/map icons only; Tripo path must keep albedo (see below).
 
 ---
 
@@ -164,7 +163,6 @@ Same class of fix as the player-ship Tripo hull (`PersistHullMaterialsToResource
 | Console spawn: procedural only | Prefab missing or fail renderability gate | Run **Sync Xenite Deposit (Tripo)**; check LogWarning for missing mesh/material/albedo |
 | Stacked crystals after sliders | Deferred `Destroy` | Keep `ClearDepositVisuals` + `DestroyImmediate` |
 | Wrong orientation | Tuning JSON / sliders | `rtg-xenite-deposit-tuning.json` + `RefreshResourceDepositsOnly` |
-| Orange sphere / dome on claimed | Old `ClaimedGlow` meshes | Must be `ClaimedVentVfx` mist+embers+light only — no sphere children |
 
 ---
 
@@ -173,8 +171,7 @@ Same class of fix as the player-ship Tripo hull (`PersistHullMaterialsToResource
 | File | Role |
 |------|------|
 | `RtgEchoSiteLoader.cs` | Map load, `SpawnAll`, `SpawnResource`, `RefreshResourceDepositsOnly` |
-| `RtgTerrainDeposit.cs` | `BuildEmbedded`, `TryBuildXeniteFromPrefab`, `ConfigureXenitePrefabRenderers`, `ClearDepositVisuals`, `ApplyClaimedHaloForMarker` |
-| `RtgXeniteClaimedVentVfx.cs` | Claimed ownership VFX — ground mist / embers / vent point light (no sphere halo) |
+| `RtgTerrainDeposit.cs` | `BuildEmbedded`, `TryBuildXeniteFromPrefab`, `ConfigureXenitePrefabRenderers`, `ClearDepositVisuals` |
 | `RtgTerrainDepositGuards.cs` | POC filter, prefab paths, color/footprint, Resources-local GUID guard |
 | `RtgXeniteDepositTuningConfig.cs` | JSON load/save, runtime euler |
 | `RtgPlayerLocation.cs` | Settings UI, `ApplyXeniteDepositTuning()` |
