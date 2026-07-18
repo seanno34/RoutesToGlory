@@ -19,51 +19,6 @@ Shader "RoutesToGlory/AlienNightSky"
         _BandColor ("Band Color", Color) = (0.22, 0.12, 0.38, 1)
         _BandStrength ("Band Strength", Range(0, 1)) = 0.22
         _BandWidth ("Band Width", Range(0.05, 0.6)) = 0.28
-
-        [Header(PlanetA)]
-        _PlanetADir ("Planet A Dir (xyz)", Vector) = (0.55, 0.62, 0.35, 0)
-        _PlanetAColor ("Planet A Color", Color) = (0.78, 0.42, 0.58, 1)
-        _PlanetASize ("Planet A Size", Range(0.004, 0.06)) = 0.026
-        _PlanetABright ("Planet A Bright", Range(0, 2)) = 0.95
-        _PlanetARing ("Planet A Ring", Range(0, 1)) = 1
-        _PlanetARingWidth ("Planet A Ring Width", Range(0.5, 3)) = 1.55
-        _PlanetARingBright ("Planet A Ring Bright", Range(0, 2)) = 0.75
-
-        [Header(PlanetB)]
-        _PlanetBDir ("Planet B Dir (xyz)", Vector) = (-0.72, 0.48, 0.22, 0)
-        _PlanetBColor ("Planet B Color", Color) = (0.32, 0.48, 0.88, 1)
-        _PlanetBSize ("Planet B Size", Range(0.004, 0.06)) = 0.022
-        _PlanetBBright ("Planet B Bright", Range(0, 2)) = 0.9
-        _PlanetBRing ("Planet B Ring", Range(0, 1)) = 0
-        _PlanetBRingWidth ("Planet B Ring Width", Range(0.5, 3)) = 1.4
-        _PlanetBRingBright ("Planet B Ring Bright", Range(0, 2)) = 0.6
-
-        [Header(PlanetC)]
-        _PlanetCDir ("Planet C Dir (xyz)", Vector) = (0.15, 0.42, -0.85, 0)
-        _PlanetCColor ("Planet C Color", Color) = (0.55, 0.38, 0.72, 1)
-        _PlanetCSize ("Planet C Size", Range(0.004, 0.06)) = 0.02
-        _PlanetCBright ("Planet C Bright", Range(0, 2)) = 0.75
-        _PlanetCRing ("Planet C Ring", Range(0, 1)) = 0
-        _PlanetCRingWidth ("Planet C Ring Width", Range(0.5, 3)) = 1.4
-        _PlanetCRingBright ("Planet C Ring Bright", Range(0, 2)) = 0.6
-
-        [Header(PlanetD)]
-        _PlanetDDir ("Planet D Dir (xyz)", Vector) = (-0.25, 0.78, -0.45, 0)
-        _PlanetDColor ("Planet D Color", Color) = (0.48, 0.88, 0.72, 1)
-        _PlanetDSize ("Planet D Size", Range(0.004, 0.06)) = 0.011
-        _PlanetDBright ("Planet D Bright", Range(0, 2)) = 0.8
-        _PlanetDRing ("Planet D Ring", Range(0, 1)) = 0
-        _PlanetDRingWidth ("Planet D Ring Width", Range(0.5, 3)) = 1.3
-        _PlanetDRingBright ("Planet D Ring Bright", Range(0, 2)) = 0.5
-
-        [Header(PlanetE)]
-        _PlanetEDir ("Planet E Dir (xyz)", Vector) = (0.82, 0.28, -0.35, 0)
-        _PlanetEColor ("Planet E Color", Color) = (0.62, 0.55, 0.78, 1)
-        _PlanetESize ("Planet E Size", Range(0.004, 0.06)) = 0.024
-        _PlanetEBright ("Planet E Bright", Range(0, 2)) = 0.85
-        _PlanetERing ("Planet E Ring", Range(0, 1)) = 1
-        _PlanetERingWidth ("Planet E Ring Width", Range(0.5, 3)) = 1.7
-        _PlanetERingBright ("Planet E Ring Bright", Range(0, 2)) = 0.7
     }
 
     SubShader
@@ -100,46 +55,6 @@ Shader "RoutesToGlory/AlienNightSky"
             float4 _BandColor;
             float _BandStrength;
             float _BandWidth;
-
-            float4 _PlanetADir;
-            float4 _PlanetAColor;
-            float _PlanetASize;
-            float _PlanetABright;
-            float _PlanetARing;
-            float _PlanetARingWidth;
-            float _PlanetARingBright;
-
-            float4 _PlanetBDir;
-            float4 _PlanetBColor;
-            float _PlanetBSize;
-            float _PlanetBBright;
-            float _PlanetBRing;
-            float _PlanetBRingWidth;
-            float _PlanetBRingBright;
-
-            float4 _PlanetCDir;
-            float4 _PlanetCColor;
-            float _PlanetCSize;
-            float _PlanetCBright;
-            float _PlanetCRing;
-            float _PlanetCRingWidth;
-            float _PlanetCRingBright;
-
-            float4 _PlanetDDir;
-            float4 _PlanetDColor;
-            float _PlanetDSize;
-            float _PlanetDBright;
-            float _PlanetDRing;
-            float _PlanetDRingWidth;
-            float _PlanetDRingBright;
-
-            float4 _PlanetEDir;
-            float4 _PlanetEColor;
-            float _PlanetESize;
-            float _PlanetEBright;
-            float _PlanetERing;
-            float _PlanetERingWidth;
-            float _PlanetERingBright;
 
             struct appdata
             {
@@ -206,69 +121,6 @@ Shader "RoutesToGlory/AlienNightSky"
                 return tint * (sparkle * starOn * brightness * bright * twinkle);
             }
 
-            // Soft lit disc; optional elliptical ring (ringEnable > 0).
-            float3 SoftPlanet(
-                float3 dir,
-                float3 planetDir,
-                float3 color,
-                float size,
-                float bright,
-                float ringEnable,
-                float ringWidth,
-                float ringBright)
-            {
-                float3 n = normalize(dir);
-                float3 p = normalize(planetDir);
-                if (p.y < -0.05)
-                    return 0;
-
-                float ang = acos(saturate(dot(n, p)));
-                float disc = smoothstep(size, size * 0.55, ang);
-
-                // Soft limb darkening — subdued so discs read as planets, not suns.
-                float limb = saturate(1.0 - ang / max(1e-4, size));
-                float shade = pow(limb, 0.7);
-                float3 lit = color * (0.28 + 0.55 * shade);
-
-                // Thin atmospheric rim (cool, not solar flare).
-                float rim = smoothstep(size * 1.25, size * 0.92, ang) - disc;
-                rim = saturate(rim);
-                float3 atmosphere = color * 0.85 * rim;
-
-                // Tight, dim halo — avoid oversized bright sun discs.
-                float halo = smoothstep(size * 2.1, size * 0.95, ang) * 0.08;
-
-                float3 body = (lit * disc + atmosphere + color * halo) * bright;
-
-                float3 rings = 0;
-                if (ringEnable > 0.01)
-                {
-                    // Orthonormal basis in the ring plane; flatten one axis for a tilted ellipse.
-                    float3 upHint = abs(p.y) > 0.92 ? float3(1, 0, 0) : float3(0, 1, 0);
-                    float3 ringX = normalize(cross(p, upHint));
-                    float3 ringY = cross(p, ringX);
-                    float3 offset = n - p * dot(n, p);
-                    float2 uv = float2(dot(offset, ringX), dot(offset, ringY) * 0.38);
-                    float r = length(uv);
-
-                    float inner = size * 1.15;
-                    float outer = size * max(1.2, ringWidth);
-                    float ringBand = smoothstep(inner, inner + size * 0.12, r)
-                                   * smoothstep(outer + size * 0.1, outer, r);
-
-                    // Hide ring where the planet disc occludes it; keep a soft gap.
-                    ringBand *= 1.0 - disc;
-                    // Prefer the near side of the sky so rings don't smear below the horizon.
-                    ringBand *= saturate(dot(n, p) + 0.15);
-                    ringBand *= saturate(n.y + 0.08);
-
-                    float3 ringTint = lerp(color, float3(0.85, 0.8, 0.95), 0.35);
-                    rings = ringTint * ringBand * ringBright * ringEnable * bright;
-                }
-
-                return body + rings;
-            }
-
             float4 frag(v2f i) : SV_Target
             {
                 float3 dir = normalize(i.dir);
@@ -301,18 +153,6 @@ Shader "RoutesToGlory/AlienNightSky"
                     stars *= saturate(up * 4.0 + 0.2);
                 }
                 skyCol += stars;
-
-                // Medium alien worlds + small moon; A and E carry procedural rings.
-                skyCol += SoftPlanet(dir, _PlanetADir.xyz, _PlanetAColor.rgb, _PlanetASize, _PlanetABright,
-                    _PlanetARing, _PlanetARingWidth, _PlanetARingBright);
-                skyCol += SoftPlanet(dir, _PlanetBDir.xyz, _PlanetBColor.rgb, _PlanetBSize, _PlanetBBright,
-                    _PlanetBRing, _PlanetBRingWidth, _PlanetBRingBright);
-                skyCol += SoftPlanet(dir, _PlanetCDir.xyz, _PlanetCColor.rgb, _PlanetCSize, _PlanetCBright,
-                    _PlanetCRing, _PlanetCRingWidth, _PlanetCRingBright);
-                skyCol += SoftPlanet(dir, _PlanetDDir.xyz, _PlanetDColor.rgb, _PlanetDSize, _PlanetDBright,
-                    _PlanetDRing, _PlanetDRingWidth, _PlanetDRingBright);
-                skyCol += SoftPlanet(dir, _PlanetEDir.xyz, _PlanetEColor.rgb, _PlanetESize, _PlanetEBright,
-                    _PlanetERing, _PlanetERingWidth, _PlanetERingBright);
 
                 skyCol *= _Exposure;
                 return float4(skyCol, 1.0);

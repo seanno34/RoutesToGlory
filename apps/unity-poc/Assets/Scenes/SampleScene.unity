@@ -335,7 +335,7 @@ Camera:
     width: 1
     height: 1
   near clip plane: 0.3
-  far clip plane: 100000
+  far clip plane: 120000
   field of view: 60
   orthographic: 0
   orthographic size: 5
@@ -10426,6 +10426,7 @@ Transform:
   - {fileID: 515319360}
   - {fileID: 1335072435}
   - {fileID: 410793573}
+  - {fileID: 2911000011}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &961713967
@@ -14368,6 +14369,63 @@ MonoBehaviour:
       z: 4308944.265533438
       w: 1
   _localToGlobeFixedMatrixIsValid: 1
+--- !u!1001 &1354469825
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 2911000021}
+    m_Modifications:
+    - target: {fileID: -8679921383154817045, guid: 867004de66af345b79e8ad6f3d192631, type: 3}
+      propertyPath: m_LocalPosition.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: 867004de66af345b79e8ad6f3d192631, type: 3}
+      propertyPath: m_LocalPosition.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: 867004de66af345b79e8ad6f3d192631, type: 3}
+      propertyPath: m_LocalPosition.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: 867004de66af345b79e8ad6f3d192631, type: 3}
+      propertyPath: m_LocalRotation.w
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: 867004de66af345b79e8ad6f3d192631, type: 3}
+      propertyPath: m_LocalRotation.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: 867004de66af345b79e8ad6f3d192631, type: 3}
+      propertyPath: m_LocalRotation.y
+      value: -0
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: 867004de66af345b79e8ad6f3d192631, type: 3}
+      propertyPath: m_LocalRotation.z
+      value: -0
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: 867004de66af345b79e8ad6f3d192631, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: 867004de66af345b79e8ad6f3d192631, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: 867004de66af345b79e8ad6f3d192631, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 919132149155446097, guid: 867004de66af345b79e8ad6f3d192631, type: 3}
+      propertyPath: m_Name
+      value: green_ringed_planet_3d_model
+      objectReference: {fileID: 0}
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: 867004de66af345b79e8ad6f3d192631, type: 3}
 --- !u!28 &1375737368
 Texture2D:
   m_ObjectHideFlags: 0
@@ -22565,6 +22623,63 @@ MonoBehaviour:
   manualHeightReferenceY: 0
   disableRasterOverlays: 1
   applyTaxonomyPalette: 1
+--- !u!1001 &2107334803
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 2911000031}
+    m_Modifications:
+    - target: {fileID: -8679921383154817045, guid: fa3f303c624d643ef983a61cc67bced3, type: 3}
+      propertyPath: m_LocalPosition.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: fa3f303c624d643ef983a61cc67bced3, type: 3}
+      propertyPath: m_LocalPosition.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: fa3f303c624d643ef983a61cc67bced3, type: 3}
+      propertyPath: m_LocalPosition.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: fa3f303c624d643ef983a61cc67bced3, type: 3}
+      propertyPath: m_LocalRotation.w
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: fa3f303c624d643ef983a61cc67bced3, type: 3}
+      propertyPath: m_LocalRotation.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: fa3f303c624d643ef983a61cc67bced3, type: 3}
+      propertyPath: m_LocalRotation.y
+      value: -0
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: fa3f303c624d643ef983a61cc67bced3, type: 3}
+      propertyPath: m_LocalRotation.z
+      value: -0
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: fa3f303c624d643ef983a61cc67bced3, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: fa3f303c624d643ef983a61cc67bced3, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: fa3f303c624d643ef983a61cc67bced3, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 919132149155446097, guid: fa3f303c624d643ef983a61cc67bced3, type: 3}
+      propertyPath: m_Name
+      value: earth_planet_3d_model
+      objectReference: {fileID: 0}
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: fa3f303c624d643ef983a61cc67bced3, type: 3}
 --- !u!1 &2117357759
 GameObject:
   m_ObjectHideFlags: 0
@@ -22966,6 +23081,155 @@ MeshFilter:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 2143346007}
   m_Mesh: {fileID: 1574226625}
+--- !u!1 &2911000010
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 2911000011}
+  - component: {fileID: 2911000012}
+  m_Layer: 0
+  m_Name: CelestialBodies
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &2911000011
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2911000010}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children:
+  - {fileID: 2911000021}
+  - {fileID: 2911000031}
+  m_Father: {fileID: 952014231}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &2911000012
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2911000010}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: b4bf1fb2b3b549569a381507d732b2f2, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::RoutesToGlory.Game.RtgCelestialBodies
+  distanceMeters: 88000
+  ringedPlanet:
+    root: {fileID: 2911000021}
+    model: {fileID: 2911000022}
+    scale: 1
+    apparentDiameterDegrees: 5
+    elevationDegrees: 1
+    azimuthDegrees: 40
+    rotationDegrees: 12
+    ringAngleDegrees: 28
+    hasRings: 1
+    brightness: 1.2
+    tint: {r: 0.92, g: 1, b: 0.88, a: 1}
+  ringlessPlanet:
+    root: {fileID: 2911000031}
+    model: {fileID: 2911000032}
+    scale: 1
+    apparentDiameterDegrees: 2.1
+    elevationDegrees: 1.5
+    azimuthDegrees: 215
+    rotationDegrees: -8
+    ringAngleDegrees: 0
+    hasRings: 0
+    brightness: 1.05
+    tint: {r: 0.85, g: 0.92, b: 1, a: 1}
+  horizonHaze: 0.35
+  rimGlow: 0.22
+--- !u!1 &2911000020
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 2911000021}
+  m_Layer: 0
+  m_Name: RingedPlanet
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &2911000021
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2911000020}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children:
+  - {fileID: 2911000022}
+  m_Father: {fileID: 2911000011}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &2911000030
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 2911000031}
+  m_Layer: 0
+  m_Name: RinglessPlanet
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &2911000031
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2911000030}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children:
+  - {fileID: 2911000032}
+  m_Father: {fileID: 2911000011}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+
+--- !u!4 &2911000022 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: -8679921383154817045, guid: 867004de66af345b79e8ad6f3d192631, type: 3}
+  m_PrefabInstance: {fileID: 1354469825}
+  m_PrefabAsset: {fileID: 0}
+--- !u!4 &2911000032 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: -8679921383154817045, guid: fa3f303c624d643ef983a61cc67bced3, type: 3}
+  m_PrefabInstance: {fileID: 2107334803}
+  m_PrefabAsset: {fileID: 0}
+
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0

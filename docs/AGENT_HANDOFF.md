@@ -25,6 +25,7 @@ Last major push: **`0f3362d`** on `main` — Tripo hull editor + device renderin
 ### What works (verified Jul 2026)
 
 - **Biome terrain** — unified dark blackish-purple skin + neon pink veins (`AlienTerrainBiome` + `RtgBiomePalette`); see `TERRAIN_SKIN_POC.md`, `TERRAIN_BIOME_TAXONOMY.md`.
+- **Night sky + horizon planets** — procedural starfield skybox; Tripo `green_ringed_planet_3d_model` / `earth_planet_3d_model` placed by `RtgCelestialBodies` under `CelestialBodies` (Apply Atmosphere / Regenerate).
 - **Regenerate Playable World** — editor menu in `RtgMapBuilder.cs`: biome terrain, atmosphere, echo sites, ship art sync, Tripo hull bake, presentation refresh.
 - **Player ship (Tripo hull)** — textured Tripo fighter in **editor Play** and on **iOS/Android** after Resources bake.
 - **Ship orientation** — tuned via `Assets/StreamingAssets/rtg-ship-tuning.json` (do not force zero euler / skip tuning on load).
