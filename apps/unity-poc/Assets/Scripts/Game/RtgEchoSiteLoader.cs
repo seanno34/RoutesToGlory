@@ -751,8 +751,8 @@ namespace RoutesToGlory.Game
         }
 
         /// <summary>
-        /// Mission HUD reads owned xenite from /missions (DB). The map camera follows Manual
-        /// GPS — when the player is off-site, deposits exist but never enter the view.
+        /// Mission HUD reads owned xenite from /missions (DB). Keep Manual mode and park
+        /// at the play area when off-site so deposits stay on-screen (no Auto Pilot force).
         /// </summary>
         private void EnsurePlayerNearSpawnedDeposits(RtgWorldMap map)
         {
@@ -767,7 +767,7 @@ namespace RoutesToGlory.Game
 #endif
             player?.EnsureNearWorldPlayArea(playLat, playLng);
             // Device GPS often arrives after map spawn — re-check once so a late home fix
-            // still relocates into the Douglas play area.
+            // still parks Manual at the Douglas play area (without forcing Auto Pilot).
             StartCoroutine(ReensurePlayerNearDepositsSoon(playLat, playLng));
         }
 

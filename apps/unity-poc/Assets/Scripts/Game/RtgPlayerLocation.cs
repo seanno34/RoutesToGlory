@@ -403,6 +403,15 @@ namespace RoutesToGlory.Game
         private double _anchorLng;
         private bool _hasAnchorPosition;
 
+        /// <summary>
+        /// When true, Manual ignores distant device GPS and keeps the pin at the world play area
+        /// so xenite deposits stay visible off-site.
+        /// </summary>
+        private bool _holdManualAtPlayArea;
+        private double _playAreaHoldLat = 42.7597;
+        private double _playAreaHoldLng = -105.3819;
+        private float _playAreaHoldMaxDistanceM = 25000f;
+
         private Vector3 _lastMotionSamplePos;
         private bool _hasMotionSample;
         private float _groundSpeedMps;
@@ -411,6 +420,7 @@ namespace RoutesToGlory.Game
         private void Awake()
         {
             _activeSource = LocationSource.Manual;
+            _holdManualAtPlayArea = false;
         }
 
         private void Reset()
@@ -523,6 +533,28 @@ namespace RoutesToGlory.Game
 
             if (_provider.TryGetLatLng(out double lat, out double lng))
             {
+                // Off-site Manual: keep the pin at Douglas so xenite deposits stay on-screen.
+                // Resume real GPS once the device is within the play-area hold radius.
+                if (_holdManualAtPlayArea && _activeSource == LocationSource.Manual)
+                {
+                    double gpsDist = DistanceMeters(lat, lng, _playAreaHoldLat, _playAreaHoldLng);
+                    if (gpsDist > _playAreaHoldMaxDistanceM)
+                    {
+                        ApplyPlayAreaHoldPosition();
+                        if (_routeSession != null)
+                        {
+                            _routeSession.NotifyPosition(_playAreaHoldLat, _playAreaHoldLng);
+                            _routeSession.SyncConfigFromEchoLoader();
+                        }
+                        return;
+                    }
+
+                    _holdManualAtPlayArea = false;
+                    Debug.Log(
+                        $"[RTG] Device GPS within {_playAreaHoldMaxDistanceM / 1000f:0.#} km of play area — " +
+                        "Manual resumes live GPS.");
+                }
+
                 double targetLat = lat;
                 double targetLng = lng;
                 if (_routeSession != null)
@@ -988,6 +1020,8 @@ namespace RoutesToGlory.Game
             _provider?.End();
             _provider = null;
             _activeSource = newSource;
+            if (newSource == LocationSource.AutoPilot)
+                _holdManualAtPlayArea = false;
 
             _routeSession?.OnLocationSourceChanged();
             SyncRouteSessionSnapMode();
@@ -1983,9 +2017,9 @@ namespace RoutesToGlory.Game
         }
 
         /// <summary>
-        /// After LiveApi Join: if Manual GPS (or a stale pin) is far from world deposits,
-        /// Mission HUD still shows connected xenite from the DB while the camera sits
-        /// elsewhere with an empty map. Relocate to Auto Pilot at the play area.
+        /// After LiveApi Join: if Manual GPS is far from world deposits, Mission HUD can
+        /// show connected xenite while the camera sits elsewhere. Keep <b>Manual</b> mode,
+        /// park the pin at the play area, and ignore distant GPS until the device is on-site.
         /// </summary>
         public void EnsureNearWorldPlayArea(double playLat, double playLng, float maxDistanceMeters = 25000f)
         {
@@ -1995,33 +2029,36 @@ namespace RoutesToGlory.Game
             if (playLat < -90.0 || playLat > 90.0 || playLng < -180.0 || playLng > 180.0)
                 return;
 
+            _playAreaHoldLat = playLat;
+            _playAreaHoldLng = playLng;
+            _playAreaHoldMaxDistanceM = Mathf.Max(1000f, maxDistanceMeters);
+
             double distM = double.MaxValue;
             if (TryGetPlayerLatLng(out double lat, out double lng))
                 distM = DistanceMeters(lat, lng, playLat, playLng);
             else if (DistanceMeters(tourCenterLatitude, tourCenterLongitude, playLat, playLng)
-                     <= maxDistanceMeters)
+                     <= _playAreaHoldMaxDistanceM)
                 distM = 0;
 
-            if (distM <= maxDistanceMeters)
+            if (distM <= _playAreaHoldMaxDistanceM)
+            {
+                _holdManualAtPlayArea = false;
                 return;
+            }
+
+            // Stay in Manual — do not force Auto Pilot. Park at Douglas so xenite is on-screen.
+            _holdManualAtPlayArea = true;
+            tourCenterLatitude = playLat;
+            tourCenterLongitude = playLng;
 
             Debug.LogWarning(
                 $"[RTG] Player is {distM / 1000.0:0.#} km from world deposits " +
-                $"({playLat:F4}, {playLng:F4}). Switching to Auto Pilot at the play area " +
-                "so xenite appears on the map (Mission counts are DB-backed). " +
-                "Use Manual when physically on-site near Douglas.");
-
-            tourCenterLatitude = playLat;
-            tourCenterLongitude = playLng;
-            routeMode = RouteMode.TourNearbySites;
-            _cachedSimulatedWaypoints = null;
+                $"({playLat:F4}, {playLng:F4}). Keeping Manual at the play area so xenite " +
+                "stays visible; device GPS resumes when within " +
+                $"{_playAreaHoldMaxDistanceM / 1000f:0.#} km of Douglas.");
 
             EnsureMarker();
-            if (_markerAnchor != null)
-            {
-                _markerAnchor.SetPositionLongitudeLatitudeHeight(
-                    playLng, playLat, groundHeightMeters + markerHeight);
-            }
+            ApplyPlayAreaHoldPosition();
 
             _panned = false;
             _hasHeadingSample = false;
@@ -2033,22 +2070,19 @@ namespace RoutesToGlory.Game
 
             if (followWithCamera)
                 SetFollowActive(true);
+        }
 
-            if (_activeSource != LocationSource.AutoPilot)
-            {
-                SetLocationSource(LocationSource.AutoPilot);
-                return;
-            }
-
-            if (_tourCoroutine != null)
-            {
-                StopCoroutine(_tourCoroutine);
-                _tourCoroutine = null;
-            }
-
-            _provider?.End();
-            _provider = null;
-            BeginLocationProvider();
+        private void ApplyPlayAreaHoldPosition()
+        {
+            if (_markerAnchor == null) return;
+            _markerAnchor.SetPositionLongitudeLatitudeHeight(
+                _playAreaHoldLng, _playAreaHoldLat, groundHeightMeters + markerHeight);
+            _anchorLat = _playAreaHoldLat;
+            _anchorLng = _playAreaHoldLng;
+            _hasAnchorPosition = true;
+            _smoothDisplayLat = _playAreaHoldLat;
+            _smoothDisplayLng = _playAreaHoldLng;
+            _hasSmoothDisplay = true;
         }
 
         public bool IsAutoPilotActive => _activeSource == LocationSource.AutoPilot;

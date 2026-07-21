@@ -710,12 +710,20 @@ namespace RoutesToGlory.Game
 
             foreach (RtgMapMarker marker in _markerRoot.GetComponentsInChildren<RtgMapMarker>(true))
             {
+                // Xenite/resources must stay visible in Manual and Auto Pilot. Hiding them
+                // outside the live GPS bubble made off-site Manual look like "no deposits"
+                // even though SpawnAll had created them near Douglas.
+                if (marker.kind == RtgMapMarker.Kind.Resource)
+                {
+                    marker.gameObject.SetActive(true);
+                    if (_seenMarkers.Add(marker.targetId))
+                        BeginShimmer(marker);
+                    continue;
+                }
+
                 bool inLiveBubble = DistanceMeters(_focusLat, _focusLng, marker.lat, marker.lng) <= liveRevealRadiusM;
                 bool visible = inLiveBubble || IsPermanentlyRevealed(marker.lat, marker.lng);
                 marker.gameObject.SetActive(visible);
-
-                if (visible && marker.kind == RtgMapMarker.Kind.Resource && _seenMarkers.Add(marker.targetId))
-                    BeginShimmer(marker);
             }
         }
 
